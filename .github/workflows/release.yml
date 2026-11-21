@@ -16,9 +16,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: "1"
   CARGO_INCREMENTAL: "0"
-  RAYON_NUM_THREADS: "1"
   SMARTMONTOOLS_TAG: "RELEASE_7_5"
   SMARTMONTOOLS_SETUP_URL: "https://github.com/smartmontools/smartmontools/releases/download/RELEASE_7_5/smartmontools-7.5.win32-setup.exe"
   SMARTMONTOOLS_SRC_URL: "https://github.com/smartmontools/smartmontools/archive/refs/tags/RELEASE_7_5.tar.gz"
@@ -43,6 +41,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install npm dependencies
         run: npm ci
 
@@ -50,13 +53,6 @@ jobs:
         run: |
           npm test
           npm run build
-
-      - name: Verify Rust formatting, Clippy, and test suites
-        run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -j 1 -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --no-fail-fast -j 1
-          cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -j 1
 
       - name: Fetch smartmontools 7.5 binaries and GPL source archive
         shell: pwsh
@@ -70,16 +66,22 @@ jobs:
           Invoke-WebRequest -Uri $env:SMARTMONTOOLS_SETUP_URL -OutFile $setupPath -UseBasicParsing
           Invoke-WebRequest -Uri $env:SMARTMONTOOLS_SRC_URL -OutFile $srcTarPath -UseBasicParsing
 
-          # Run silent extraction from upstream NSIS package or fallback to 7z
+          # Prefer direct 7z extraction (fast and avoids UAC prompts on CI runners); fallback to silent NSIS extract
           $extractDir = (Resolve-Path "_smt_extract\unpacked").ProviderPath
-          $proc = Start-Process -FilePath $setupPath -ArgumentList "/S", "/D=$extractDir" -Wait -PassThru
-          if ($proc.ExitCode -ne 0 -or -not (Test-Path "$extractDir\bin\smartctl.exe")) {
-            & 7z x $setupPath "-o$extractDir" -y | Out-Null
-          }
-
-          $smartctl = Get-ChildItem -Path $extractDir -Recurse -Filter "smartctl.exe" | Where-Object {
+          & 7z x $setupPath "-o$extractDir" -y | Out-Null
+          $smartctl = Get-ChildItem -Path $extractDir -Recurse -Filter "smartctl.exe" -ErrorAction SilentlyContinue | Where-Object {
             (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $env:SMARTCTL_X64_SHA256
           } | Select-Object -First 1
+
+          if (-not $smartctl) {
+            $proc = Start-Process -FilePath $setupPath -ArgumentList "/S", "/D=$extractDir" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+              throw "Both 7z and silent NSIS extraction failed for smartmontools installer (exit $($proc.ExitCode))"
+            }
+            $smartctl = Get-ChildItem -Path $extractDir -Recurse -Filter "smartctl.exe" | Where-Object {
+              (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $env:SMARTCTL_X64_SHA256
+            } | Select-Object -First 1
+          }
 
           if (-not $smartctl) {
             throw "Could not verify x64 smartctl.exe matching expected SHA-256 $env:SMARTCTL_X64_SHA256"
@@ -89,6 +91,11 @@ jobs:
           Copy-Item -Path $smartctl.FullName -Destination "tools\smartmontools\bin\smartctl.exe" -Force
           if (Test-Path "$binDir\drivedb.h") {
             Copy-Item -Path "$binDir\drivedb.h" -Destination "tools\smartmontools\bin\drivedb.h" -Force
+          } else {
+            $drivedb = Get-ChildItem -Path $extractDir -Recurse -Filter "drivedb.h" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($drivedb) {
+              Copy-Item -Path $drivedb.FullName -Destination "tools\smartmontools\bin\drivedb.h" -Force
+            }
           }
 
           $rootDoc = Get-ChildItem -Path $extractDir -Recurse -Filter "COPYING.txt" | Select-Object -First 1
@@ -103,6 +110,13 @@ jobs:
           if (-not (Test-Path "tools\smartmontools\doc\COPYING.txt")) {
             Invoke-WebRequest -Uri "https://raw.githubusercontent.com/smartmontools/smartmontools/RELEASE_7_5/COPYING" -OutFile "tools\smartmontools\doc\COPYING.txt" -UseBasicParsing
           }
+
+      - name: Verify Rust formatting, Clippy, and test suites
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --no-fail-fast
+          cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 
       - name: Build Tauri NSIS installer
         env:
