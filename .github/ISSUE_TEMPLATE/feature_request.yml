@@ -1,0 +1,31 @@
+name: Feature Request
+description: Suggest an improvement, new SMART vendor rule, or UX enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What would you like SSD Sentinel to do?
+      description: Describe the use case, hardware scenario, or workflow improvement.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety & Data Integrity Considerations
+      description: Does this require Administrator rights or modify files/partitions/firmware?
+      placeholder: "e.g. Strictly read-only, or requires explicit confirmation modal..."
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component Area
+      options:
+        - Overview & SMART Telemetry
+        - Endurance Forecast & Tray Alerts
+        - Win32 IOCP Benchmark
+        - Surface Scan & Pinpoint Repair
+        - Storage Optimization & Tiering
+        - File & App Recovery
+        - Translations / UI Polish
+        - Build / Installer / CI

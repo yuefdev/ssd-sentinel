@@ -1,0 +1,864 @@
+import type { Lang } from "./i18n";
+
+export function format(n: unknown, digits = 0, lang: Lang = "tr"): string {
+  if (n === null || n === undefined || n === "" || typeof n === "boolean")
+    return "—";
+  const value = Number(n);
+  return Number.isFinite(value)
+    ? value.toLocaleString(lang === "en" ? "en-US" : "tr-TR", {
+        maximumFractionDigits: digits,
+      })
+    : "—";
+}
+export function bytes(n: unknown, lang: Lang = "tr"): string {
+  if (n === null || n === undefined) return "—";
+  const value = Number(n);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  const i = Math.min(4, Math.floor(Math.log10(Math.max(1, value)) / 3));
+  return `${format(value / 1000 ** i, 1, lang)} ${["B", "KB", "MB", "GB", "TB"][i]}`;
+}
+export function compareRaw(a: string, b: string, lang: Lang = "tr"): number {
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+    const first = BigInt(a),
+      second = BigInt(b);
+    return first === second ? 0 : first > second ? 1 : -1;
+  }
+  return a.localeCompare(b, lang);
+}
+export function escape(v: unknown): string {
+  return String(v ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ]!,
+  );
+}
+export function canStart(state: unknown, disk: unknown): boolean {
+  const s = state as {
+    source?: string;
+    stale?: boolean;
+    busy?: boolean;
+  } | null;
+  const d = disk as {
+    stable_identity?: boolean;
+    read_incomplete?: boolean;
+    os_disk_number?: number | null;
+    os_serial?: string | null;
+    os_model?: string | null;
+    volumes?: unknown[];
+  } | null;
+  return !!(
+    s &&
+    d &&
+    s.source === "live" &&
+    !s.stale &&
+    !s.busy &&
+    d.stable_identity &&
+    !d.read_incomplete &&
+    d.os_disk_number != null &&
+    d.os_serial &&
+    d.os_model &&
+    d.volumes?.length
+  );
+}
+
+export function canMaintain(state: unknown, disk: unknown): boolean {
+  const s = state as {
+    source?: string;
+    stale?: boolean;
+    busy?: boolean;
+    admin?: boolean;
+  } | null;
+  const d = disk as {
+    stable_identity?: boolean;
+    read_incomplete?: boolean;
+    os_disk_number?: number | null;
+    os_serial?: string | null;
+    os_model?: string | null;
+  } | null;
+  return !!(
+    s &&
+    d &&
+    s.source === "live" &&
+    !s.stale &&
+    !s.busy &&
+    s.admin &&
+    d.stable_identity &&
+    !d.read_incomplete &&
+    d.os_disk_number != null &&
+    d.os_serial &&
+    d.os_model
+  );
+}
+
+export function canOptimizeSystem(state: unknown): boolean {
+  const s = state as {
+    source?: string;
+    stale?: boolean;
+    busy?: boolean;
+    admin?: boolean;
+  } | null;
+  return !!(s && s.source === "live" && !s.stale && !s.busy && s.admin);
+}
+
+export function maskSerial(serial: string | null | undefined): string {
+  const s = (serial ?? "").trim();
+  if (!s) return "—";
+  if (s.length <= 4) return "•".repeat(s.length);
+  const dots = "•".repeat(Math.min(8, Math.max(4, s.length - 4)));
+  return `${s.slice(0, 2)}${dots}${s.slice(-2)}`;
+}
+
+export function aiNaturalFilter<
+  T extends {
+    name: string;
+    category: string;
+    confidence: number;
+    extension: string;
+    original_path: string;
+    sub_type?: string;
+    product_name?: string | null;
+    publisher?: string | null;
+    ai_summary?: string;
+  },
+>(items: T[], query: string, categoryFilter = "all"): T[] {
+  const q = query.trim().toLocaleLowerCase("tr");
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const wantsSystem =
+    categoryFilter === "system_lib" ||
+    tokens.some((tok) =>
+      [
+        "dll",
+        "sistem",
+        "sürücü",
+        "surucu",
+        "kütüphane",
+        "kutuphane",
+        "system",
+        "driver",
+        "library",
+      ].includes(tok),
+    );
+  let list =
+    categoryFilter === "all"
+      ? items.filter((i) => wantsSystem || i.category !== "system_lib")
+      : items.filter((i) => i.category === categoryFilter);
+  if (!tokens.length) return list;
+  for (const tok of tokens) {
+    if (
+      [
+        "uygulama",
+        "program",
+        "kurulum",
+        "setup",
+        "exe",
+        "msi",
+        "app",
+        "apps",
+        "programs",
+        "installer",
+      ].includes(tok)
+    ) {
+      list = list.filter(
+        (i) => i.category === "exe_setup" || i.category === "game_portable",
+      );
+    } else if (["oyun", "game", "games", "steam"].includes(tok)) {
+      list = list.filter((i) => i.category === "game_portable");
+    } else if (
+      [
+        "belge",
+        "doküman",
+        "dokuman",
+        "pdf",
+        "word",
+        "excel",
+        "doc",
+        "docs",
+        "document",
+        "documents",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.category === "document");
+    } else if (
+      [
+        "foto",
+        "fotoğraf",
+        "fotograf",
+        "resim",
+        "görsel",
+        "gorsel",
+        "png",
+        "jpg",
+        "photo",
+        "photos",
+        "image",
+        "images",
+        "picture",
+        "pictures",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.category === "photo");
+    } else if (
+      [
+        "video",
+        "videos",
+        "ses",
+        "müzik",
+        "muzik",
+        "medya",
+        "mp4",
+        "mp3",
+        "audio",
+        "sound",
+        "music",
+        "media",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.category === "video_audio");
+    } else if (["arşiv", "arsiv", "archive", "archives", "zip", "rar", "7z"].includes(tok)) {
+      list = list.filter((i) => i.category === "archive");
+    } else if (
+      [
+        "veritabanı",
+        "veritabani",
+        "sqlite",
+        "kod",
+        "ayar",
+        "json",
+        "database",
+        "code",
+        "config",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.category === "database_code");
+    } else if (
+      [
+        "dll",
+        "sistem",
+        "sürücü",
+        "surucu",
+        "kütüphane",
+        "kutuphane",
+        "system",
+        "driver",
+        "library",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.category === "system_lib");
+    } else if (
+      [
+        "sağlam",
+        "saglam",
+        "yüksek",
+        "yuksek",
+        "kesin",
+        "bozulmamış",
+        "healthy",
+        "intact",
+        "good",
+        "solid",
+        "high",
+      ].includes(tok)
+    ) {
+      list = list.filter((i) => i.confidence >= 75);
+    } else {
+      list = list.filter((i) =>
+        `${i.name} ${i.sub_type ?? ""} ${i.product_name ?? ""} ${i.publisher ?? ""} ${i.extension} ${i.original_path} ${i.ai_summary ?? ""}`
+          .toLocaleLowerCase("tr")
+          .includes(tok),
+      );
+    }
+  }
+  return list;
+}
+
+export function formatInterface(
+  iface: string | null | undefined,
+  diskType = "",
+): string {
+  const s = (iface ?? "").trim();
+  if (!s) return "—";
+  if (/^\d+\.\d+(?:\.\d+)?$/.test(s) && (!diskType || /nvme/i.test(diskType))) {
+    return `NVMe ${s}`;
+  }
+  return s;
+}
+
+export function alignmentDescription(
+  aligned: boolean | null | undefined,
+  lang: Lang = "tr",
+): string {
+  if (lang === "en") {
+    if (aligned === true)
+      return "All partitions start on a physical 4K sector boundary.";
+    if (aligned === false)
+      return "Misaligned partitions slow down random writes and increase flash wear.";
+    return "4K alignment cannot be verified without Windows partition mapping.";
+  }
+  if (aligned === true)
+    return "Tüm bölümler fiziksel 4K sektör sınırında başlıyor.";
+  if (aligned === false)
+    return "Hizasız bölüm rastgele yazmayı yavaşlatır ve aşınmayı artırır.";
+  return "Windows bölüm eşlemesi olmadan 4K hizalama doğrulanamaz.";
+}
+
+export function hasNormalizedSmart(
+  rows: {
+    value: number | null;
+    worst: number | null;
+    threshold: number | null;
+  }[],
+): boolean {
+  return rows.some(
+    (r) => r.value !== null || r.worst !== null || r.threshold !== null,
+  );
+}
+
+export function isUnopenableMedia(item: {
+  openable?: boolean;
+  media_status?: string | null;
+}): boolean {
+  return item.openable === false || item.media_status === "unrecoverable";
+}
+
+export function mediaStatusBadge(
+  item: {
+    media_status?: string | null;
+    openable?: boolean;
+  },
+  lang: Lang = "tr",
+): { label: string; level: "ok" | "warning" | "critical" | "info" } | null {
+  if (item.media_status === "repaired") {
+    return {
+      label: lang === "en" ? "Auto-Repaired" : "Otomatik Onarılacak",
+      level: "ok",
+    };
+  }
+  if (item.media_status === "thumbnail_rescued") {
+    return {
+      label: lang === "en" ? "Preview Rescued" : "Önizleme Kurtarıldı",
+      level: "warning",
+    };
+  }
+  if (item.media_status === "unrecoverable" || item.openable === false) {
+    return { label: lang === "en" ? "Unopenable" : "Açılamaz", level: "critical" };
+  }
+  if (item.media_status === "intact") {
+    return {
+      label: lang === "en" ? "Openable · Intact" : "Açılabilir · Sağlam",
+      level: "ok",
+    };
+  }
+  return null;
+}
+
+export function isRecoverableRow(item: {
+  source: string;
+  trim_zeroed: boolean;
+  openable?: boolean;
+  media_status?: string | null;
+}): boolean {
+  return (
+    !item.trim_zeroed &&
+    !isUnopenableMedia(item) &&
+    item.source !== "usn_journal" &&
+    item.source !== "indx_slack"
+  );
+}
+
+export type AppRecoveryStatus =
+  | "full_restore"
+  | "installer_found"
+  | "reinstall_only";
+
+export type AppFilter =
+  | "all"
+  | "full_restore"
+  | "installer_found"
+  | "games"
+  | "reinstall_only";
+
+export function inferAppRecoveryStatus(app: {
+  recovery_status?: string;
+  vss_recoverable?: boolean;
+  installer_found?: boolean;
+  recoverable_item_id?: string | null;
+}): AppRecoveryStatus {
+  if (
+    app.recovery_status === "full_restore" ||
+    app.recovery_status === "installer_found" ||
+    app.recovery_status === "reinstall_only"
+  ) {
+    return app.recovery_status;
+  }
+  if (app.vss_recoverable) return "full_restore";
+  if (app.installer_found || app.recoverable_item_id) return "installer_found";
+  return "reinstall_only";
+}
+
+export function filterDeletedApps<
+  T extends {
+    name: string;
+    publisher?: string | null;
+    exe_path: string;
+    category?: string;
+    recovery_status?: string;
+    vss_recoverable?: boolean;
+    installer_found?: boolean;
+    recoverable_item_id?: string | null;
+    winget_hint?: string;
+    sources?: string[];
+    drive_letter?: string;
+  },
+>(apps: T[], query: string, appFilter: AppFilter = "all"): T[] {
+  let list = apps.filter((app) => {
+    const status = inferAppRecoveryStatus(app);
+    if (appFilter === "full_restore") return status === "full_restore";
+    if (appFilter === "installer_found") return status === "installer_found";
+    if (appFilter === "reinstall_only") return status === "reinstall_only";
+    if (appFilter === "games") {
+      const cat = (app.category ?? "").toLocaleLowerCase("tr");
+      return cat === "oyun" || cat === "game";
+    }
+    return true;
+  });
+  const q = query.trim().toLocaleLowerCase("tr");
+  if (!q) return list;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  for (const tok of tokens) {
+    list = list.filter((app) =>
+      `${app.name} ${app.publisher ?? ""} ${app.exe_path} ${app.category ?? ""} ${app.winget_hint ?? ""} ${(app.sources ?? []).join(" ")} ${app.drive_letter ?? ""}`
+        .toLocaleLowerCase("tr")
+        .includes(tok),
+    );
+  }
+  return list;
+}
+
+export interface BenchmarkEvaluation {
+  label: string;
+  level: "ok" | "warning" | "critical" | "";
+  detail: string;
+  band: "NVMe" | "SATA SSD" | "HDD";
+}
+
+export function evaluateBenchmarkSpeed(
+  seqReadMbS: number | null | undefined,
+  diskType: string,
+  iface?: string | null,
+  busLink?: { ceiling_mb_s?: number | null; bottleneck?: boolean } | null,
+  lang: Lang = "tr",
+): BenchmarkEvaluation | null {
+  if (
+    seqReadMbS === null ||
+    seqReadMbS === undefined ||
+    !Number.isFinite(seqReadMbS) ||
+    seqReadMbS <= 0
+  ) {
+    return null;
+  }
+  if (/hdd/i.test(diskType)) {
+    if (seqReadMbS >= 150) {
+      return {
+        band: "HDD",
+        label: lang === "en" ? "Very fast for HDD" : "HDD için çok iyi",
+        level: "ok",
+        detail:
+          lang === "en"
+            ? "Top tier sequential read speed for mechanical drives (150+ MB/s)."
+            : "Mekanik diskler için üst sıralı okuma bandında (150+ MB/sn).",
+      };
+    }
+    if (seqReadMbS >= 80) {
+      return {
+        band: "HDD",
+        label: lang === "en" ? "Normal for HDD" : "HDD için normal",
+        level: "ok",
+        detail:
+          lang === "en"
+            ? "Within standard 5400/7200 RPM HDD performance range (80–150 MB/s)."
+            : "Standart 5400/7200 RPM HDD hız aralığında (80–150 MB/sn).",
+      };
+    }
+    return {
+      band: "HDD",
+      label: lang === "en" ? "Low for HDD" : "HDD için düşük",
+      level: "warning",
+      detail:
+        lang === "en"
+          ? "Below 80 MB/s is slow for a mechanical drive; check fragmentation or weak sectors."
+          : "80 MB/sn altı mekanik disk için yavaş; parçalanma veya zayıf sektör kontrolü önerilir.",
+    };
+  }
+  if (/nvme/i.test(`${diskType} ${iface ?? ""}`)) {
+    const bottleneckNote = busLink?.bottleneck
+      ? lang === "en"
+        ? " A PCIe link bottleneck appears active."
+        : " PCIe bağlantı darboğazı aktif görünüyor."
+      : "";
+    if (seqReadMbS >= 3000) {
+      return {
+        band: "NVMe",
+        label: lang === "en" ? "Very fast for NVMe" : "NVMe için çok hızlı",
+        level: "ok",
+        detail:
+          lang === "en"
+            ? "High PCIe 3.0/4.0 NVMe sequential performance band (3,000+ MB/s)."
+            : "PCIe 3.0/4.0 NVMe üst performans bandında (3.000+ MB/sn).",
+      };
+    }
+    if (seqReadMbS >= 1500) {
+      return {
+        band: "NVMe",
+        label: lang === "en" ? "Normal for NVMe" : "NVMe için normal",
+        level: "ok",
+        detail:
+          lang === "en"
+            ? `Standard NVMe sequential read band (1,500–3,000 MB/s).${bottleneckNote}`
+            : `Standart NVMe sıralı okuma bandında (1.500–3.000 MB/sn).${bottleneckNote}`,
+      };
+    }
+    if (seqReadMbS >= 800) {
+      return {
+        band: "NVMe",
+        label:
+          lang === "en"
+            ? "Lane-limited / moderate for NVMe"
+            : "NVMe için hat sınırlı / orta",
+        level: "warning",
+        detail:
+          lang === "en"
+            ? `Below typical NVMe speeds; PCIe x2 width, power saving, or thermal throttling may limit bandwidth.${bottleneckNote}`
+            : `NVMe için ortalamanın altında; PCIe x2 hattı, güç tasarrufu veya termal fren etkiliyor olabilir.${bottleneckNote}`,
+      };
+    }
+    return {
+      band: "NVMe",
+      label:
+        lang === "en"
+          ? "Slower than expected for NVMe"
+          : "NVMe için beklenenden yavaş",
+      level: "critical",
+      detail:
+        lang === "en"
+          ? `Below 800 MB/s is unusual for NVMe SSD; inspect PCIe link width, temperature, and TRIM.${bottleneckNote}`
+          : `800 MB/sn altı NVMe SSD için olağandışı; PCIe hattı, sıcaklık ve TRIM durumunu kontrol edin.${bottleneckNote}`,
+    };
+  }
+  if (seqReadMbS >= 450) {
+    return {
+      band: "SATA SSD",
+      label: lang === "en" ? "Very fast for SATA SSD" : "SATA SSD için çok iyi",
+      level: "ok",
+      detail:
+        lang === "en"
+          ? "Near SATA III (6 Gb/s) interface saturation (450+ MB/s)."
+          : "SATA III (6 Gb/sn) tavan hızına yakın (450+ MB/sn).",
+    };
+  }
+  if (seqReadMbS >= 250) {
+    return {
+      band: "SATA SSD",
+      label: lang === "en" ? "Normal for SATA SSD" : "SATA SSD için normal",
+      level: "ok",
+      detail:
+        lang === "en"
+          ? "Normal sequential read range for SATA SSDs (250–450 MB/s)."
+          : "SATA SSD için olağan sıralı okuma bandında (250–450 MB/sn).",
+    };
+  }
+  return {
+    band: "SATA SSD",
+    label: lang === "en" ? "Low for SATA SSD" : "SATA SSD için düşük",
+    level: "warning",
+    detail:
+      lang === "en"
+        ? "Below 250 MB/s may indicate a SATA II port, full SLC cache, or disabled TRIM."
+        : "250 MB/sn altı SATA II hattı, dolu SLC önbellek veya TRIM eksikliğine işaret edebilir.",
+  };
+}
+
+export type StepState = "done" | "active" | "pending";
+
+export function computeSurfaceStepper(opts: {
+  hasFullScan: boolean;
+  hasDiagnosis: boolean;
+  hasPinpoint: boolean;
+  runningMode?: string | null;
+  hasTargets?: boolean;
+}): { activeStep: 1 | 2 | 3; states: [StepState, StepState, StepState] } {
+  const { hasFullScan, hasDiagnosis, hasPinpoint, runningMode, hasTargets } =
+    opts;
+  if (runningMode === "physical_scan") {
+    return { activeStep: 1, states: ["active", "pending", "pending"] };
+  }
+  if (
+    runningMode === "magnetic_refresh" ||
+    runningMode === "bad_zone_isolate"
+  ) {
+    return { activeStep: 3, states: ["done", "done", "active"] };
+  }
+  if (hasPinpoint) {
+    return { activeStep: 3, states: ["done", "done", "done"] };
+  }
+  if (hasFullScan || hasDiagnosis) {
+    if (hasTargets === false) {
+      return { activeStep: 2, states: ["done", "done", "pending"] };
+    }
+    return { activeStep: 2, states: ["done", "active", "pending"] };
+  }
+  return { activeStep: 1, states: ["active", "pending", "pending"] };
+}
+
+export function checkpointProgress(
+  cp:
+    | {
+        next_zone?: number;
+        completed_zones?: number;
+        total_zones?: number;
+        done_bytes?: number;
+        disk_bytes?: number;
+        progress_percent?: number;
+      }
+    | null
+    | undefined,
+): { completed: number; total: number; percent: number } {
+  if (!cp) return { completed: 0, total: 200, percent: 0 };
+  const total = Math.max(1, Number(cp.total_zones ?? 200));
+  const completed = Math.max(
+    0,
+    Math.min(total, Number(cp.completed_zones ?? cp.next_zone ?? 0)),
+  );
+  const percent =
+    typeof cp.progress_percent === "number" &&
+    Number.isFinite(cp.progress_percent)
+      ? Math.max(0, Math.min(100, Math.round(cp.progress_percent)))
+      : cp.disk_bytes && cp.done_bytes != null && cp.disk_bytes > 0
+        ? Math.max(
+            0,
+            Math.min(100, Math.round((cp.done_bytes / cp.disk_bytes) * 100)),
+          )
+        : Math.round((completed / total) * 100);
+  return { completed, total, percent };
+}
+
+export interface TierBadge {
+  label: string;
+  level: "ok" | "warning" | "critical" | "info" | "";
+}
+
+export function slcPressureBadge(
+  pressure: string | null | undefined,
+  isSsd = true,
+  lang: Lang = "tr",
+): TierBadge {
+  const p = (pressure ?? "low").toLowerCase();
+  if (!isSsd) {
+    if (p === "high")
+      return {
+        label: lang === "en" ? "High Usage" : "Yüksek Doluluk",
+        level: "critical",
+      };
+    if (p === "moderate")
+      return {
+        label: lang === "en" ? "Moderate Usage" : "Orta Doluluk",
+        level: "warning",
+      };
+    return {
+      label: lang === "en" ? "Low Usage" : "Düşük Doluluk",
+      level: "ok",
+    };
+  }
+  if (p === "high") {
+    return {
+      label:
+        lang === "en"
+          ? "High — SLC Cache Shrinking"
+          : "Yüksek — SLC Önbellek Daralıyor",
+      level: "critical",
+    };
+  }
+  if (p === "moderate") {
+    return { label: lang === "en" ? "Moderate" : "Orta", level: "warning" };
+  }
+  return { label: lang === "en" ? "Low" : "Düşük", level: "ok" };
+}
+
+export function tierCategoryBadge(
+  category: string | null | undefined,
+  isDir = false,
+  lang: Lang = "tr",
+): TierBadge {
+  const en = lang === "en";
+  switch ((category ?? "").toLowerCase()) {
+    case "video":
+      return { label: "Video", level: "info" };
+    case "archive":
+      return { label: en ? "Archive" : "Arşiv", level: "warning" };
+    case "iso":
+      return { label: "ISO", level: "warning" };
+    case "installer":
+      return { label: en ? "Installer" : "Kurulum", level: "info" };
+    case "game":
+      return { label: en ? "Game" : "Oyun", level: "ok" };
+    case "photo":
+      return { label: en ? "Photo" : "Fotoğraf", level: "info" };
+    case "audio":
+      return { label: en ? "Audio" : "Ses", level: "info" };
+    case "code":
+      return { label: en ? "Code" : "Kod", level: "" };
+    case "database":
+      return { label: en ? "Database" : "Veritabanı", level: "" };
+    case "folder":
+      return { label: en ? "Folder" : "Klasör", level: "" };
+    default:
+      return isDir
+        ? { label: en ? "Folder" : "Klasör", level: "" }
+        : { label: en ? "File" : "Dosya", level: "" };
+  }
+}
+
+export function tierScoreBadge(
+  score: number,
+  direction: string | null | undefined,
+  lang: Lang = "tr",
+): TierBadge {
+  const s = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
+  if (direction === "to_ssd") {
+    return {
+      label: lang === "en" ? `${s}% Hot` : `%${s} Sıcak`,
+      level: s >= 75 ? "ok" : s >= 50 ? "warning" : "",
+    };
+  }
+  return {
+    label: lang === "en" ? `${s}% Cold` : `%${s} Soğuk`,
+    level: s >= 75 ? "info" : s >= 50 ? "warning" : "",
+  };
+}
+
+export function formatUntouchedDays(
+  days: number | null | undefined,
+  lang: Lang = "tr",
+): string {
+  if (days === null || days === undefined || !Number.isFinite(Number(days))) {
+    return "—";
+  }
+  const d = Math.max(0, Math.round(Number(days)));
+  if (lang === "en") {
+    if (d === 0) return "Used today";
+    return d === 1 ? "1 day untouched" : `${d} days untouched`;
+  }
+  if (d === 0) return "Bugün kullanıldı";
+  return `${d} gün dokunulmadı`;
+}
+
+export function findCompanionDrive<
+  T extends {
+    id: string;
+    model: string;
+    type: string;
+    volumes: {
+      letter: string;
+      filesystem: string;
+      free_bytes: number | null;
+    }[];
+  },
+>(
+  disks: T[],
+  selectedDisk: T | null | undefined,
+): {
+  disk_id: string;
+  model: string;
+  letter: string;
+  type: string;
+  free_bytes: number;
+  role: "hdd_archive" | "ssd_boost";
+} | null {
+  if (!selectedDisk) return null;
+  const sourceIsHdd = /hdd/i.test(selectedDisk.type);
+  const minFreeBytes = sourceIsHdd ? 20 * 1024 ** 3 : 0;
+  let best: {
+    disk_id: string;
+    model: string;
+    letter: string;
+    type: string;
+    free_bytes: number;
+    role: "hdd_archive" | "ssd_boost";
+  } | null = null;
+  for (const d of disks) {
+    if (d.id === selectedDisk.id) continue;
+    const targetIsHdd = /hdd/i.test(d.type);
+    if (sourceIsHdd === targetIsHdd) continue;
+    for (const v of d.volumes ?? []) {
+      if (!/^ntfs$/i.test((v.filesystem ?? "").trim())) continue;
+      const free = Number(v.free_bytes ?? 0);
+      if (!Number.isFinite(free) || free < minFreeBytes) continue;
+      if (!best || free > best.free_bytes) {
+        best = {
+          disk_id: d.id,
+          model: d.model,
+          letter: v.letter,
+          type: d.type,
+          free_bytes: free,
+          role: sourceIsHdd ? "ssd_boost" : "hdd_archive",
+        };
+      }
+    }
+  }
+  return best;
+}
+
+export function computePollSignature(
+  state: unknown,
+  opts: {
+    page: string;
+    selected: string;
+    letter: string;
+    connectionError: string;
+    lang?: Lang;
+    detailCounts?: string;
+    forecast?: unknown;
+    checkpoint?: unknown;
+    tierAnalysis?: unknown;
+    tierMoves?: unknown;
+    tierBusy?: boolean;
+  },
+): string {
+  const s = state as Record<string, unknown> | null;
+  if (!s) return `empty:${opts.page}:${opts.connectionError}:${opts.lang ?? "tr"}`;
+  const core: Record<string, unknown> = {
+    source: s.source,
+    admin: s.admin,
+    updating: s.updating,
+    stale: s.stale,
+    busy: s.busy,
+    updated_at: s.updated_at,
+    error: s.error,
+    partial_warnings: s.partial_warnings,
+    minimise_to_tray: s.minimise_to_tray,
+    health_mode: s.health_mode,
+    language: s.language,
+    version: s.version,
+    windows: s.windows,
+    optimizations: s.optimizations,
+    tier_moves: s.tier_moves,
+    disks: s.disks,
+    job: s.job,
+    page: opts.page,
+    selected: opts.selected,
+    letter: opts.letter,
+    lang: opts.lang ?? "tr",
+    connectionError: opts.connectionError,
+    detailCounts: opts.detailCounts ?? "",
+    forecast: opts.forecast ?? null,
+    checkpoint: opts.checkpoint ?? null,
+    tierAnalysis: opts.tierAnalysis ?? null,
+    tierMoves: opts.tierMoves ?? null,
+    tierBusy: !!opts.tierBusy,
+  };
+  if (opts.page === "performance") {
+    core.performance = s.performance;
+  }
+  return JSON.stringify(core);
+}

@@ -1,0 +1,53 @@
+name: Bug Report
+description: Report a defect, SMART parsing issue, crash, or UI glitch in SSD Sentinel
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do **not** include personal files or sensitive unredacted identifiers if you don't wish to share them publicly. Use the anonymized JSON export when attaching drive info.
+  - type: input
+    id: version
+    attributes:
+      label: SSD Sentinel Version
+      description: Found in the bottom footer or Tools & Settings.
+      placeholder: "e.g. v1.9.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows Version & Privilege Level
+      placeholder: "e.g. Windows 11 24H2 x64 (Standard User / Administrator)"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Affected Drive Model & Bus
+      placeholder: "e.g. Samsung 990 PRO NVMe / WD Blue SATA HDD"
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear description of what went wrong and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open Tools & Settings
+        2. Click '...'
+        3. Observe error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Exported JSON Snippet / Error Message (Optional)
+      render: json

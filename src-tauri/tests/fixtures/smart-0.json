@@ -1,0 +1,746 @@
+{
+  "json_format_version": [
+    1,
+    0
+  ],
+  "smartctl": {
+    "version": [
+      7,
+      5
+    ],
+    "pre_release": false,
+    "svn_revision": "5714",
+    "platform_info": "x86_64-w64-mingw32-w11-b26300",
+    "build_info": "(AppVeyor)",
+    "argv": [
+      "smartctl",
+      "-j",
+      "-a",
+      "-d",
+      "ata",
+      "/dev/sda"
+    ],
+    "exit_status": 64
+  },
+  "local_time": {
+    "time_t": 1792553925,
+    "asctime": "Wed Oct 21 06:38:45 2026 TSS"
+  },
+  "device": {
+    "name": "/dev/sda",
+    "info_name": "/dev/sda",
+    "type": "ata",
+    "protocol": "ATA"
+  },
+  "model_family": "Western Digital Blue (CMR)",
+  "model_name": "WDC WD10EZEX-21M2NA0",
+  "serial_number": "WD-DEMO-HDD001",
+  "wwn": {
+    "naa": 5,
+    "oui": 5358,
+    "id": 10000000001
+  },
+  "firmware_version": "01.01A01",
+  "user_capacity": {
+    "blocks": 1953525168,
+    "bytes": 1000204886016
+  },
+  "logical_block_size": 512,
+  "physical_block_size": 4096,
+  "rotation_rate": 7200,
+  "trim": {
+    "supported": false
+  },
+  "in_smartctl_database": true,
+  "ata_version": {
+    "string": "ACS-2, ACS-3 T13/2161-D revision 3b",
+    "major_value": 1022,
+    "minor_value": 31
+  },
+  "sata_version": {
+    "string": "SATA 3.1",
+    "value": 126
+  },
+  "interface_speed": {
+    "max": {
+      "sata_value": 14,
+      "string": "6.0 Gb/s",
+      "units_per_second": 60,
+      "bits_per_unit": 100000000
+    },
+    "current": {
+      "sata_value": 3,
+      "string": "6.0 Gb/s",
+      "units_per_second": 60,
+      "bits_per_unit": 100000000
+    }
+  },
+  "smart_support": {
+    "available": true,
+    "enabled": true
+  },
+  "smart_status": {
+    "passed": true
+  },
+  "ata_smart_data": {
+    "offline_data_collection": {
+      "status": {
+        "value": 130,
+        "string": "was completed without error",
+        "passed": true
+      },
+      "completion_seconds": 11580
+    },
+    "self_test": {
+      "status": {
+        "value": 0,
+        "string": "completed without error",
+        "passed": true
+      },
+      "polling_minutes": {
+        "short": 2,
+        "extended": 120,
+        "conveyance": 5
+      }
+    },
+    "capabilities": {
+      "values": [
+        123,
+        3
+      ],
+      "exec_offline_immediate_supported": true,
+      "offline_is_aborted_upon_new_cmd": false,
+      "offline_surface_scan_supported": true,
+      "self_tests_supported": true,
+      "conveyance_self_test_supported": true,
+      "selective_self_test_supported": true,
+      "attribute_autosave_enabled": true,
+      "error_logging_supported": true,
+      "gp_logging_supported": true
+    }
+  },
+  "ata_sct_capabilities": {
+    "value": 12341,
+    "error_recovery_control_supported": false,
+    "feature_control_supported": true,
+    "data_table_supported": true
+  },
+  "ata_smart_attributes": {
+    "revision": 16,
+    "table": [
+      {
+        "id": 1,
+        "name": "Raw_Read_Error_Rate",
+        "value": 200,
+        "worst": 200,
+        "thresh": 51,
+        "when_failed": "",
+        "flags": {
+          "value": 47,
+          "string": "POSR-K ",
+          "prefailure": true,
+          "updated_online": true,
+          "performance": true,
+          "error_rate": true,
+          "event_count": false,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 281,
+          "string": "281"
+        }
+      },
+      {
+        "id": 3,
+        "name": "Spin_Up_Time",
+        "value": 177,
+        "worst": 172,
+        "thresh": 21,
+        "when_failed": "",
+        "flags": {
+          "value": 39,
+          "string": "POS--K ",
+          "prefailure": true,
+          "updated_online": true,
+          "performance": true,
+          "error_rate": false,
+          "event_count": false,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 2133,
+          "string": "2133"
+        }
+      },
+      {
+        "id": 4,
+        "name": "Start_Stop_Count",
+        "value": 93,
+        "worst": 93,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 7766,
+          "string": "7766"
+        }
+      },
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 200,
+        "worst": 200,
+        "thresh": 140,
+        "when_failed": "",
+        "flags": {
+          "value": 51,
+          "string": "PO--CK ",
+          "prefailure": true,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 7,
+        "name": "Seek_Error_Rate",
+        "value": 100,
+        "worst": 253,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 46,
+          "string": "-OSR-K ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": true,
+          "error_rate": true,
+          "event_count": false,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 9,
+        "name": "Power_On_Hours",
+        "value": 57,
+        "worst": 57,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 31746,
+          "string": "31746"
+        }
+      },
+      {
+        "id": 10,
+        "name": "Spin_Retry_Count",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 11,
+        "name": "Calibration_Retry_Count",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 12,
+        "name": "Power_Cycle_Count",
+        "value": 96,
+        "worst": 96,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 4504,
+          "string": "4504"
+        }
+      },
+      {
+        "id": 192,
+        "name": "Power-Off_Retract_Count",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 639,
+          "string": "639"
+        }
+      },
+      {
+        "id": 193,
+        "name": "Load_Cycle_Count",
+        "value": 198,
+        "worst": 198,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 7646,
+          "string": "7646"
+        }
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 111,
+        "worst": 99,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 34,
+          "string": "-O---K ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": false,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 32,
+          "string": "32"
+        }
+      },
+      {
+        "id": 196,
+        "name": "Reallocated_Event_Count",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 48,
+          "string": "----CK ",
+          "prefailure": false,
+          "updated_online": false,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      },
+      {
+        "id": 199,
+        "name": "UDMA_CRC_Error_Count",
+        "value": 200,
+        "worst": 199,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 50,
+          "string": "-O--CK ",
+          "prefailure": false,
+          "updated_online": true,
+          "performance": false,
+          "error_rate": false,
+          "event_count": true,
+          "auto_keep": true
+        },
+        "raw": {
+          "value": 3,
+          "string": "3"
+        }
+      },
+      {
+        "id": 200,
+        "name": "Multi_Zone_Error_Rate",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "when_failed": "",
+        "flags": {
+          "value": 8,
+          "string": "---R-- ",
+          "prefailure": false,
+          "updated_online": false,
+          "performance": false,
+          "error_rate": true,
+          "event_count": false,
+          "auto_keep": false
+        },
+        "raw": {
+          "value": 0,
+          "string": "0"
+        }
+      }
+    ]
+  },
+  "spare_available": {
+    "current_percent": 100
+  },
+  "power_on_time": {
+    "hours": 31746
+  },
+  "power_cycle_count": 4504,
+  "temperature": {
+    "current": 32
+  },
+  "ata_smart_error_log": {
+    "summary": {
+      "revision": 1,
+      "count": 4,
+      "logged_count": 4,
+      "table": [
+        {
+          "error_number": 4,
+          "lifetime_hours": 31585,
+          "completion_registers": {
+            "error": 4,
+            "status": 97,
+            "count": 1,
+            "lba": 12734209,
+            "device": 160
+          },
+          "error_description": "Device Fault; Error: ABRT",
+          "previous_commands": [
+            {
+              "registers": {
+                "command": 176,
+                "features": 216,
+                "count": 1,
+                "lba": 12734209,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 3484435,
+              "command_name": "SMART ENABLE OPERATIONS"
+            },
+            {
+              "registers": {
+                "command": 236,
+                "features": 0,
+                "count": 0,
+                "lba": 0,
+                "device": 0,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 24794,
+              "command_name": "IDENTIFY DEVICE"
+            }
+          ]
+        },
+        {
+          "error_number": 3,
+          "lifetime_hours": 31550,
+          "completion_registers": {
+            "error": 4,
+            "status": 97,
+            "count": 1,
+            "lba": 12734209,
+            "device": 160
+          },
+          "error_description": "Device Fault; Error: ABRT",
+          "previous_commands": [
+            {
+              "registers": {
+                "command": 176,
+                "features": 216,
+                "count": 1,
+                "lba": 12734209,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 2585879,
+              "command_name": "SMART ENABLE OPERATIONS"
+            },
+            {
+              "registers": {
+                "command": 239,
+                "features": 2,
+                "count": 0,
+                "lba": 0,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 2583106,
+              "command_name": "SET FEATURES [Enable write cache]"
+            },
+            {
+              "registers": {
+                "command": 245,
+                "features": 0,
+                "count": 0,
+                "lba": 0,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 2583106,
+              "command_name": "SECURITY FREEZE LOCK"
+            }
+          ]
+        },
+        {
+          "error_number": 2,
+          "lifetime_hours": 31540,
+          "completion_registers": {
+            "error": 4,
+            "status": 97,
+            "count": 1,
+            "lba": 12734209,
+            "device": 160
+          },
+          "error_description": "Device Fault; Error: ABRT",
+          "previous_commands": [
+            {
+              "registers": {
+                "command": 176,
+                "features": 216,
+                "count": 1,
+                "lba": 12734209,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 7237825,
+              "command_name": "SMART ENABLE OPERATIONS"
+            },
+            {
+              "registers": {
+                "command": 239,
+                "features": 2,
+                "count": 0,
+                "lba": 0,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 7235015,
+              "command_name": "SET FEATURES [Enable write cache]"
+            },
+            {
+              "registers": {
+                "command": 245,
+                "features": 0,
+                "count": 0,
+                "lba": 0,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 7235015,
+              "command_name": "SECURITY FREEZE LOCK"
+            }
+          ]
+        },
+        {
+          "error_number": 1,
+          "lifetime_hours": 31417,
+          "completion_registers": {
+            "error": 4,
+            "status": 97,
+            "count": 1,
+            "lba": 12734209,
+            "device": 160
+          },
+          "error_description": "Device Fault; Error: ABRT",
+          "previous_commands": [
+            {
+              "registers": {
+                "command": 176,
+                "features": 216,
+                "count": 1,
+                "lba": 12734209,
+                "device": 160,
+                "device_control": 0
+              },
+              "powerup_milliseconds": 5226299,
+              "command_name": "SMART ENABLE OPERATIONS"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "ata_smart_self_test_log": {
+    "standard": {
+      "revision": 1,
+      "count": 0
+    }
+  },
+  "ata_smart_selective_self_test_log": {
+    "revision": 1,
+    "table": [
+      {
+        "lba_min": 0,
+        "lba_max": 0,
+        "status": {
+          "value": 0,
+          "string": "Not_testing"
+        }
+      },
+      {
+        "lba_min": 0,
+        "lba_max": 0,
+        "status": {
+          "value": 0,
+          "string": "Not_testing"
+        }
+      },
+      {
+        "lba_min": 0,
+        "lba_max": 0,
+        "status": {
+          "value": 0,
+          "string": "Not_testing"
+        }
+      },
+      {
+        "lba_min": 0,
+        "lba_max": 0,
+        "status": {
+          "value": 0,
+          "string": "Not_testing"
+        }
+      },
+      {
+        "lba_min": 0,
+        "lba_max": 0,
+        "status": {
+          "value": 0,
+          "string": "Not_testing"
+        }
+      }
+    ],
+    "flags": {
+      "value": 0,
+      "remainder_scan_enabled": false
+    },
+    "power_up_scan_resume_minutes": 0
+  }
+}

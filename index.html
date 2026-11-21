@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="tr" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>SSD Sentinel</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/sentinel.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div id="app">
+      <div class="boot">
+        SSD Sentinel <span>Starting Rust core…</span>
+      </div>
+    </div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <dialog id="confirmation" aria-labelledby="confirm-title"></dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,62 @@
+[package]
+name = "ssd-sentinel"
+version = "1.9.0"
+edition = "2021"
+description = "Windows disk health and diagnostics desktop application"
+license = "MIT"
+
+[lib]
+name = "ssd_sentinel_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ssd-sentinel"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification", "dep:tauri-plugin-single-instance"]
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+rusqlite = { version = "0.38", features = ["bundled"] }
+roxmltree = "0.21"
+tempfile = "3"
+getrandom = "0.3"
+same-file = "1"
+uuid = { version = "1", features = ["v4"] }
+tauri = { version = "2.11.5", features = ["tray-icon", "image-png"], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_System_Memory",
+  "Win32_System_Power",
+  "Win32_System_Registry",
+  "Win32_System_Services",
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Properties",
+  "Win32_Networking_WinHttp",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = false
+codegen-units = 16
+strip = true

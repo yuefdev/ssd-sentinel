@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional version tag label when triggered manually"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "1"
+  CARGO_INCREMENTAL: "0"
+  RAYON_NUM_THREADS: "1"
+  SMARTMONTOOLS_TAG: "RELEASE_7_5"
+  SMARTMONTOOLS_SETUP_URL: "https://github.com/smartmontools/smartmontools/releases/download/RELEASE_7_5/smartmontools-7.5.win32-setup.exe"
+  SMARTMONTOOLS_SRC_URL: "https://github.com/smartmontools/smartmontools/archive/refs/tags/RELEASE_7_5.tar.gz"
+  SMARTCTL_X64_SHA256: "b5db94e5082c042be44994b7a4fa8f7b5c8e713b2ab1c9a560d8f7a7995ea27d"
+
+jobs:
+  build-release:
+    name: Build Windows NSIS Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify frontend tests and build
+        run: |
+          npm test
+          npm run build
+
+      - name: Verify Rust formatting, Clippy, and test suites
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -j 1 -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --no-fail-fast -j 1
+          cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast -j 1
+
+      - name: Fetch smartmontools 7.5 binaries and GPL source archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "release-assets", "tools\smartmontools\bin", "tools\smartmontools\doc", "_smt_extract\unpacked" | Out-Null
+
+          $setupPath = "_smt_extract\smartmontools-7.5.win32-setup.exe"
+          $srcTarPath = "release-assets\smartmontools-7.5-RELEASE_7_5-source.tar.gz"
+
+          Invoke-WebRequest -Uri $env:SMARTMONTOOLS_SETUP_URL -OutFile $setupPath -UseBasicParsing
+          Invoke-WebRequest -Uri $env:SMARTMONTOOLS_SRC_URL -OutFile $srcTarPath -UseBasicParsing
+
+          # Run silent extraction from upstream NSIS package or fallback to 7z
+          $extractDir = (Resolve-Path "_smt_extract\unpacked").ProviderPath
+          $proc = Start-Process -FilePath $setupPath -ArgumentList "/S", "/D=$extractDir" -Wait -PassThru
+          if ($proc.ExitCode -ne 0 -or -not (Test-Path "$extractDir\bin\smartctl.exe")) {
+            & 7z x $setupPath "-o$extractDir" -y | Out-Null
+          }
+
+          $smartctl = Get-ChildItem -Path $extractDir -Recurse -Filter "smartctl.exe" | Where-Object {
+            (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $env:SMARTCTL_X64_SHA256
+          } | Select-Object -First 1
+
+          if (-not $smartctl) {
+            throw "Could not verify x64 smartctl.exe matching expected SHA-256 $env:SMARTCTL_X64_SHA256"
+          }
+
+          $binDir = $smartctl.Directory.FullName
+          Copy-Item -Path $smartctl.FullName -Destination "tools\smartmontools\bin\smartctl.exe" -Force
+          if (Test-Path "$binDir\drivedb.h") {
+            Copy-Item -Path "$binDir\drivedb.h" -Destination "tools\smartmontools\bin\drivedb.h" -Force
+          }
+
+          $rootDoc = Get-ChildItem -Path $extractDir -Recurse -Filter "COPYING.txt" | Select-Object -First 1
+          if ($rootDoc) {
+            Copy-Item -Path $rootDoc.FullName -Destination "tools\smartmontools\doc\COPYING.txt" -Force
+            $chksum = Join-Path $rootDoc.Directory.FullName "checksums64.txt"
+            if (Test-Path $chksum) {
+              Copy-Item -Path $chksum -Destination "tools\smartmontools\doc\checksums64.txt" -Force
+            }
+          }
+
+          if (-not (Test-Path "tools\smartmontools\doc\COPYING.txt")) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/smartmontools/smartmontools/RELEASE_7_5/COPYING" -OutFile "tools\smartmontools\doc\COPYING.txt" -UseBasicParsing
+          }
+
+      - name: Build Tauri NSIS installer
+        env:
+          SSD_SENTINEL_UPDATE_REPO: ${{ github.repository }}
+        run: npm run tauri -- build --bundles nsis
+
+      - name: Stage release artifacts and generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $nsisDir = "src-tauri\target\release\bundle\nsis"
+          Get-ChildItem -Path $nsisDir -Filter "*-setup.exe" | ForEach-Object {
+            $cleanName = $_.Name -replace ' ', '-'
+            Copy-Item -Path $_.FullName -Destination "release-assets\$cleanName" -Force
+          }
+          $lines = Get-ChildItem -Path "release-assets" -File | Sort-Object Name | ForEach-Object {
+            $h = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$h  $($_.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path (Resolve-Path "release-assets").ProviderPath "SHA256SUMS.txt"),
+            [string[]]$lines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/*-setup.exe
+            release-assets/smartmontools-7.5-RELEASE_7_5-source.tar.gz
+            release-assets/SHA256SUMS.txt

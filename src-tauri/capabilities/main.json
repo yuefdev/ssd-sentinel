@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Local application IPC and window events only",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
