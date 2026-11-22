@@ -2,6 +2,21 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## [v1.10.0-rc.1] — 2026-11-22
+
+### Added
+- **Default-on Read-Only Guard:** `read_only_guard` is enforced at the Rust core boundary for every mutating path (`start_job`, `disk_action`, tier relocate/rollback, `optimize`), persisted in `preferences.json`, and exposed through a toolbar + Settings **Write Guard** toggle. Every confirmation dialog now shows a structured `DryRunSpec` execution manifest before anything is written.
+- **NTFS safety test suite:** `ntfs_safety_integration` (fault-injected mid-copy cancel, forbidden-path firewall, read-only scanner immutability, read-only guard persistence) plus a real cross-volume VHDX NTFS junction/rollback harness (`tools/vhdx_integration_test.ps1`).
+- **Formal docs:** `docs/ARCHITECTURE.md` and `docs/SAFETY_SPEC.md`; updated `SECURITY.md`, `README.md`, `CONTRIBUTING.md`.
+- **CI/CD & supply chain:** Playwright UI smoke gate, VHDX NTFS CI job, `cargo-audit` + `npm audit`, `src-tauri/deny.toml`, RC/beta/alpha pre-release channel and manual staging artifacts, SLSA build provenance attestation on tagged releases.
+
+### Changed
+- Renamed the `surface_ai` module to `surface_triage`; the diagnosis engine is a deterministic statistics + rules engine (offline) and is labelled as such.
+- **Precision Storage Lab UI:** steel-cobalt interactive accent separated from emerald health status, monospace tabular telemetry, flatter bordered panels, new shield mark, refreshed screenshots; removed consumer/AI copy and sparkle icons.
+
+### Security
+- Updated `rusqlite` to 0.43 (`libsqlite3-sys` 0.40, RUSTSEC-2026-0459), `tokio` to 1.54.1 (RUSTSEC-2026-0384), `url` to 2.5.9 (RUSTSEC-2026-0592), and `rustix` to 1.1.6.
+
 ## [v1.9.0] — 2026-11-21
 
 ### Added

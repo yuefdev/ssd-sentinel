@@ -287,7 +287,7 @@ function navItem([key, title, ico]: [Page, string, string]): string {
 function navigation(): string {
   const lang = getLang();
   const pages = getPages();
-  const verShort = state?.version?.split(".").slice(0, 2).join(".") || "1.9";
+  const verShort = state?.version?.split(".").slice(0, 2).join(".") || "1.10";
   return `<aside class="sidebar">
     <div class="brand"><span class="brand-mark"><img class="brand-logo" src="${brandLogo}" alt="" /></span><div>SSD Sentinel<small>STORAGE DIAGNOSTICS</small></div><span class="version">${e(verShort)}</span></div>
     <div class="nav-label">${L("ANA İŞLEMLER", "CORE WORKSPACE")}</div>
@@ -2068,8 +2068,8 @@ function toolsView(d: Disk): string {
   const updateMsg = updateStatus
     ? translateUpdateMessage(updateStatus, lang)
     : L(
-        `Yüklü sürüm v${state?.version ?? "1.9.0"} · arka planda otomatik ağ bağlantısı yapılmaz.`,
-        `Installed v${state?.version ?? "1.9.0"} · no background network traffic is sent.`,
+        `Yüklü sürüm v${state?.version ?? "1.10.0"} · arka planda otomatik ağ bağlantısı yapılmaz.`,
+        `Installed v${state?.version ?? "1.10.0"} · no background network traffic is sent.`,
         lang,
       );
   return `${heading(d, L("BAKIM & AYARLAR", "TOOLS & SETTINGS", lang), L("Bakım araçları ve uygulama ayarları", "Maintenance tools &amp; preferences", lang), L("Her işlem başlamadan önce onay ister.", "Every write or firmware command prompts for confirmation before running.", lang))}
@@ -2167,7 +2167,7 @@ function render() {
   const partialBanner = partialWarnings.length
     ? `<div class="warning-banner" role="status"><div class="warning-banner-main">${icon("alert")}<div class="warning-banner-text"><strong>${L("Kısmi SMART okuma uyarısı", "Partial SMART read warning", lang)}</strong><ul>${partialWarnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></div></div>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact primary warning-elevate", pending) : ""}</div>`
     : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.9.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;

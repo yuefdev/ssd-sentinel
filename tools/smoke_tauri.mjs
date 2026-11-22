@@ -40,6 +40,7 @@ const seqMeasurement = {
   read_bytes: "16250000000",
   write_bytes: "0",
 };
+fixture.state.admin = false;
 fixture.forecasts = {};
 fixture.checkpoints = {};
 fixture.tierMoves = [];
@@ -177,10 +178,10 @@ try {
           return structuredClone(
             window.__fixture.mockUpdate || {
               repo: "yuefdev/ssd-sentinel",
-              current: "1.9.0",
+              current: "1.10.0",
               status: "up_to_date",
-              latest: "v1.9.0",
-              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.9.0",
+              latest: "v1.10.0",
+              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.0",
               download_url: null,
               asset_name: null,
               asset_size: null,
@@ -1647,7 +1648,7 @@ try {
   await page.evaluate(() => {
     window.__fixture.mockUpdate = {
       repo: "yuefdev/ssd-sentinel",
-      current: "1.9.0",
+      current: "1.10.0",
       status: "update_available",
       latest: "v2.0.0",
       url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v2.0.0",
