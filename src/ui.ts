@@ -63,12 +63,28 @@ export function canStart(state: unknown, disk: unknown): boolean {
   );
 }
 
+export function isWriteLocked(state: unknown): boolean {
+  const s = state as { read_only_guard?: boolean } | null;
+  return s?.read_only_guard === true;
+}
+
+export function canWrite(state: unknown): boolean {
+  const s = state as {
+    source?: string;
+    stale?: boolean;
+    busy?: boolean;
+    read_only_guard?: boolean;
+  } | null;
+  return !!(s && s.source === "live" && !s.stale && !s.busy && !s.read_only_guard);
+}
+
 export function canMaintain(state: unknown, disk: unknown): boolean {
   const s = state as {
     source?: string;
     stale?: boolean;
     busy?: boolean;
     admin?: boolean;
+    read_only_guard?: boolean;
   } | null;
   const d = disk as {
     stable_identity?: boolean;
@@ -83,6 +99,7 @@ export function canMaintain(state: unknown, disk: unknown): boolean {
     s.source === "live" &&
     !s.stale &&
     !s.busy &&
+    !s.read_only_guard &&
     s.admin &&
     d.stable_identity &&
     !d.read_incomplete &&
@@ -98,8 +115,16 @@ export function canOptimizeSystem(state: unknown): boolean {
     stale?: boolean;
     busy?: boolean;
     admin?: boolean;
+    read_only_guard?: boolean;
   } | null;
-  return !!(s && s.source === "live" && !s.stale && !s.busy && s.admin);
+  return !!(
+    s &&
+    s.source === "live" &&
+    !s.stale &&
+    !s.busy &&
+    !s.read_only_guard &&
+    s.admin
+  );
 }
 
 export function maskSerial(serial: string | null | undefined): string {
@@ -837,6 +862,7 @@ export function computePollSignature(
     error: s.error,
     partial_warnings: s.partial_warnings,
     minimise_to_tray: s.minimise_to_tray,
+    read_only_guard: s.read_only_guard,
     health_mode: s.health_mode,
     language: s.language,
     version: s.version,

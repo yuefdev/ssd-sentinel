@@ -231,6 +231,9 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             return Err("Disk verileri güncel değil; önce SMART verilerini yenileyin.".into());
         }
     }
+    if !matches!(req.action.as_str(), "query_op_bounds" | "autostart") {
+        core.require_write_unlocked(&req.action)?;
+    }
     if req.action != "autostart" && !platform::is_admin() {
         return Err("Bu işlem için uygulamayı Yönetici olarak başlatın.".into());
     }

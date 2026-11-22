@@ -9,8 +9,8 @@ pub mod process;
 pub mod recovery;
 pub mod report;
 pub mod store;
-pub mod surface_ai;
 pub mod surface_heal;
+pub mod surface_triage;
 pub mod tiering;
 
 #[cfg(feature = "desktop")]

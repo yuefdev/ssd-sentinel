@@ -450,7 +450,7 @@ export function translateDiagnosis(
       engine: diag.engine ?? "",
     };
   }
-  const engine = "Local smart diagnosis · statistics + rule-based · offline";
+  const engine = "Deterministic surface diagnostics · statistics + rules · offline";
   if (diag.unreadable + diag.weak + diag.slow === 0) {
     return {
       title: "Surface is clean",

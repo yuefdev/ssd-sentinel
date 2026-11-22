@@ -5,7 +5,7 @@ use ssd_sentinel_core::{
     model,
     optimize::OptimizeRequest,
     platform, process,
-    surface_ai::{
+    surface_triage::{
         decide, diagnose, plan_regions, slow_threshold_ms, Action, LatencyBaseline, Target,
         TargetKind,
     },
@@ -502,7 +502,7 @@ fn autopilot_and_recovery_validate_options_and_reject_replay() {
 }
 
 #[test]
-fn surface_ai_diagnoses_plans_and_validates_pinpoint_auto_budgets() {
+fn surface_triage_diagnoses_plans_and_validates_pinpoint_auto_budgets() {
     for mode in ["physical_scan", "magnetic_refresh", "bad_zone_isolate"] {
         assert!(
             jobs::validate_options("surface", &json!({"mode": mode, "size_mib": "auto"})).is_ok(),
@@ -1017,6 +1017,10 @@ fn v18_smart_tier_validation_replay_guards_and_scoring_contract() {
         data["stale"] = json!(false);
         data["disks"] = json!(live_disks);
     }
+    assert_eq!(live_core.state()["read_only_guard"], true);
+    live_core
+        .set_preferences(false, None, None, Some(false))
+        .unwrap();
     let err_ssd_on_hdd = live_core
         .start_job(JobRequest {
             kind: "smart_tier".into(),
@@ -1131,12 +1135,13 @@ fn v19_preferences_persist_language_and_update_check_handles_unconfigured() {
     .unwrap();
     assert_eq!(core.state()["language"], "tr");
 
-    core.set_preferences(true, Some("strict"), Some("en"))
+    core.set_preferences(true, Some("strict"), Some("en"), None)
         .unwrap();
     let state = core.state();
     assert_eq!(state["language"], "en");
     assert_eq!(state["minimise_to_tray"], true);
     assert_eq!(state["health_mode"], "strict");
+    assert_eq!(state["read_only_guard"], true);
     drop(core);
 
     let reopened = Core::new(Config {
@@ -1149,9 +1154,11 @@ fn v19_preferences_persist_language_and_update_check_handles_unconfigured() {
     assert_eq!(reopened_state["language"], "en");
     assert_eq!(reopened_state["minimise_to_tray"], true);
     assert_eq!(reopened_state["health_mode"], "strict");
+    assert_eq!(reopened_state["read_only_guard"], true);
 
     reopened
-        .set_preferences(false, Some("default"), Some("tr"))
+        .set_preferences(false, Some("default"), Some("tr"), Some(false))
         .unwrap();
     assert_eq!(reopened.state()["language"], "tr");
+    assert_eq!(reopened.state()["read_only_guard"], false);
 }

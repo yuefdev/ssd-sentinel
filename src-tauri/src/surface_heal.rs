@@ -3,7 +3,7 @@ use crate::{
     jobs::{add_block, cancelled, classify, phase, OwnedArea, BLOCKS},
     model::{normalise, Disk},
     platform, process,
-    surface_ai::{self, Action, Target, TargetKind},
+    surface_triage::{self, Action, Target, TargetKind},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -204,7 +204,7 @@ pub struct SurfaceCheckpoint {
     pub micro_probed_sectors: u64,
     #[serde(default)]
     pub thermal_pauses: u64,
-    pub lat_base: surface_ai::LatencyBaseline,
+    pub lat_base: surface_triage::LatencyBaseline,
     #[serde(default)]
     pub updated_at: String,
 }
@@ -880,7 +880,7 @@ mod win {
         };
 
         let mut start_zone = 0usize;
-        let mut lat_base = surface_ai::LatencyBaseline::new();
+        let mut lat_base = surface_triage::LatencyBaseline::new();
         let mut targets: Vec<Target> = Vec::new();
         let mut zones = Vec::with_capacity(BLOCKS);
         let mut bad_byte_offsets = Vec::new();
@@ -954,7 +954,7 @@ mod win {
             unreadable_bytes: u64,
             micro_probed_sectors: u64,
             thermal_pauses: u64,
-            lat_base: surface_ai::LatencyBaseline,
+            lat_base: surface_triage::LatencyBaseline,
         }
 
         let persist_checkpoint = |b: &ZoneBoundary,
@@ -1059,7 +1059,7 @@ mod win {
                 if len == 0 {
                     break;
                 }
-                let slow_ms = surface_ai::slow_threshold_ms(&lat_base, is_hdd);
+                let slow_ms = surface_triage::slow_threshold_ms(&lat_base, is_hdd);
                 let slice = &mut buf.as_mut_slice()[..len as usize];
                 let t = Instant::now();
                 let mut res = seek_and_read(h.0, off, slice);
@@ -1100,7 +1100,7 @@ mod win {
                         probe_chunk_4k(core, h.0, off, len, &mut micro_buf)
                     };
                     micro_probed_sectors += probed;
-                    if hits.is_empty() && targets.len() < surface_ai::MAX_TARGETS {
+                    if hits.is_empty() && targets.len() < surface_triage::MAX_TARGETS {
                         targets.push(Target {
                             offset: off,
                             len,
@@ -1116,7 +1116,7 @@ mod win {
                         if err.is_some() {
                             unreadable_bytes += 4096;
                         }
-                        if targets.len() < surface_ai::MAX_TARGETS {
+                        if targets.len() < surface_triage::MAX_TARGETS {
                             targets.push(Target {
                                 offset: pos,
                                 len: 4096,
@@ -1248,7 +1248,7 @@ mod win {
         };
         let smart_after = poll_smart_snapshot(core, &mapped).unwrap_or_else(|_| baseline.clone());
         let elapsed = prior_elapsed + scan_start.elapsed().as_secs_f64();
-        let diagnosis = surface_ai::diagnose(
+        let diagnosis = surface_triage::diagnose(
             &targets,
             is_hdd,
             smart_after.pending_197,
@@ -1265,7 +1265,7 @@ mod win {
                 "resumed_from_zone": (start_zone > 0).then_some(start_zone),
                 "targets": targets,
                 "diagnosis": diagnosis,
-                "slow_threshold_ms": surface_ai::slow_threshold_ms(&lat_base, is_hdd),
+                "slow_threshold_ms": surface_triage::slow_threshold_ms(&lat_base, is_hdd),
                 "median_chunk_ms": lat_base.median(),
                 "disk_bytes": disk_bytes,
                 "scanned_bytes": done_bytes,
@@ -1867,7 +1867,8 @@ mod win {
         if u64::from(v_disk) != disk_num {
             return Err("Seçilen bölüm bu fiziksel diske ait değil.".into());
         }
-        let (regions, outside) = surface_ai::plan_regions(&targets, vol_start, vol_len, cluster);
+        let (regions, outside) =
+            surface_triage::plan_regions(&targets, vol_start, vol_len, cluster);
 
         let chkdsk = if isolate_mode {
             phase(
@@ -1937,7 +1938,7 @@ mod win {
                 )?;
                 last_smart = Instant::now();
             }
-            let action = surface_ai::decide(r, is_hdd, isolate_mode);
+            let action = surface_triage::decide(r, is_hdd, isolate_mode);
             phase(
                 core,
                 &format!(
@@ -2260,7 +2261,7 @@ mod tests {
     fn surface_checkpoint_roundtrip_with_store_and_summary() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = crate::store::Store::open(&dir.path().join("scan.sqlite3")).unwrap();
-        let mut base = surface_ai::LatencyBaseline::new();
+        let mut base = surface_triage::LatencyBaseline::new();
         for _ in 0..300 {
             base.push(9.5);
         }

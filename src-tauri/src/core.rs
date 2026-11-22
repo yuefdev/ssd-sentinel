@@ -58,6 +58,7 @@ pub struct Core {
     pub job_cancel: AtomicBool,
     pub minimise_to_tray: AtomicBool,
     pub strict_health: AtomicBool,
+    pub read_only_guard: AtomicBool,
     pub language: Mutex<String>,
     busy: Arc<(Mutex<bool>, Condvar)>,
     source_key: String,
@@ -92,6 +93,7 @@ impl Core {
             .unwrap_or(Value::Null);
         let minimise = prefs["minimise_to_tray"].as_bool().unwrap_or(false);
         let strict = prefs["health_mode"].as_str() == Some("strict");
+        let read_only_guard = prefs["read_only_guard"].as_bool().unwrap_or(true);
         let lang = match prefs["language"].as_str() {
             Some("en") => "en".to_owned(),
             _ => "tr".to_owned(),
@@ -107,6 +109,7 @@ impl Core {
             job_cancel: AtomicBool::new(false),
             minimise_to_tray: AtomicBool::new(minimise),
             strict_health: AtomicBool::new(strict),
+            read_only_guard: AtomicBool::new(read_only_guard),
             language: Mutex::new(lang),
             busy: Arc::new((Mutex::new(false), Condvar::new())),
             source_key,
@@ -140,6 +143,7 @@ impl Core {
         } else {
             "default"
         });
+        data["read_only_guard"] = json!(self.read_only_guard.load(Ordering::SeqCst));
         data["language"] = json!(lock(&self.language).clone());
         data["optimizations"] = lock(&self.store)
             .list_optimizations()
@@ -409,6 +413,28 @@ impl Core {
         Ok(matches[0].clone())
     }
 
+    pub fn is_mutating_job(kind: &str, options: &Value) -> bool {
+        match kind {
+            "recovery" => false,
+            "surface" => !matches!(
+                options["mode"].as_str(),
+                Some("read_scan" | "physical_scan")
+            ),
+            "defrag" => options["mode"].as_str() != Some("analyze"),
+            "benchmark" | "autopilot" | "smart_tier" => true,
+            _ => true,
+        }
+    }
+
+    pub fn require_write_unlocked(&self, action: &str) -> Result<(), String> {
+        if self.read_only_guard.load(Ordering::SeqCst) {
+            return Err(format!(
+                "Salt-okunur koruma etkin ({action} engellendi). Yazma kilidini üst çubuktan veya Ayarlar'dan açın."
+            ));
+        }
+        Ok(())
+    }
+
     pub fn start_job(self: &Arc<Self>, mut request: JobRequest) -> Result<Value, String> {
         jobs::validate_options(&request.kind, &request.options)?;
         if request.letter.len() != 1 || !request.letter.as_bytes()[0].is_ascii_uppercase() {
@@ -446,6 +472,9 @@ impl Core {
             return Err("Disk işlemi için açık onay gerekli.".into());
         }
         let disk = self.live_disk(&request.disk_id)?;
+        if Self::is_mutating_job(&request.kind, &request.options) {
+            self.require_write_unlocked(&request.kind)?;
+        }
         if request.kind == "defrag" && disk.kind != "HDD" {
             return Err(
                 "SSD'lerde disk birleştirme (Defrag) NAND ömrünü kısaltır ve engellenmiştir; ReTrim kullanın."
@@ -587,6 +616,7 @@ impl Core {
             if confirmation != Some(&format!("{action}:{id}")) {
                 return Err("İşlem onayı eksik.".into());
             }
+            self.require_write_unlocked(action)?;
             if !platform::is_admin() {
                 return Err("Bu işlem için yönetici olarak başlatın.".into());
             }
@@ -672,7 +702,7 @@ impl Core {
     }
 
     pub fn set_minimise(&self, enabled: bool) -> Result<(), String> {
-        self.set_preferences(enabled, None, None)
+        self.set_preferences(enabled, None, None, None)
     }
 
     fn write_preferences(&self) -> Result<(), String> {
@@ -682,6 +712,7 @@ impl Core {
             "default"
         };
         let minimise = self.minimise_to_tray.load(Ordering::SeqCst);
+        let read_only_guard = self.read_only_guard.load(Ordering::SeqCst);
         let lang = lock(&self.language).clone();
         std::fs::create_dir_all(&self.config.data_dir).map_err(|e| e.to_string())?;
         let temp = self.config.data_dir.join("preferences.json.tmp");
@@ -690,6 +721,7 @@ impl Core {
             json!({
                 "minimise_to_tray": minimise,
                 "health_mode": mode,
+                "read_only_guard": read_only_guard,
                 "language": lang
             })
             .to_string(),
@@ -705,6 +737,7 @@ impl Core {
         minimise: bool,
         health_mode: Option<&str>,
         language: Option<&str>,
+        read_only_guard: Option<bool>,
     ) -> Result<(), String> {
         let mode = match health_mode {
             Some("strict") => "strict",
@@ -724,6 +757,9 @@ impl Core {
         let new_strict = mode == "strict";
         let changed_strict = self.strict_health.swap(new_strict, Ordering::SeqCst) != new_strict;
         self.minimise_to_tray.store(minimise, Ordering::SeqCst);
+        if let Some(ro) = read_only_guard {
+            self.read_only_guard.store(ro, Ordering::SeqCst);
+        }
         self.write_preferences()?;
         if changed_strict {
             self.refresh();
@@ -874,6 +910,7 @@ impl Core {
             return Err("Katmanlama taşıması için açık onay gerekli.".into());
         }
         let disk = self.live_disk(disk_id)?;
+        self.require_write_unlocked("tier_relocate")?;
         if !platform::is_admin() {
             return Err(
                 "Katmanlama taşıması ve NTFS Junction oluşturma için Yönetici yetkisi gereklidir."
@@ -1014,6 +1051,7 @@ impl Core {
                 );
             }
         }
+        self.require_write_unlocked("tier_rollback")?;
         if !platform::is_admin() {
             return Err("Taşımayı geri almak için Yönetici yetkisi gereklidir.".into());
         }

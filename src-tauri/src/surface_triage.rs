@@ -1,6 +1,6 @@
-//! Local, offline surface intelligence ("AI" triage) for the pinpoint repair engine.
+//! Local, offline deterministic surface triage engine for pinpoint repair.
 //!
-//! Deterministic statistics + expert rules, no network and no model download:
+//! Pure deterministic statistics + expert rules (zero AI/ML models and zero network calls):
 //! * a streaming latency baseline gives every disk its own adaptive "slow" threshold,
 //! * scan findings become typed targets (unreadable sector / weak sector / slow area),
 //! * dense clusters of bad sectors are widened into dead zones with a safety margin,
@@ -332,7 +332,7 @@ pub fn diagnose(targets: &[Target], is_hdd: bool, pending_197: u64, tail_degrade
         "weak": weak,
         "slow": slow,
         "dead_zones": zones,
-        "engine": "Yerel akıllı teşhis · istatistik + kural tabanlı · çevrimdışı"
+        "engine": "Deterministik yüzey teşhisi · istatistik + kural motoru · çevrimdışı"
     })
 }
 

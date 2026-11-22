@@ -890,11 +890,13 @@ fn set_preferences(
     theme: Option<String>,
     health_mode: Option<String>,
     language: Option<String>,
+    read_only_guard: Option<bool>,
 ) -> Result<(), String> {
     core.set_preferences(
         minimise_to_tray,
         health_mode.as_deref(),
         language.as_deref(),
+        read_only_guard,
     )?;
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_theme(theme.map(|t| {

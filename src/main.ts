@@ -25,6 +25,7 @@ import {
   canStart,
   canMaintain,
   canOptimizeSystem,
+  canWrite,
   checkpointProgress,
   compareRaw,
   computePollSignature,
@@ -40,6 +41,7 @@ import {
   inferAppRecoveryStatus,
   isRecoverableRow,
   isUnopenableMedia,
+  isWriteLocked,
   mediaStatusBadge,
   slcPressureBadge,
   tierCategoryBadge,
@@ -82,7 +84,7 @@ type Page =
   | "tools";
 const getPages = (): [Page, string, string][] => [
   ["overview", L("Genel Bakış", "Overview"), "overview"],
-  ["optimize", L("Hızlandır", "Optimize"), "bolt"],
+  ["optimize", L("Optimizasyon", "Optimize"), "bolt"],
   ["surface", L("Yüzey Onarımı", "Surface Repair"), "surface"],
   ["recovery", L("Dosya Kurtarma", "File Recovery"), "recover"],
   ["performance", L("Hız Testi", "Benchmark"), "performance"],
@@ -287,7 +289,7 @@ function navigation(): string {
   const pages = getPages();
   const verShort = state?.version?.split(".").slice(0, 2).join(".") || "1.9";
   return `<aside class="sidebar">
-    <div class="brand"><span class="brand-mark"><img class="brand-logo" src="${brandLogo}" alt="" /></span><div>SSD Sentinel<small>DRIVE INTELLIGENCE</small></div><span class="version">${e(verShort)}</span></div>
+    <div class="brand"><span class="brand-mark"><img class="brand-logo" src="${brandLogo}" alt="" /></span><div>SSD Sentinel<small>STORAGE DIAGNOSTICS</small></div><span class="version">${e(verShort)}</span></div>
     <div class="nav-label">${L("ANA İŞLEMLER", "CORE WORKSPACE")}</div>
     <nav aria-label="${L("Ana navigasyon", "Primary navigation")}">${pages.filter(([key]) => mainPages.has(key)).map(navItem).join("")}</nav>
     <div class="nav-label">${L("DETAYLAR", "DIAGNOSTICS")}</div>
@@ -308,7 +310,12 @@ function header(d?: Disk): string {
       0,
     ) ?? 0;
   const pageTitle = getPages().find((p) => p[0] === page)?.[1];
-  return `<header class="toolbar"><div class="breadcrumb">${L("Depolama", "Storage")} <span>/</span> <strong>${e(pageTitle)}</strong></div><div class="toolbar-actions"><span class="connection ${state?.source === "replay" ? "recorded" : state?.stale ? "stale" : ""}"><i></i>${state?.source === "replay" ? L("Kaydedilmiş ölçüm", "Snapshot replay") : state?.stale ? L("Ölçüm güncel değil", "Stale telemetry") : L("Canlı izleme", "Live monitoring")}</span><button type="button" class="icon-button notification-button" data-goto="history" aria-label="${L("Uyarıları aç", "Open alerts")}">${icon("bell")}${warnings ? "<i></i>" : ""}</button><span class="toolbar-divider"></span><button type="button" class="button compact accent-outline toolbar-recovery-btn ${page === "recovery" ? "toggled" : ""}" data-goto="recovery">${icon("recover")}<span>${L("Dosya Kurtar", "File Recovery")}</span></button>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin"), "lock", "compact primary", pending) : ""}${button("refresh", state?.updating ? L("Okunuyor…", "Reading…") : L("Yenile", "Refresh"), "refresh", "compact", pending || !!state?.updating)}${button("export", L("Rapor al", "Export JSON"), "export", "compact quiet", !d)}${button("export-html", "HTML", "export", "compact quiet", !d)}</div></header>`;
+  const writeLocked = isWriteLocked(state);
+  const guardBtn =
+    state?.source === "live"
+      ? `<button type="button" data-action="toggle-write-guard" class="button compact write-guard-btn ${writeLocked ? "locked" : "unlocked"}" aria-pressed="${!writeLocked}" title="${e(writeLocked ? L("Salt-okunur koruma etkin: disklere yazan işlemler kilitli", "Read-Only Guard active: mutating operations blocked") : L("Yazma modu açık: kilitlemek için tıklayın", "Write mode unlocked: click to re-lock Read-Only"))}">${icon(writeLocked ? "lock" : "unlock")}<span>${writeLocked ? L("Salt-Okunur", "Read-Only") : L("Yazma Açık", "Write Unlocked")}</span></button>`
+      : "";
+  return `<header class="toolbar"><div class="breadcrumb">${L("Depolama", "Storage")} <span>/</span> <strong>${e(pageTitle)}</strong></div><div class="toolbar-actions"><span class="connection ${state?.source === "replay" ? "recorded" : state?.stale ? "stale" : ""}"><i></i>${state?.source === "replay" ? L("Kaydedilmiş ölçüm", "Snapshot replay") : state?.stale ? L("Ölçüm güncel değil", "Stale telemetry") : L("Canlı izleme", "Live monitoring")}</span>${guardBtn}<button type="button" class="icon-button notification-button" data-goto="history" aria-label="${L("Uyarıları aç", "Open alerts")}">${icon("bell")}${warnings ? "<i></i>" : ""}</button><span class="toolbar-divider"></span><button type="button" class="button compact accent-outline toolbar-recovery-btn ${page === "recovery" ? "toggled" : ""}" data-goto="recovery">${icon("recover")}<span>${L("Dosya Kurtar", "File Recovery")}</span></button>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin"), "lock", "compact primary", pending) : ""}${button("refresh", state?.updating ? L("Okunuyor…", "Reading…") : L("Yenile", "Refresh"), "refresh", "compact", pending || !!state?.updating)}${button("export", L("Rapor al", "Export JSON"), "export", "compact quiet", !d)}${button("export-html", "HTML", "export", "compact quiet", !d)}</div></header>`;
 }
 
 function heading(
@@ -493,10 +500,10 @@ function startGuide(d: Disk, status: string): string {
       <div class="quick-hero-actions"><button type="button" class="button ${recommended || key === "recovery" ? "primary" : ""}" data-goto="${key}">${e(cta)}${icon("arrow")}</button></div>
     </article>`;
   };
-  return `<section class="overview-quick-actions" aria-label="${L("Nereden başlamalıyım?", "Where should I start?")}">
-    ${step("optimize", "1", "bolt", L("Hızlandır", "Optimize"), isHdd ? L("Önbellek, güç ve dosya düzenini tek tıkla en iyi hale getirir.", "Applies write cache, APM, and layout tuning in one click.") : L("TRIM, önbellek ve güç ayarlarını tek tıkla en iyi hale getirir.", "Applies TRIM, write cache, and low-latency power tuning in one click."), L("Tek tıkla hızlandır", "One-click boost"), L("Her disk için", "For every drive"))}
-    ${step("surface", "2", "surface", L("Yüzey Tara & Onar", "Surface Scan & Repair"), isHdd ? L("Bozuk sektör var mı bakar; varsa onarır ve ölü bölgeleri kapatır.", "Scans for bad sectors, repairs weak spots, and isolates dead zones.") : L("Yavaşlayan veya bozuk bölgeleri bulur; eski verileri taze hücrelere taşıyarak hızı geri getirir.", "Detects stale slow-reading blocks and moves cold data to fresh NAND cells."), L("Yüzeyi tara", "Scan surface"), surfaceFirst ? L("Uyarı var", "Alerts present") : L("Yavaşlık veya uyarı varsa", "If slow or warned"))}
-    ${step("recovery", "?", "recover", L("Dosya Kurtar", "File Recovery"), L("Yanlışlıkla silinen dosya ve programları geri getirir. Diske yazmaz.", "Recovers accidentally deleted files and uninstalled apps safely read-only."), L("Silinenleri bul", "Find deleted items"), L("Sadece dosya kaybettiyseniz", "If files were lost"))}
+  return `<section class="overview-quick-actions" aria-label="${L("Tanılama ve işlem kısayolları", "Diagnostics & actions")}">
+    ${step("optimize", "1", "bolt", L("Politika & Katmanlama", "Policies & Tiering"), isHdd ? L("Yazma önbelleği, APM ve dosya düzenini güvenli politikayla uygular.", "Applies write caching, APM, and layout policies safely.") : L("TRIM, PCIe ASPM, yazma önbelleği ve SLC koruması uygular.", "Applies TRIM, PCIe ASPM, write cache, and SLC protection."), L("Politika & Katman", "Policies & Tiering"), L("Her disk için", "For every drive"))}
+    ${step("surface", "2", "surface", L("Yüzey & LBA Taraması", "Surface & LBA Scan"), isHdd ? L("Tam salt-okunur LBA taramasıyla zayıf sektörleri bulur ve izole eder.", "Runs read-only LBA scan to locate and isolate weak sectors.") : L("Salt-okunur LBA haritası çıkarır; yavaş blokları taze hücrelere taşır.", "Builds read-only LBA map and relocates slow stale blocks."), L("Yüzeyi tara", "Scan surface"), surfaceFirst ? L("Uyarı var", "Alerts present") : L("Yavaşlık veya uyarı varsa", "If slow or warned"))}
+    ${step("recovery", "?", "recover", L("Salt-Okunur Kurtarma", "Read-Only Recovery"), L("VSS, $MFT ve imza kazıma ile silinen dosya/uygulamaları geri getirir.", "Recovers deleted files and apps from VSS, $MFT, and carving."), L("Silinenleri bul", "Find deleted items"), L("Sadece dosya kaybettiyseniz", "If files were lost"))}
   </section>`;
 }
 
@@ -634,6 +641,18 @@ function disabledReason(d: Disk): string {
   return "";
 }
 
+function writeDisabledReason(d: Disk): string {
+  const base = disabledReason(d);
+  if (base) return base;
+  if (isWriteLocked(state)) {
+    return L(
+      "Salt-okunur koruma etkin. Yazma işlemi için üst çubuktan kilidi açın.",
+      "Read-Only Guard is active. Unlock write mode in the top bar first.",
+    );
+  }
+  return "";
+}
+
 function performanceView(d: Disk): string {
   const lang = getLang();
   const unitLabels = {
@@ -645,7 +664,7 @@ function performanceView(d: Disk): string {
   const points = livePoints.get(d.id) ?? [];
   const job = currentJob("benchmark");
   const rows = state?.profiles[bench.profile] ?? [];
-  const can = canStart(state, d) && !!state?.engine.available && !pending;
+  const can = canStart(state, d) && canWrite(state) && !!state?.engine.available && !pending;
   const seqReadResult = job?.results
     .filter(
       (r) => !r.row.random && (r.direction === "read" || r.direction === "mix"),
@@ -768,7 +787,7 @@ function performanceView(d: Disk): string {
           [10, L("10 saniye", "10 seconds", lang)],
         ],
         bench.interval,
-      )}</div></details>${button("start-benchmark", L("Testi başlat", "Run benchmark", lang), "play", "primary full", !can)}<p class="form-hint">${e(disabledReason(d) || (!state?.engine.available ? L("Yerleşik Direct-I/O motoru yalnız Windows'ta çalışır.", "Built-in Direct-I/O engine requires Windows.", lang) : L("Salt okuma testi bile hazırlıkta geçici dosya yazar.", "Even read-only tests create a temporary test file before measuring.", lang)))}</p></div>
+      )}</div></details>${button("start-benchmark", L("Testi başlat", "Run benchmark", lang), "play", "primary full", !can)}<p class="form-hint">${e(writeDisabledReason(d) || (!state?.engine.available ? L("Yerleşik Direct-I/O motoru yalnız Windows'ta çalışır.", "Built-in Direct-I/O engine requires Windows.", lang) : L("Salt okuma testi bile hazırlıkta geçici dosya yazar.", "Even read-only tests create a temporary test file before measuring.", lang)))}</p></div>
     <div class="benchmark-results">${verdictHtml}<div class="benchmark-table"><div class="benchmark-head"><span>TEST</span><span>${L("OKUMA", "READ", lang)}</span><span>${L("YAZMA", "WRITE", lang)}</span></div>${rows
       .map(
         (row) =>
@@ -820,15 +839,15 @@ function autopilotHero(d: Disk): string {
       : d.volumes.length === 1
         ? `<div class="autopilot-vol-badge">${pill(L(`Hedef bölüm: ${d.volumes[0].letter}: (${fmtBytes(d.volumes[0].free_bytes)} boş)`, `Target volume: ${d.volumes[0].letter}: (${fmtBytes(d.volumes[0].free_bytes)} free)`), "ok")}</div>`
         : "";
-  return `<section class="autopilot-hero" aria-label="${L("Tek Tıkla Akıllı Otopilot", "One-Click Smart Autopilot")}">
+  return `<section class="autopilot-hero" aria-label="${L("Otomatik Politika Profili", "Automated Policy Profile")}">
     <div class="autopilot-hero-main">
-      <div class="eyebrow">${icon("sparkle")} ${L("TEK TIKLA AKILLI OTOPİLOT", "ONE-CLICK SMART AUTOPILOT")}</div>
-      <h2>${isHdd ? L("HDD'yi tek tıkla hızlandır", "Optimize HDD in one click") : L("SSD'yi tek tıkla hızlandır ve ömrünü koru", "Optimize SSD & preserve endurance in one click")}</h2>
+      <div class="eyebrow">${icon("shield")} ${L("OTOMATİK POLİTİKA PROFİLİ", "AUTOMATED POLICY PROFILE")}</div>
+      <h2>${isHdd ? L("HDD Depolama Politikasını Uygula", "Apply HDD Policy Profile") : L("SSD Dayanım & Performans Politikasını Uygula", "Apply SSD Endurance & Policy Profile")}</h2>
       <p>${
         isHdd
           ? L("Önbellek, kafa park ayarı, dosya sistemi kontrolü ve birleştirmeyi doğru sırayla uygular.", "Applies write caching, APM tuning, NTFS checks, and defrag in safe sequence.")
           : L("TRIM, PCIe güç modu, yazma önbelleği ve ReTrim'i güvenli sırayla uygular.", "Applies Windows TRIM, low-latency PCIe ASPM, write caching, and ReTrim safely.")
-      }${!ready && !state?.admin && state?.source === "live" ? ` <b>${L("Önce sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar first.")}</b>` : ""}</p>
+      }${!ready && state?.source === "live" ? (!state?.admin ? ` <b>${L("Önce sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar first.")}</b>` : isWriteLocked(state) ? ` <b>${L("Salt-okunur koruma etkin — üst çubuktan kilidi açın.", "Read-Only Guard active — unlock write mode in the top bar first.")}</b>` : "") : ""}</p>
       ${volPicker}
       ${runningAuto ? jobProgress(lastAuto) : ""}
       ${
@@ -842,7 +861,7 @@ function autopilotHero(d: Disk): string {
           : ""
       }
     </div>
-    ${button("start-autopilot", runningAuto ? L("Çalışıyor…", "Running…") : L("Tek Tıkla En İyi Hale Getir", "Optimize in One Click"), "sparkle", "primary", !ready)}
+    ${button("start-autopilot", runningAuto ? L("Çalışıyor…", "Running…") : L("Güvenli Profili Uygula", "Apply Safe Profile"), "bolt", "primary", !ready)}
   </section>`;
 }
 
@@ -1053,7 +1072,7 @@ function smartTierCard(
   return `<article class="card tiering-card" id="smart-tiering-card" aria-label="${L("Akıllı Depolama Katmanlama ve Optimizasyon", "Smart Storage Tiering & Optimization", lang)}">
     <div class="tier-head">
       <div class="tier-head-main">
-        <div class="eyebrow">${icon("sparkle")} ${L("AKILLI DEPOLAMA KATMANLAMA", "SMART STORAGE TIERING", lang)}</div>
+        <div class="eyebrow">${icon("cpu")} ${L("DEPOLAMA KATMANLAMA MOTORU", "SMART STORAGE TIERING", lang)}</div>
         <h2>${L("Akıllı Depolama Katmanlama &amp; Optimizasyon", "Smart Storage Tiering &amp; Optimization", lang)}</h2>
       </div>
       ${pill(headerPillText, "ok")}
@@ -1074,8 +1093,12 @@ function smartTierCard(
       }
     </div>
     ${
-      !diskVolOk && state?.source === "live" && !state.admin
-        ? `<p class="form-hint">${L("Klasör ve parça analizi yönetici yetkisi olmadan salt okunur çalışır; parça temizliği ve taşıma için sağ üstten “Yönetici olarak aç”a basın.", "Folder & extent analysis runs read-only without admin; click “Run as Admin” in the top bar for extent cleanup or relocation.", lang)}</p>`
+      !diskVolOk && state?.source === "live"
+        ? !state.admin
+          ? `<p class="form-hint">${L("Klasör ve parça analizi yönetici yetkisi olmadan salt okunur çalışır; parça temizliği ve taşıma için sağ üstten “Yönetici olarak aç”a basın.", "Folder & extent analysis runs read-only without admin; click “Run as Admin” in the top bar for extent cleanup or relocation.", lang)}</p>`
+          : isWriteLocked(state)
+            ? `<p class="form-hint">${L("Salt-okunur koruma etkin. Parça temizliği ve taşıma için üst çubuktan yazma kilidini açın.", "Read-Only Guard is active. Unlock write mode in the top bar for extent cleanup or relocation.", lang)}</p>`
+            : ""
         : ""
     }
     ${runningTier || (activeTierJob && activeTierJob.status !== "completed") ? jobProgress(activeTierJob) : ""}
@@ -1116,7 +1139,7 @@ function optimizeView(d: Disk): string {
           : L("Bilinmiyor", "Unknown", lang);
   const linkDisplay = link?.current ?? formatInterface(d.interface, d.type);
 
-  return `${heading(d, L("1 · HIZLANDIR", "1 · OPTIMIZE", lang), L("Tek tıkla en iyi ayarlar", "Best settings in one click", lang), L("Yeşil düğmeye basmanız yeterli. Ayarlar diske göre otomatik seçilir ve her değişiklik geri alınabilir.", "Click the primary action button above — settings are chosen per drive type and can always be rolled back.", lang))}
+  return `${heading(d, L("1 · OPTİMİZASYON & POLİTİKA", "1 · STORAGE POLICIES", lang), L("Depolama politikaları ve katmanlama", "Storage policies &amp; tiering", lang), L("Güvenli donanım/NTFS politikaları disk türüne göre otomatik seçilir; her değişiklik SQLite kaydından geri alınabilir.", "Safe hardware and NTFS policies are selected per drive class; every change is logged in SQLite for rollback.", lang))}
     ${autopilotHero(d)}
     <div class="section-label">${L("Mevcut durum", "Current diagnostics", lang)}</div>
     <section class="opt-diag-grid" aria-label="${L("Darboğaz ve hat analizi", "Bus & alignment diagnostics", lang)}">
@@ -1145,7 +1168,7 @@ function optimizeView(d: Disk): string {
     ${smartTierCard(d, selectedLetter, sysLive, diskVolOk)}
 
     <details class="manual-controls" data-details-key="manual-controls">
-    <summary>${icon("settings")}<span><strong>${L("Elle ayarla (ileri düzey)", "Manual tuning (advanced)", lang)}</strong><small>${L("Tek tık zaten bunları yapar. Sadece belirli bir ayarı değiştirmek istiyorsanız açın.", "One-Click Autopilot handles these automatically. Expand only for individual controls.", lang)}</small></span>${icon("chevron")}</summary>
+    <summary>${icon("settings")}<span><strong>${L("Elle ayarla (ileri düzey)", "Manual tuning (advanced)", lang)}</strong><small>${L("Yukarıdaki profil bunları sırayla uygular; tekil politika kontrolü için açın.", "The policy profile applies these in sequence; expand for individual controls.", lang)}</small></span>${icon("chevron")}</summary>
     <section class="opt-grid" aria-label="${L("Hızlandırma işlemleri", "Optimization controls", lang)}">
       <article class="card opt-card">
         <div class="card-title">${icon("bolt")}<h2>${L("Donanım Yazma Önbelleği", "Hardware Write Cache", lang)}</h2>${pill(wc?.enabled === true ? L("Açık", "On", lang) : wc?.enabled === false ? L("Kapalı", "Off", lang) : "—", wc?.enabled === true ? "ok" : "")}</div>
@@ -1287,7 +1310,7 @@ function diagnosisCard(
 
   return `<div class="ai-diagnosis-card ${cardCls}">
     <div class="ai-diag-head">
-      <div class="inline-actions"><span class="eyebrow">${L("AKILLI YÜZEY TEŞHİSİ", "SMART SURFACE DIAGNOSIS", lang)}</span>${pill(pillText, pillCls)}</div>
+      <div class="inline-actions"><span class="eyebrow">${L("YÜZEY TEŞHİS MOTORU", "SMART SURFACE DIAGNOSIS", lang)}</span>${pill(pillText, pillCls)}</div>
       <span class="diag-score">${diag.score}<span>/100</span></span>
     </div>
     <h3>${e(tDiag.title)}</h3>
@@ -1305,7 +1328,7 @@ function diagnosisCard(
     }
     ${
       recMode
-        ? `<div class="ai-diag-cta"><button type="button" class="button primary" data-recommended-surface="${e(recMode)}" ${!canStart(state, d) || pending || !state?.admin ? "disabled" : ""}>${icon("sparkle")}<span>${e(ctaLabel)}</span></button></div>`
+        ? `<div class="ai-diag-cta"><button type="button" class="button primary" data-recommended-surface="${e(recMode)}" ${!canStart(state, d) || pending || !state?.admin || isWriteLocked(state) ? "disabled" : ""}>${icon("bolt")}<span>${e(ctaLabel)}</span></button></div>`
         : ""
     }
   </div>`;
@@ -1456,12 +1479,14 @@ function surfaceView(d: Disk): string {
   const selectedVol = letter || d.volumes[0]?.letter || "";
   const needsAdmin = ["physical_scan", "magnetic_refresh", "bad_zone_isolate", "targeted_repair"].includes(scan.mode);
   const needsScanMap = ["magnetic_refresh", "bad_zone_isolate"].includes(scan.mode);
+  const mutatingSurface = ["data_refresh", "targeted_repair", "magnetic_refresh", "bad_zone_isolate"].includes(scan.mode);
   const hasTargets = !!fullScanJob && scanTargets.length > 0;
   const startDisabled =
     !canStart(state, d) ||
     pending ||
     (needsAdmin && !state?.admin) ||
-    (needsScanMap && !hasTargets);
+    (needsScanMap && !hasTargets) ||
+    (mutatingSurface && isWriteLocked(state));
   const rs = job?.repair_summary;
   const zbr = rs?.zbr_profile;
   const hasThroughput = blocks.some((b) => b.mb_s != null);
@@ -1574,8 +1599,8 @@ function surfaceView(d: Disk): string {
     ${modeCard("targeted_repair", "tools", L("Dosya sistemi kontrolü", "Filesystem check", lang), L("Windows chkdsk ile NTFS hatalarını arar.", "Checks NTFS consistency via Windows chkdsk.", lang), true)}
     ${modeCard("data_refresh", "refresh", L("Yazma doğrulaması", "Write verify check", lang), L("Geçici dosya yazıp geri okur.", "Writes and verifies a temporary test payload.", lang))}
     </details>
-    <div class="auto-budget">${icon("sparkle")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured budget", lang)}</strong><small>${e(autoText)}</small></div></div>
-    ${button("start-surface", startLabel, "play", "primary full", startDisabled)}<p class="form-hint">${e(disabledReason(d) || (needsAdmin && !state?.admin ? L("Bu seçenek için sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar for raw device access.", lang) : scanMapHint || L("Disk ısınırsa veya yeni hata çıkarsa işlem kendini otomatik yavaşlatır ya da durdurur.", "Built-in thermal & SMART guard pauses or halts automatically if temperature or errors spike.", lang)))}</p></article>
+    <div class="auto-budget">${icon("settings")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured budget", lang)}</strong><small>${e(autoText)}</small></div></div>
+    ${button("start-surface", startLabel, "play", "primary full", startDisabled)}<p class="form-hint">${e((mutatingSurface ? writeDisabledReason(d) : disabledReason(d)) || (needsAdmin && !state?.admin ? L("Bu seçenek için sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar for raw device access.", lang) : scanMapHint || L("Disk ısınırsa veya yeni hata çıkarsa işlem kendini otomatik yavaşlatır ya da durdurur.", "Built-in thermal & SMART guard pauses or halts automatically if temperature or errors spike.", lang)))}</p></article>
   <div class="surface-right-col">${
     activeDiagnosis && rs?.engine !== "pinpoint"
       ? diagnosisCard(activeDiagnosis, d, rs, fullScanJob)
@@ -1964,7 +1989,7 @@ function recoveryView(d: Disk): string {
                   </div>
                   <small class="mono">${e(it.original_path)}${it.size_bytes ? ` · ${fmtBytes(it.size_bytes)}` : ""}${it.deleted_at ? ` · ${date(it.deleted_at)}` : ""}</small>
                   <p class="ai-note">${e(it.ai_summary)}</p>
-                  ${it.repair_note ? `<p class="repair-note ${unopenable ? "repair-note-bad" : ""}">${icon(unopenable ? "alert" : "sparkle")}<span>${e(it.repair_note)}</span></p>` : ""}
+                  ${it.repair_note ? `<p class="repair-note ${unopenable ? "repair-note-bad" : ""}">${icon(unopenable ? "alert" : "check")}<span>${e(it.repair_note)}</span></p>` : ""}
                 </div>
                 <div class="recovery-row-actions">
                   <button type="button" class="button compact quiet" data-preview-job="${e(job!.id)}" data-preview-id="${e(it.id)}" data-preview-name="${e(it.name)}" data-preview-recoverable="${recoverable ? "1" : "0"}" ${pending ? "disabled" : ""}>${icon("eye")}<span>${L("Önizle", "Preview", lang)}</span></button>
@@ -1993,7 +2018,7 @@ function recoveryView(d: Disk): string {
         ${volumeSelect(d)}
         ${recCard("quick", "search", L("Hızlı tarama", "Quick scan", lang), L("Yakın zamanda silinen dosya ve programları bulur.", "Finds recently deleted files, Recycle Bin, VSS copies, and app traces.", lang), L("Önce bunu", "Start here", lang))}
         ${recCard("deep", "cpu", L("Derin tarama", "Deep signature carve", lang), `${L("Tüm boş alanı sektör sektör kazır; formatlanmış veya eski dosyaları da bulur.", "Carves unallocated space sector-by-sector for formatted or older files.", lang)}${!state?.admin ? L(" · Yönetici gerekir", " · Admin required", lang) : ""}`)}
-        <div class="auto-budget">${icon("sparkle")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured", lang)}</strong><small>${e(recAuto)}</small></div></div>
+        <div class="auto-budget">${icon("settings")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured", lang)}</strong><small>${e(recAuto)}</small></div></div>
         ${button("start-recovery", recConfig.mode === "deep" ? L("Derin taramayı başlat", "Start Deep Scan", lang) : L("Hızlı taramayı başlat", "Start Quick Scan", lang), "recover", "primary full", startDisabled)}
         <p class="form-hint">${e(disabledReason(d) || (needsAdmin && !state?.admin ? L("Derin tarama için sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar for raw deep carving.", lang) : L("Tarama salt okunurdur; istediğiniz an durdurabilirsiniz.", "Scanning is read-only; stop anytime.", lang)))}</p>
       </article>
@@ -2012,7 +2037,7 @@ function recoveryView(d: Disk): string {
         }
         ${jobProgress(job)}
         <div class="recovery-tabs" role="tablist" aria-label="${L("Kurtarma sonucu sekmeleri", "Recovery result tabs", lang)}">
-          <button type="button" role="tab" aria-selected="${activeTab === "apps"}" class="rec-tab ${activeTab === "apps" ? "selected" : ""}" data-rec-tab="apps">${icon("sparkle")}<span>${L("Silinmiş Uygulamalar &amp; Oyunlar", "Deleted Apps &amp; Games", lang)}</span><span class="rec-tab-count">${apps.length}</span></button>
+          <button type="button" role="tab" aria-selected="${activeTab === "apps"}" class="rec-tab ${activeTab === "apps" ? "selected" : ""}" data-rec-tab="apps">${icon("cpu")}<span>${L("Silinmiş Uygulamalar &amp; Oyunlar", "Deleted Apps &amp; Games", lang)}</span><span class="rec-tab-count">${apps.length}</span></button>
           <button type="button" role="tab" aria-selected="${activeTab === "files"}" class="rec-tab ${activeTab === "files" ? "selected" : ""}" data-rec-tab="files">${icon("recover")}<span>${L("Kurtarılabilir Dosyalar", "Recoverable Files", lang)}</span><span class="rec-tab-count">${filesTabCount}</span></button>
         </div>
         ${activeTab === "apps" ? appsTabHtml : filesTabHtml}
@@ -2055,6 +2080,7 @@ function toolsView(d: Disk): string {
       <label class="setting-row"><span>${icon("disk")}<span><strong>${L("Kapatınca sistem tepsisine küçült", "Minimize to tray on close", lang)}</strong><small>${L("İzleme arka planda devam eder. Tam çıkış için tepsi menüsünü kullanın.", "Background SMART & temperature monitoring stays active; use tray menu to quit.", lang)}</small></span></span><input type="checkbox" role="switch" id="minimise-setting" ${state?.minimise_to_tray ? "checked" : ""}></label>
       <label class="setting-row"><span>${icon("bolt")}<span><strong>${L("Windows açılışında tepside başlat", "Launch minimized on Windows startup", lang)}</strong><small>${L("Oturum açılışında sessizce sistem tepsisinde başlar (HKCU\\Run).", "Starts silently in the system tray at login via HKCU\\Run.", lang)}</small></span></span><input type="checkbox" role="switch" id="autostart-setting" ${autostart ? "checked" : ""} ${state?.source !== "live" || state?.stale || pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("shield")}<span><strong>${L("Sağlık hesaplama modu", "Health calculation mode", lang)}</strong><small>${L("Sıkı modda HDD/SATA hata sayaçları daha yüksek ağırlık ve kuyruk cezası alır.", "Strict mode applies heavier penalties to ATA/SATA sector reallocate & pending error counters.", lang)}</small></span></span><select id="health-mode-setting" aria-label="${L("Sağlık hesaplama modu", "Health calculation mode", lang)}"><option value="default" ${healthMode === "default" ? "selected" : ""}>${L("Varsayılan (Standart)", "Default (Standard)", lang)}</option><option value="strict" ${healthMode === "strict" ? "selected" : ""}>${L("Sıkı Mod (Erken Uyarı)", "Strict Mode (Early Warning)", lang)}</option></select></div>
+      <label class="setting-row"><span>${icon("lock")}<span><strong>${L("Salt-okunur koruma kilidi (Write Guard)", "Read-Only Guard (Write Protection)", lang)}</strong><small>${L("Etkin olduğunda disklere yazan hız testi, onarım, optimize ve taşıma işlemleri Rust çekirdeğinde engellenir.", "When enabled, mutating operations (benchmarks, repairs, tuning, tiering) are blocked at the Rust core boundary.", lang)}</small></span></span><input type="checkbox" role="switch" id="write-guard-setting" ${isWriteLocked(state) ? "checked" : ""} ${state?.source !== "live" || pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("temperature")}<span><strong>${L("Yüksek sıcaklık uyarısı", "Thermal alert threshold", lang)}</strong><small>${L("55 °C’de tek bildirim; 50 °C’ye düşünce yeniden etkinleşir.", "Single notification at 55 °C with hysteresis reset below 50 °C.", lang)}</small></span></span>${pill(state?.source === "replay" ? L("Kayıt modunda kapalı", "Off in replay", lang) : L("Etkin", "Active", lang), state?.source === "replay" ? "" : "ok")}</div>
       <div class="setting-row"><span>${icon("lock")}<span><strong>${L("Çalışma yetkisi", "Privilege level", lang)}</strong><small>${L("Bakım ve optimizasyon işlemleri için yönetici olarak açmak gerekir.", "Raw SMART I/O, benchmarks, and tuning require administrator elevation.", lang)}</small></span></span><div class="inline-actions">${pill(state?.admin ? L("Yönetici", "Administrator", lang) : L("Standart kullanıcı", "Standard user", lang))}${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact quiet", pending) : ""}</div></div>
       <div class="setting-row"><span>${icon("info")}<span><strong>${L("Sürüm ve güncelleme", "Version &amp; updates", lang)}</strong><small>${e(updateMsg)}</small></span></span><div class="inline-actions">${updateStatus?.status === "up_to_date" && updateStatus.url ? button("open-release", L("GitHub Sürümleri", "GitHub Releases", lang), "arrow", "compact quiet", pending) : ""}${button("check-updates", L("Güncellemeleri kontrol et", "Check for updates", lang), "refresh", "compact quiet", pending)}</div></div>
@@ -2062,7 +2088,7 @@ function toolsView(d: Disk): string {
         updateStatus?.status === "update_available"
           ? `<div class="update-panel" role="region" aria-label="${L("Yeni sürüm bilgisi", "Update details", lang)}">
                <div class="update-panel-head">
-                 <div class="inline-actions">${icon("sparkle")}<strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong>${updateStatus.asset_size ? pill(fmtBytes(updateStatus.asset_size), "ok") : ""}</div>
+                 <div class="inline-actions">${icon("info")}<strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong>${updateStatus.asset_size ? pill(fmtBytes(updateStatus.asset_size), "ok") : ""}</div>
                  <div class="inline-actions">
                    ${updateStatus.download_url && updateStatus.asset_name ? button("install-update", L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang), "export", "compact primary", pending) : ""}
                    ${updateStatus.url ? button("open-release", L("GitHub Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}
@@ -2072,7 +2098,7 @@ function toolsView(d: Disk): string {
              </div>`
           : ""
       }
-    </article><div class="maintenance-footer">${button("abort_test", L("Dahili testi durdur", "Abort self-test", lang), "stop", "quiet", !live || !state?.admin || !d.capabilities.self_test)}<p>${e(disabledReason(d) || L("Dahili testler uygulama dışında disk firmware’inde sürer; sonuç için günlükleri kontrol edin.", "Firmware self-tests continue inside the drive even if you close this screen; check SMART logs for completion.", lang))}</p></div>`;
+    </article><div class="maintenance-footer">${button("abort_test", L("Dahili testi durdur", "Abort self-test", lang), "stop", "quiet", !live || !state?.admin || !d.capabilities.self_test)}<p>${e(writeDisabledReason(d) || L("Dahili testler uygulama dışında disk firmware’inde sürer; sonuç için günlükleri kontrol edin.", "Firmware self-tests continue inside the drive even if you close this screen; check SMART logs for completion.", lang))}</p></div>`;
 }
 function toolCard(
   ico: string,
@@ -2181,6 +2207,7 @@ function applyLanguage(next: Lang) {
       theme: document.documentElement.dataset.theme,
       healthMode: state.health_mode,
       language: next,
+      readOnlyGuard: state.read_only_guard ?? true,
     }).catch(() => {});
   }
   render();
@@ -2332,7 +2359,7 @@ async function openRecoveryPreview(
     });
     const repairBanner =
       res.repaired || res.repair_note
-        ? `<div class="preview-repair-banner">${icon("sparkle")}<div><strong>${res.repaired ? L("Otomatik Onarıldı", "Auto-Repaired", lang) : L("Medya Durumu", "Media Status", lang)}</strong>${res.repair_note ? `<p>${e(res.repair_note)}</p>` : ""}</div></div>`
+        ? `<div class="preview-repair-banner">${icon("check")}<div><strong>${res.repaired ? L("Otomatik Onarıldı", "Auto-Repaired", lang) : L("Medya Durumu", "Media Status", lang)}</strong>${res.repair_note ? `<p>${e(res.repair_note)}</p>` : ""}</div></div>`
         : "";
     let body = "";
     if (res.kind === "image") {
@@ -2404,8 +2431,49 @@ async function openRecoveryPreview(
   }
 }
 
-function confirm(title: string, body: string, action: () => Promise<void>) {
-  dialog.innerHTML = `<div class="dialog-icon">${icon("alert")}</div><h2 id="confirm-title">${e(title)}</h2><p>${e(body)}</p><div class="dialog-actions"><button class="button quiet" id="confirm-cancel">${L("Vazgeç", "Cancel")}</button><button class="button primary" id="confirm-run">${L("Onayla ve başlat", "Confirm &amp; run")} ${icon("arrow")}</button></div>`;
+interface DryRunSpec {
+  mode: "read_only" | "mutating" | "system";
+  target: string;
+  apis: string;
+  writeBudget?: string;
+  rollback: string;
+  confirmationToken?: string;
+  steps?: string[];
+}
+
+function renderDryRunBox(dryRun?: DryRunSpec): string {
+  if (!dryRun) return "";
+  const isReadOnly = dryRun.mode === "read_only";
+  const badge = isReadOnly
+    ? pill(L("Salt-Okunur · 0 Yazma", "Read-Only · 0 Writes"), "ok")
+    : pill(L("Etki Önizlemesi (Dry-Run)", "Dry-Run Impact Preview"), "warning");
+  return `<div class="dry-run-box" role="region" aria-label="${L("İşlem etki önizlemesi", "Operation dry-run preview")}">
+    <div class="dry-run-head">
+      <span class="eyebrow">${L("YÜRÜTME PLANI", "EXECUTION MANIFEST")}</span>
+      ${badge}
+    </div>
+    <dl class="dry-run-kv">
+      <dt>${L("Hedef", "Target")}</dt><dd class="mono">${e(dryRun.target)}</dd>
+      <dt>${L("API / Çağrı", "API / Path")}</dt><dd class="mono">${e(dryRun.apis)}</dd>
+      ${dryRun.writeBudget ? `<dt>${L("Yazma Bütçesi", "Write Scope")}</dt><dd>${e(dryRun.writeBudget)}</dd>` : ""}
+      <dt>${L("Geri Alma", "Rollback")}</dt><dd>${e(dryRun.rollback)}</dd>
+      ${dryRun.confirmationToken ? `<dt>${L("IPC Token", "IPC Token")}</dt><dd><code class="mono">${e(dryRun.confirmationToken)}</code></dd>` : ""}
+    </dl>
+    ${
+      dryRun.steps?.length
+        ? `<ul class="dry-run-steps">${dryRun.steps.map((s) => `<li>${e(s)}</li>`).join("")}</ul>`
+        : ""
+    }
+  </div>`;
+}
+
+function confirm(
+  title: string,
+  body: string,
+  action: () => Promise<void>,
+  dryRun?: DryRunSpec,
+) {
+  dialog.innerHTML = `<div class="dialog-icon">${icon(dryRun?.mode === "read_only" ? "shield" : "alert")}</div><h2 id="confirm-title">${e(title)}</h2><p>${e(body)}</p>${renderDryRunBox(dryRun)}<div class="dialog-actions"><button class="button quiet" id="confirm-cancel">${L("Vazgeç", "Cancel")}</button><button class="button primary" id="confirm-run">${L("Onayla ve başlat", "Confirm &amp; run")} ${icon("arrow")}</button></div>`;
   dialog.showModal();
   document
     .querySelector("#confirm-cancel")!
@@ -2414,6 +2482,56 @@ function confirm(title: string, body: string, action: () => Promise<void>) {
     dialog.close();
     void run(action);
   });
+}
+
+function toggleWriteGuard(unlock: boolean) {
+  if (!state) return;
+  const persistGuard = async (readOnlyGuard: boolean) => {
+    await invoke("set_preferences", {
+      minimiseToTray: state!.minimise_to_tray,
+      theme: document.documentElement.dataset.theme,
+      healthMode: state!.health_mode,
+      language: getLang(),
+      readOnlyGuard,
+    });
+    state!.read_only_guard = readOnlyGuard;
+    toast(
+      readOnlyGuard
+        ? L(
+            "Salt-okunur koruma kilidi yeniden etkinleştirildi.",
+            "Read-Only Guard re-enabled.",
+          )
+        : L(
+            "Yazma modu açıldı. İşleminiz bittiğinde kilidi kapatabilirsiniz.",
+            "Write mode unlocked. Re-lock Read-Only Guard when finished.",
+          ),
+    );
+  };
+  if (!unlock) {
+    void run(() => persistGuard(true));
+    return;
+  }
+  confirm(
+    L("Yazma modu kilidi açılsın mı?", "Unlock Write Mode?"),
+    L(
+      "SSD Sentinel varsayılan olarak diske yazan işlemleri (hız testi, yüzey onarımı, sistem ayarları ve NTFS katmanlama) Rust çekirdeğinde engeller. Kilidi açtığınızda bile her işlem ayrı etki önizlemesi ve onay isteyecektir.",
+      "SSD Sentinel defaults to Read-Only Guard, blocking all mutating operations inside the Rust core. Even when unlocked, every mutating action still requires a dry-run preview and explicit confirmation.",
+    ),
+    () => persistGuard(false),
+    {
+      mode: "system",
+      target: L("Tüm canlı diskler ve politika kontrolleri", "All live drives & tuning controls"),
+      apis: "Core::read_only_guard + preferences.json",
+      writeBudget: L(
+        "Yalnız tercih bayrağı güncellenir; diske henüz veri yazılmaz",
+        "Updates guard flag only; zero disk writes occur now",
+      ),
+      rollback: L(
+        "Üst çubuktaki veya Ayarlar'daki anahtarla tek tıkla Salt-Okunur moda dönülebilir",
+        "Re-lock Read-Only Guard in one click from the top bar or Settings",
+      ),
+    },
+  );
 }
 
 async function run(fn: () => Promise<void>) {
@@ -2466,6 +2584,13 @@ function start(kind: "benchmark" | "surface", row = "all", resume = false) {
   if (!d || !canStart(state, d)) return;
   if (kind === "surface" && resume) {
     scan.mode = "physical_scan";
+  }
+  const activeMode = resume ? "physical_scan" : scan.mode;
+  const isReadOnlySurface =
+    kind === "surface" && ["read_scan", "physical_scan"].includes(activeMode);
+  if ((kind === "benchmark" || (kind === "surface" && !isReadOnlySurface)) && isWriteLocked(state)) {
+    toast(writeDisabledReason(d), true);
+    return;
   }
   const opts =
     kind === "benchmark"
@@ -2520,6 +2645,63 @@ function start(kind: "benchmark" | "surface", row = "all", resume = false) {
                       `${d.model} · ${selectedLetter}: içindeki erişilebilir dosyalardan en fazla ${autoSurfaceMib(scan.mode, d)} MiB örnek okunacak. Tam fiziksel sektör taraması değildir. Önbellek ölçümü etkileyebilir.`,
                       `Reads up to ${autoSurfaceMib(scan.mode, d)} MiB of accessible files on ${d.model} (${selectedLetter}:). Not a full raw sector scan.`,
                     );
+  const confirmationToken =
+    kind === "benchmark"
+      ? `benchmark:${d.id}:${selectedLetter}`
+      : `surface:${d.id}:${selectedLetter}:${activeMode}`;
+  const dryRun: DryRunSpec =
+    kind === "benchmark"
+      ? {
+          mode: "mutating",
+          target: `${d.model} (${selectedLetter}:)`,
+          apis: "Win32 IOCP Direct-I/O (FILE_FLAG_NO_BUFFERING | OVERLAPPED)",
+          writeBudget: `${bench.size_mib} MiB · ${bench.mode} · ${bench.repeats}×${bench.seconds}s`,
+          rollback: L(
+            "Geçici dosya iş bitiminde veya Durdur basıldığında otomatik silinir",
+            "Temporary payload deleted automatically on completion or stop",
+          ),
+          confirmationToken,
+        }
+      : {
+          mode: isReadOnlySurface ? "read_only" : "mutating",
+          target:
+            activeMode === "physical_scan"
+              ? `\\\\.\\PhysicalDrive${d.os_disk_number ?? "?"} (${selectedLetter}:)`
+              : `${d.model} (${selectedLetter}:)`,
+          apis:
+            activeMode === "physical_scan"
+              ? "CreateFileW(GENERIC_READ | FILE_FLAG_NO_BUFFERING) + 4K Probe + Checkpoint"
+              : activeMode === "read_scan"
+                ? "ReadFile (salt-okunur dosya örnekleme)"
+                : activeMode === "magnetic_refresh"
+                  ? "FSCTL_GET_RETRIEVAL_POINTERS + FSCTL_MOVE_FILE + Raw Sector Verify"
+                  : activeMode === "bad_zone_isolate"
+                    ? "chkdsk.exe /scan + FSCTL_MOVE_FILE + .ssd-sentinel-quarantine"
+                    : activeMode === "targeted_repair"
+                      ? "chkdsk.exe /scan + ReadFile"
+                      : "WriteFile / ReadFile + SHA-256",
+          writeBudget: isReadOnlySurface
+            ? L("0 B · diske yazma yapılmaz", "0 B · strictly read-only")
+            : L(
+                `En fazla ${autoSurfaceMib(activeMode, d)} MiB (termal/SMART koruma etkin)`,
+                `Up to ${autoSurfaceMib(activeMode, d)} MiB (thermal & SMART guard active)`,
+              ),
+          rollback: isReadOnlySurface
+            ? L(
+                "Gerekmez (salt-okunur); tarama noktası SQLite'da saklanır",
+                "Not needed (read-only); resume checkpoint stored in SQLite",
+              )
+            : activeMode === "bad_zone_isolate"
+              ? L(
+                  "Karantina dosyaları Bakım/Optimizasyon bölümünden kaldırılabilir",
+                  "Quarantine markers can be released from the Optimize view",
+                )
+              : L(
+                  "Kullanıcı dosyaları yazmadan önce boş alana taşınır",
+                  "User files are evacuated via FSCTL_MOVE_FILE before sector refresh",
+                ),
+          confirmationToken,
+        };
   confirm(
     kind === "benchmark"
       ? L("Hız testini başlat?", "Start benchmark?")
@@ -2534,10 +2716,7 @@ function start(kind: "benchmark" | "surface", row = "all", resume = false) {
           kind,
           disk_id: d.id,
           letter: selectedLetter,
-          confirmation:
-            kind === "benchmark"
-              ? `benchmark:${d.id}:${selectedLetter}`
-              : `surface:${d.id}:${selectedLetter}:${resume ? "physical_scan" : scan.mode}`,
+          confirmation: confirmationToken,
           options: opts,
         },
       });
@@ -2547,12 +2726,14 @@ function start(kind: "benchmark" | "surface", row = "all", resume = false) {
           : L("İş başlatıldı. İlerlemeyi alttaki durum çubuğundan izleyebilirsiniz.", "Job started. Monitor progress in the bottom bar."),
       );
     },
+    dryRun,
   );
 }
 
 function startDefrag(mode: "analyze" | "defrag" | "consolidate") {
   const d = disk();
-  if (!d || !canMaintain(state, d) || !canStart(state, d)) return;
+  if (!d || !canStart(state, d)) return;
+  if (mode !== "analyze" && !canMaintain(state, d)) return;
   const selectedLetter = letter;
   const label =
     mode === "analyze"
@@ -2560,6 +2741,7 @@ function startDefrag(mode: "analyze" | "defrag" | "consolidate") {
       : mode === "consolidate"
         ? L("Boş alan birleştirme (/X)", "Free space consolidation (/X)")
         : L("Akıllı HDD birleştirme (/O)", "Smart HDD optimization (/O)");
+  const confirmationToken = `defrag:${d.id}:${selectedLetter}:${mode}`;
   confirm(
     L(`${label} başlatılsın mı?`, `Start ${label}?`),
     L(
@@ -2573,11 +2755,22 @@ function startDefrag(mode: "analyze" | "defrag" | "consolidate") {
           kind: "defrag",
           disk_id: d.id,
           letter: selectedLetter,
-          confirmation: `defrag:${d.id}:${selectedLetter}:${mode}`,
+          confirmation: confirmationToken,
           options: { mode },
         },
       });
       toast(L("HDD birleştirme/analiz işi başlatıldı.", "HDD optimization job started."));
+    },
+    {
+      mode: mode === "analyze" ? "read_only" : "mutating",
+      target: `${d.model} (${selectedLetter}:)`,
+      apis: `defrag.exe ${selectedLetter}: ${mode === "analyze" ? "/A" : mode === "consolidate" ? "/X" : "/O"}`,
+      writeBudget:
+        mode === "analyze"
+          ? L("0 B · yalnızca okuma ve analiz", "0 B · read-only fragmentation analysis")
+          : L("Windows defrag.exe blok taşıma (SSD'de kilitli)", "Windows defrag.exe cluster move (blocked on SSDs)"),
+      rollback: L("İptal edilebilir; NTFS dosya bütünlüğü korunur", "Cancellable; NTFS consistency preserved"),
+      confirmationToken,
     },
   );
 }
@@ -2630,6 +2823,7 @@ function startSmartTier(mode: "ssd_extent_optimize" | "hdd_outer_optimize") {
   const selectedLetter = letter || d.volumes[0]?.letter || "";
   if (!selectedLetter) return;
   const isSsdOpt = mode === "ssd_extent_optimize";
+  const confirmationToken = `smart_tier:${d.id}:${selectedLetter}:${mode}`;
   confirm(
     isSsdOpt
       ? L("SSD Akıllı Parça Temizliği + ReTrim başlatılsın mı?", "Start SSD Smart Extent Consolidation + ReTrim?")
@@ -2650,7 +2844,7 @@ function startSmartTier(mode: "ssd_extent_optimize" | "hdd_outer_optimize") {
           kind: "smart_tier",
           disk_id: d.id,
           letter: selectedLetter,
-          confirmation: `smart_tier:${d.id}:${selectedLetter}:${mode}`,
+          confirmation: confirmationToken,
           options: { mode },
         },
       });
@@ -2659,6 +2853,21 @@ function startSmartTier(mode: "ssd_extent_optimize" | "hdd_outer_optimize") {
           ? L("SSD Akıllı Parça Temizliği + ReTrim başlatıldı.", "SSD Extent Consolidation + ReTrim started.")
           : L("HDD Dış-İz Hızlı Yerleşim başlatıldı.", "HDD Outer-Track Placement started."),
       );
+    },
+    {
+      mode: "mutating",
+      target: `${d.model} (${selectedLetter}:)`,
+      apis: isSsdOpt
+        ? "FSCTL_GET_RETRIEVAL_POINTERS + FSCTL_MOVE_FILE + defrag.exe /L"
+        : "SMART Guard + FSCTL_GET_VOLUME_BITMAP + FSCTL_MOVE_FILE",
+      writeBudget: isSsdOpt
+        ? L("Maks. 2 GiB (>50 parça dosyalar); klasik defrag yok", "Max 2 GiB (>50 extent files); no full defrag")
+        : L("Maks. 4 GiB (sıcak parçalı dosyalar)", "Max 4 GiB (hot fragmented files)"),
+      rollback: L(
+        "İptal edilebilir; yalnızca NTFS küme yerleşimi iyileştirilir",
+        "Cancellable anytime; only optimizes NTFS extent layout",
+      ),
+      confirmationToken,
     },
   );
 }
@@ -2676,6 +2885,7 @@ function relocateTierCandidate(candidateId: string) {
   const direction =
     cand.recommended_direction || (d.type.includes("HDD") ? "to_ssd" : "to_hdd");
   const isPromote = direction === "to_ssd";
+  const confirmationToken = `tier_relocate:${diskId}:${targetLetter}`;
   confirm(
     isPromote
       ? L(`"${cand.name}" SSD'ye (${targetLetter}:) terfi ettirilsin mi?`, `Promote "${cand.name}" to SSD (${targetLetter}:)?`)
@@ -2693,7 +2903,7 @@ function relocateTierCandidate(candidateId: string) {
           sourcePath: cand.path,
           targetLetter,
           direction,
-          confirmation: `tier_relocate:${diskId}:${targetLetter}`,
+          confirmation: confirmationToken,
         });
         tierMoves = [rec, ...tierMoves.filter((m) => m.id !== rec.id)];
         if (tierAnalysis && tierAnalysis.disk_id === diskId) {
@@ -2725,6 +2935,19 @@ function relocateTierCandidate(candidateId: string) {
         tierTransferring = false;
       }
     },
+    {
+      mode: "mutating",
+      target: `${cand.path} → ${targetLetter}:\\SSD-Sentinel-Arsiv`,
+      apis: cand.is_dir
+        ? "SHA-256 Chunked Copy + Rename + FSCTL_SET_REPARSE_POINT (NTFS Junction)"
+        : "SHA-256 Chunked Copy + Verified Atomic Swap",
+      writeBudget: `${fmtBytes(cand.size_bytes)} · ≥10 GiB ${L("hedef boş alan rezervi", "target free reserve")}`,
+      rollback: L(
+        "Aktif Taşınmış Öğeler listesinden tek tıkla SHA-256 ile geri alınır",
+        "One-click SHA-256 verified rollback from Active Relocated Items",
+      ),
+      confirmationToken,
+    },
   );
 }
 
@@ -2732,6 +2955,7 @@ function rollbackTierMove(moveId: string) {
   const rec = mergedTierMoves(tierAnalysis).find((m) => m.id === moveId);
   if (!rec || !canOptimizeSystem(state) || tierTransferring) return;
   const isFromSsd = rec.direction === "to_ssd";
+  const confirmationToken = `tier_rollback:${rec.id}`;
   confirm(
     isFromSsd
       ? L("Öğe HDD'ye geri alınsın mı?", "Restore item back to HDD?")
@@ -2750,7 +2974,7 @@ function rollbackTierMove(moveId: string) {
           cleanup_warning?: string | null;
         }>("rollback_tier_move", {
           moveId: rec.id,
-          confirmation: `tier_rollback:${rec.id}`,
+          confirmation: confirmationToken,
         });
         tierMoves = tierMoves.filter((m) => m.id !== rec.id);
         if (state?.tier_moves) {
@@ -2774,6 +2998,19 @@ function rollbackTierMove(moveId: string) {
         tierTransferring = false;
       }
     },
+    {
+      mode: "mutating",
+      target: `${rec.target_path} → ${rec.source_path}`,
+      apis: rec.junction_created
+        ? "SHA-256 Chunked Restore + Junction Unlink + Directory Swap"
+        : "SHA-256 Chunked Restore",
+      writeBudget: `${fmtBytes(rec.size_bytes)}`,
+      rollback: L(
+        "Hedef kopya ancak kaynak bütünlüğü SHA-256 ile doğrulandıktan sonra temizlenir",
+        "Archived target is removed only after SHA-256 verification succeeds",
+      ),
+      confirmationToken,
+    },
   );
 }
 
@@ -2782,10 +3019,11 @@ function startAutopilot() {
   if (!d || !canMaintain(state, d) || !canStart(state, d)) return;
   const selectedLetter = letter;
   const isHdd = d.type === "HDD";
+  const confirmationToken = `autopilot:${d.id}:${selectedLetter}`;
   confirm(
     isHdd
-      ? L("HDD'yi Tek Tıkla Hızlandır & İyileştir?", "One-Click Optimize HDD?")
-      : L("SSD'yi Tek Tıkla Hızlandır & Koru?", "One-Click Optimize & Protect SSD?"),
+      ? L("HDD Politika Profili Uygulansın mı?", "Apply HDD Policy Profile?")
+      : L("SSD Dayanım & Performans Profili Uygulansın mı?", "Apply SSD Endurance & Policy Profile?"),
     isHdd
       ? L(
           `${d.model} · ${selectedLetter}: üzerinde donanım yazma önbelleği + APM 254 + NTFS chkdsk /scan + akıllı defrag /O sırasıyla uygulanacak. Sistem ayarları SQLite geri alma listesine kaydedilir.`,
@@ -2802,11 +3040,36 @@ function startAutopilot() {
           kind: "autopilot",
           disk_id: d.id,
           letter: selectedLetter,
-          confirmation: `autopilot:${d.id}:${selectedLetter}`,
+          confirmation: confirmationToken,
           options: { profile: "auto" },
         },
       });
-      toast(L("Tek Tıkla Akıllı Otopilot başlatıldı.", "One-Click Autopilot started."));
+      toast(L("Depolama politikası profili başlatıldı.", "Storage policy profile started."));
+    },
+    {
+      mode: "mutating",
+      target: `${d.model} (${selectedLetter}:)`,
+      apis: isHdd
+        ? "IOCTL_DISK_SET_CACHE_INFORMATION + smartctl APM + chkdsk /scan + defrag /O"
+        : "fsutil DisableDeleteNotify + powercfg ASPM + IOCTL Cache + defrag /L",
+      rollback: L(
+        "Önceki ayarlar SQLite optimizations tablosundan geri alınabilir",
+        "Previous settings archived in SQLite optimizations table for rollback",
+      ),
+      confirmationToken,
+      steps: isHdd
+        ? [
+            L("1. Donanım yazma önbelleğini etkinleştir", "1. Enable hardware write cache"),
+            L("2. smartctl üzerinden APM 254 kafa park korumasını ayarla", "2. Set ATA APM 254 via smartctl"),
+            L("3. chkdsk /scan ile çevrimiçi NTFS bütünlük kontrolü", "3. Online NTFS chkdsk /scan check"),
+            L("4. SMART sağlıklıysa defrag /O uygula", "4. Run defrag /O if SMART is healthy"),
+          ]
+        : [
+            L("1. Windows NTFS TRIM (DisableDeleteNotify=0) doğrula", "1. Enable Windows NTFS TRIM"),
+            L("2. PCIe ASPM düşük gecikme profilini ayarla", "2. Configure low-latency PCIe ASPM"),
+            L("3. Donanım yazma önbelleğini etkinleştir", "3. Enable controller write cache"),
+            L("4. defrag /L ile SSD ReTrim uygula", "4. Run SSD ReTrim via defrag /L"),
+          ],
     },
   );
 }
@@ -2815,6 +3078,7 @@ function startRecovery() {
   const d = disk();
   if (!d || !canStart(state, d)) return;
   const selectedLetter = letter;
+  const confirmationToken = `recovery:${d.id}:${selectedLetter}:${recConfig.mode}`;
   confirm(
     L("Kurtarma taraması başlatılsın mı?", "Start recovery scan?"),
     L(
@@ -2828,11 +3092,28 @@ function startRecovery() {
           kind: "recovery",
           disk_id: d.id,
           letter: selectedLetter,
-          confirmation: `recovery:${d.id}:${selectedLetter}:${recConfig.mode}`,
+          confirmation: confirmationToken,
           options: { ...recConfig },
         },
       });
       toast(L("Veri ve uygulama kurtarma taraması başlatıldı.", "File and app recovery scan started."));
+    },
+    {
+      mode: "read_only",
+      target: `${d.model} (${selectedLetter}:)`,
+      apis:
+        recConfig.mode === "deep"
+          ? `CreateFileW(\\\\.\\${selectedLetter}:, GENERIC_READ) + $MFT/$UsnJrnl/$I30 + VSS + Carving`
+          : "Recycle Bin + VSS Shadow Copies + $MFT + App Traces (GENERIC_READ)",
+      writeBudget: L(
+        "0 B kaynak sürücü yazması (salt okunur)",
+        "0 B written to source volume (strictly read-only)",
+      ),
+      rollback: L(
+        "Gerekmez; kurtarılan dosyalar kullanıcı seçimiyle başka bir sürücüye kaydedilir",
+        "Not needed; recovered files save only to user-picked external location",
+      ),
+      confirmationToken,
     },
   );
 }
@@ -2943,6 +3224,31 @@ function describeOptimization(
   ];
 }
 
+function optimizeApiFor(action: string): string {
+  switch (action) {
+    case "write_cache":
+      return "IOCTL_DISK_GET/SET_CACHE_INFORMATION";
+    case "ntfs_trim":
+      return "fsutil.exe behavior set DisableDeleteNotify";
+    case "pcie_aspm":
+      return "powercfg.exe /setacvalueindex (PCIe ASPM)";
+    case "hibernation":
+      return "powercfg.exe /hibernate";
+    case "hdd_apm":
+      return "smartctl.exe -s apm";
+    case "apply_op":
+    case "guard_tail":
+      return "Resize-Partition (shrink >=10 GiB reserve) + defrag /L";
+    case "reclaim_op":
+    case "expand_tail":
+      return "Resize-Partition (extend)";
+    case "release_quarantine":
+      return "Remove .ssd-sentinel-quarantine markers";
+    default:
+      return action;
+  }
+}
+
 function runOptimize(action: string, target: string, value: string) {
   if (action === "query_op_bounds") {
     void run(async () => {
@@ -2974,18 +3280,33 @@ function runOptimize(action: string, target: string, value: string) {
     return;
   }
   const [title, body] = describeOptimization(action, target, value);
-  confirm(title, body, async () => {
-    const res = await invoke<{ message?: string }>("optimize_action", {
-      request: {
-        action,
-        target,
-        value,
-        confirmation: `optimize:${action}:${target}`,
-      },
-    });
-    opBounds = null;
-    toast(res.message ?? L("Optimizasyon uygulandı.", "Optimization applied."));
-  });
+  const confirmationToken = `optimize:${action}:${target}`;
+  confirm(
+    title,
+    body,
+    async () => {
+      const res = await invoke<{ message?: string }>("optimize_action", {
+        request: {
+          action,
+          target,
+          value,
+          confirmation: confirmationToken,
+        },
+      });
+      opBounds = null;
+      toast(res.message ?? L("Optimizasyon uygulandı.", "Optimization applied."));
+    },
+    {
+      mode: "mutating",
+      target,
+      apis: optimizeApiFor(action),
+      rollback: L(
+        "Önceki durum SQLite optimizations tablosunda saklanır",
+        "Prior value archived in SQLite optimizations table",
+      ),
+      confirmationToken,
+    },
+  );
 }
 
 root.addEventListener("click", (event) => {
@@ -3183,8 +3504,11 @@ root.addEventListener("click", (event) => {
         theme: document.documentElement.dataset.theme,
         healthMode: state.health_mode,
         language: getLang(),
+        readOnlyGuard: state.read_only_guard ?? true,
       }).catch((error) => toast(String(error), true));
     render();
+  } else if (action === "toggle-write-guard") {
+    toggleWriteGuard(isWriteLocked(state));
   } else if (action === "refresh")
     void run(async () => {
       await invoke("refresh");
@@ -3263,6 +3587,15 @@ root.addEventListener("click", (event) => {
                 `Installer launched: ${aName}`,
               ),
         );
+      },
+      {
+        mode: "system",
+        target: aName,
+        apis: "WinHTTP HTTPS Allowlist + SHA256SUMS.txt + ShellExecuteW",
+        rollback: L(
+          "SHA-256 eşleşmezse indirilen dosya çalıştırılmadan silinir",
+          "Aborted and deleted before launch on any SHA-256 mismatch",
+        ),
       },
     );
   }
@@ -3401,6 +3734,19 @@ root.addEventListener("click", (event) => {
           `Sends ${actText} to ${d.model}${action === "retrim" ? ` (${selectedLetter}:)` : ""}. Drive I/O may be affected while running. Verify backups first.`,
         ),
         execute,
+        {
+          mode: "mutating",
+          target: `${d.model}${action === "retrim" ? ` (${selectedLetter}:)` : ""}`,
+          apis:
+            action === "retrim"
+              ? "Optimize-Volume -ReTrim"
+              : `smartctl.exe ${action === "abort_test" ? "-X" : "-t"}`,
+          rollback: L(
+            "Firmware testleri smartctl -X ile durdurulabilir",
+            "Firmware self-tests can be aborted via smartctl -X",
+          ),
+          confirmationToken: `${action}:${d.id}`,
+        },
       );
     }
   }
@@ -3466,6 +3812,7 @@ root.addEventListener("change", (event) => {
         theme: document.documentElement.dataset.theme,
         healthMode: state!.health_mode,
         language: getLang(),
+        readOnlyGuard: state!.read_only_guard ?? true,
       });
       state!.minimise_to_tray = t.checked;
     });
@@ -3476,6 +3823,7 @@ root.addEventListener("change", (event) => {
         theme: document.documentElement.dataset.theme,
         healthMode: t.value,
         language: getLang(),
+        readOnlyGuard: state!.read_only_guard ?? true,
       });
       toast(
         t.value === "strict"
@@ -3483,7 +3831,14 @@ root.addEventListener("change", (event) => {
           : L("Varsayılan (Standart) sağlık moduna geçildi.", "Switched to Default (Standard) health calculation mode."),
       );
     });
-  else if (t.id === "autostart-setting" && state)
+  else if (t.id === "write-guard-setting" && state) {
+    if (!t.checked) {
+      t.checked = true;
+      toggleWriteGuard(true);
+    } else {
+      toggleWriteGuard(false);
+    }
+  } else if (t.id === "autostart-setting" && state)
     void run(async () => {
       const res = await invoke<{ message?: string }>("optimize_action", {
         request: {

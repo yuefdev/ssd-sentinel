@@ -516,6 +516,7 @@ export interface AppState {
   engine: { available: boolean; name: string; native?: boolean };
   profiles: Record<string, ProfileRow[]>;
   minimise_to_tray: boolean;
+  read_only_guard?: boolean;
   health_mode?: string;
   language?: "tr" | "en";
   optimizations?: OptimizationRecord[];

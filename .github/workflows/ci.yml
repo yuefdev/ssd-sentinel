@@ -13,7 +13,7 @@ env:
 
 jobs:
   check-and-test:
-    name: Windows Rust + Tauri + Frontend CI
+    name: Windows Rust + Tauri + Frontend + UI Smoke CI
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -66,3 +66,62 @@ jobs:
 
       - name: Run Rust unit & integration tests (full desktop feature)
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
+
+      - name: Export synthetic Rust fixture & run Playwright UI smoke
+        run: |
+          cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --example export_fixture -- results/rust-fixture.json
+          node tools/smoke_tauri.mjs results/smoke-ci
+
+      - name: Upload UI smoke screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-ci-failure
+          path: results/smoke-ci
+          if-no-files-found: ignore
+
+  vhdx-ntfs-integration:
+    name: Real NTFS VHDX Junction & Rollback Integration
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run NTFS VHDX cross-volume integration harness
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/vhdx_integration_test.ps1
+
+  security-and-supply-chain:
+    name: Supply-Chain Security Audit (Cargo & npm)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Audit runtime npm dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run RustSec vulnerability audit
+        run: cargo audit -f src-tauri/Cargo.lock

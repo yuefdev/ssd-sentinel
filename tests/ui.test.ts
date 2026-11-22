@@ -11,6 +11,7 @@ import {
   canStart,
   canMaintain,
   canOptimizeSystem,
+  canWrite,
   escape,
   evaluateBenchmarkSpeed,
   filterDeletedApps,
@@ -22,6 +23,7 @@ import {
   inferAppRecoveryStatus,
   isRecoverableRow,
   isUnopenableMedia,
+  isWriteLocked,
   maskSerial,
   mediaStatusBadge,
   slcPressureBadge,
@@ -585,4 +587,48 @@ test("computePollSignature changes when UI language toggles", () => {
     detailCounts: "0",
   });
   assert.notEqual(sigTr, sigEn);
+});
+
+test("read_only_guard locks mutating controls while leaving read-only discovery available", () => {
+  const lockedState = {
+    source: "live",
+    admin: true,
+    busy: false,
+    stale: false,
+    read_only_guard: true,
+  };
+  const unlockedState = { ...lockedState, read_only_guard: false };
+  const disk = {
+    id: "nvme-1",
+    stable_identity: true,
+    os_disk_number: 1,
+    os_serial: "SN987654",
+    os_model: "NVMe Test",
+    read_incomplete: false,
+    volumes: [{ letter: "C", filesystem: "NTFS", read_only: false }],
+  };
+  assert.equal(isWriteLocked(lockedState), true);
+  assert.equal(isWriteLocked(unlockedState), false);
+  assert.equal(canWrite(lockedState), false);
+  assert.equal(canWrite(unlockedState), true);
+  assert.equal(canMaintain(lockedState, disk), false);
+  assert.equal(canOptimizeSystem(lockedState), false);
+  assert.equal(canStart(lockedState, disk), true);
+
+  assert.equal(canMaintain(unlockedState, disk), true);
+  assert.equal(canOptimizeSystem(unlockedState), true);
+
+  const sigLocked = computePollSignature(lockedState, {
+    page: "overview",
+    selected: "nvme-1",
+    letter: "C",
+    connectionError: "",
+  });
+  const sigUnlocked = computePollSignature(unlockedState, {
+    page: "overview",
+    selected: "nvme-1",
+    letter: "C",
+    connectionError: "",
+  });
+  assert.notEqual(sigLocked, sigUnlocked);
 });

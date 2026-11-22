@@ -162,6 +162,8 @@ try {
             window.__fixture.state.health_mode = args.healthMode;
           if (typeof args.minimiseToTray === "boolean")
             window.__fixture.state.minimise_to_tray = args.minimiseToTray;
+          if (typeof args.readOnlyGuard === "boolean")
+            window.__fixture.state.read_only_guard = args.readOnlyGuard;
           return null;
         }
         if (cmd === "save_report") return { saved: true };
@@ -669,7 +671,7 @@ try {
           weak: 1,
           slow: 2,
           dead_zones: 0,
-          engine: "Yerel akıllı teşhis · istatistik + kural tabanlı · çevrimdışı",
+          engine: "Deterministik yüzey teşhisi · istatistik + kural motoru · çevrimdışı",
         },
       },
       error: null,
@@ -725,7 +727,7 @@ try {
             slow: 2,
             dead_zones: 0,
             engine:
-              "Yerel akıllı teşhis · istatistik + kural tabanlı · çevrimdışı",
+              "Deterministik yüzey teşhisi · istatistik + kural motoru · çevrimdışı",
           },
         },
       },
@@ -915,9 +917,27 @@ try {
   await expect(
     page.locator('#bench-profile option[value="sustained"]'),
   ).toHaveCount(1);
+  await expect(
+    page.locator('[data-action="toggle-write-guard"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-action="toggle-write-guard"]'),
+  ).toContainText("Salt-Okunur");
+  await expect(page.locator('[data-action="start-benchmark"]')).toBeDisabled();
+  await page.locator('[data-action="toggle-write-guard"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toBeVisible();
+  await page.locator("#confirm-run").click();
+  await expect(
+    page.locator('[data-action="toggle-write-guard"]'),
+  ).toContainText("Yazma Açık");
+  await expect(page.locator('[data-action="start-benchmark"]')).toBeEnabled();
   await page.locator('[data-action="start-benchmark"]').click();
   await expect(page.locator("#confirmation")).toContainText("Salt okuma");
   await expect(page.locator("#confirmation")).toContainText("toplam yazma");
+  await expect(page.locator("#confirmation .dry-run-box")).toBeVisible();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText(
+    "Win32 IOCP Direct-I/O",
+  );
   await page.locator("#confirm-cancel").click();
   const starts = await page.evaluate(
     () => window.__calls.filter((c) => c.cmd === "start_job").length,
@@ -1200,6 +1220,10 @@ try {
   await expect(page.locator("#confirmation")).toContainText("SHA-256");
   await expect(page.locator("#confirmation")).toContainText(
     "NTFS Directory Junction",
+  );
+  await expect(page.locator("#confirmation .dry-run-box")).toBeVisible();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText(
+    "FSCTL_SET_REPARSE_POINT",
   );
   await page.locator("#confirm-run").click();
   await expect(page.locator(".tier-move-row")).toHaveCount(2);

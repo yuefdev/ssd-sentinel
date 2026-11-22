@@ -90,6 +90,8 @@ try {
     throw new Error("Native Rust IPC state mismatch");
   if (state.version !== "1.9.0")
     throw new Error(`Expected native version 1.9.0, got ${state.version}`);
+  if (state.read_only_guard !== true)
+    throw new Error(`Expected default read_only_guard=true, got ${JSON.stringify(state.read_only_guard)}`);
   if (state.disks[1].interface !== "NVMe 1.3")
     throw new Error(
       `Expected normalized NVMe interface 'NVMe 1.3', got ${JSON.stringify(state.disks[1].interface)}`,
@@ -333,6 +335,7 @@ try {
       theme: "dark",
       healthMode: "default",
       language: "en",
+      readOnlyGuard: false,
     }),
   );
   const stateEn = await page.evaluate(() =>
@@ -341,12 +344,16 @@ try {
   if (stateEn.language !== "en") {
     throw new Error(`Expected native language='en', got ${JSON.stringify(stateEn.language)}`);
   }
+  if (stateEn.read_only_guard !== false) {
+    throw new Error(`Expected native read_only_guard=false, got ${JSON.stringify(stateEn.read_only_guard)}`);
+  }
   const prefs = await page.evaluate(() =>
     window.__TAURI_INTERNALS__.invoke("set_preferences", {
       minimiseToTray: false,
       theme: "dark",
       healthMode: "default",
       language: "tr",
+      readOnlyGuard: true,
     }),
   );
   const stateTr = await page.evaluate(() =>
@@ -354,6 +361,9 @@ try {
   );
   if (stateTr.language !== "tr") {
     throw new Error(`Expected native language='tr', got ${JSON.stringify(stateTr.language)}`);
+  }
+  if (stateTr.read_only_guard !== true) {
+    throw new Error(`Expected native read_only_guard=true, got ${JSON.stringify(stateTr.read_only_guard)}`);
   }
   checks.push("Native theme, language switching (TR/EN), unconfigured update check, and persisted tray preference IPC succeed");
   if (errors.length) throw new Error(errors.join("\n"));
