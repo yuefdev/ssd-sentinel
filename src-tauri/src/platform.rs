@@ -246,9 +246,18 @@ mod win32 {
         sub: &str,
         name: &str,
     ) -> bool {
+        read_reg_sz(hkey, sub, name).is_some()
+    }
+
+    fn read_reg_sz(
+        hkey: windows_sys::Win32::System::Registry::HKEY,
+        sub: &str,
+        name: &str,
+    ) -> Option<String> {
         let sub_w = wide(sub);
         let name_w = wide(name);
-        let mut size: u32 = 0;
+        let mut buf = [0u16; 512];
+        let mut size: u32 = (buf.len() * 2) as u32;
         let rc = unsafe {
             RegGetValueW(
                 hkey,
@@ -256,11 +265,16 @@ mod win32 {
                 name_w.as_ptr(),
                 RRF_RT_REG_SZ,
                 null_mut(),
-                null_mut(),
+                buf.as_mut_ptr().cast(),
                 &mut size,
             )
         };
-        rc == 0 && size > 2
+        if rc != 0 || size <= 2 {
+            return None;
+        }
+        let chars = (size as usize / 2).min(buf.len());
+        let text = utf16_z(&buf[..chars]);
+        (!text.is_empty()).then_some(text)
     }
 
     fn service_running(name: &str) -> Option<bool> {
@@ -744,6 +758,24 @@ mod win32 {
             "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "SSDSentinel",
         );
+        let long_paths_enabled = read_reg_dword(
+            HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+            "LongPathsEnabled",
+        )
+        .map(|v| v != 0);
+        let ntfs_8dot3_creation = read_reg_dword(
+            HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+            "NtfsDisable8dot3NameCreation",
+        );
+        let dev_drive_supported = read_reg_sz(
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+            "CurrentBuildNumber",
+        )
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|build| build >= 22621);
 
         Ok(json!({
             "disks": disks,
@@ -755,7 +787,10 @@ mod win32 {
                 "sysmain_running": sysmain_running,
                 "wsearch_running": wsearch_running,
                 "pcie_aspm": pcie_aspm,
-                "autostart_enabled": autostart_enabled
+                "autostart_enabled": autostart_enabled,
+                "long_paths_enabled": long_paths_enabled,
+                "ntfs_8dot3_creation": ntfs_8dot3_creation,
+                "dev_drive_supported": dev_drive_supported
             },
             "error": null
         }))

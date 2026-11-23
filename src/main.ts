@@ -30,6 +30,9 @@ import {
   compareRaw,
   computePollSignature,
   computeSurfaceStepper,
+  devCacheKindBadge,
+  devEnvSnippet,
+  devStackBadge,
   escape as e,
   evaluateBenchmarkSpeed,
   filterDeletedApps,
@@ -43,6 +46,7 @@ import {
   isUnopenableMedia,
   isWriteLocked,
   mediaStatusBadge,
+  ntfs8dot3Label,
   slcPressureBadge,
   tierCategoryBadge,
   tierScoreBadge,
@@ -53,6 +57,7 @@ import type {
   BatchRestoreResult,
   Block,
   DeletedAppBundle,
+  DevWorkspaceAnalysis,
   Disk,
   Event,
   HealthForecast,
@@ -125,6 +130,11 @@ let history: History[] = [],
   tierMoves: TierMoveRecord[] = [],
   tierAnalyzing = false,
   tierTransferring = false,
+  devAnalysis: DevWorkspaceAnalysis | null = null,
+  devScanning = false,
+  devCleaning = false,
+  devCustomRoot = "",
+  devFilter: "all" | "stale" = "all",
   viewedJob: Job | null = null;
 let recoverySearch = "",
   recoveryCat = "all",
@@ -1049,12 +1059,20 @@ function smartTierCard(
              const rollbackLabel =
                m.direction === "to_ssd"
                  ? L("HDD'ye Geri Al", "Restore to HDD", lang)
-                 : L("SSD'ye Geri Al", "Restore to SSD", lang);
+                 : m.direction === "to_archive"
+                   ? L("Orijinal Konuma Geri Al", "Restore Original Location", lang)
+                   : L("SSD'ye Geri Al", "Restore to SSD", lang);
              return `<div class="tier-move-row">
                <div class="tier-move-main">
                  <div class="inline-actions">
                    <strong>${e(label)}</strong>
-                   ${m.direction === "to_ssd" ? pill(L("HDD → SSD Terfi", "HDD → SSD Promote", lang), "ok") : pill(L("SSD → HDD Katman", "SSD → HDD Tier", lang), "info")}
+                   ${
+                      m.direction === "to_ssd"
+                        ? pill(L("HDD → SSD Terfi", "HDD → SSD Promote", lang), "ok")
+                        : m.direction === "to_archive"
+                          ? pill(L("Arşiv Junction", "Archive Junction", lang), "info")
+                          : pill(L("SSD → HDD Katman", "SSD → HDD Tier", lang), "info")
+                    }
                    ${m.junction_created ? pill("NTFS Junction", "ok") : ""}
                  </div>
                  <small class="mono tier-move-paths">${e(m.source_path)} → ${e(m.target_path)}</small>
@@ -1108,6 +1126,200 @@ function smartTierCard(
   </article>`;
 }
 
+function devWorkspaceCard(
+  d: Disk,
+  selectedLetter: string,
+  sysLive: boolean,
+  diskVolOk: boolean,
+): string {
+  const lang = getLang();
+  const analysis =
+    devAnalysis &&
+    devAnalysis.disk_id === d.id &&
+    (!selectedLetter || !devAnalysis.letter || devAnalysis.letter === selectedLetter)
+      ? devAnalysis
+      : null;
+  const canScan =
+    !pending &&
+    !devScanning &&
+    !devCleaning &&
+    (state?.source === "replay" || !!selectedLetter);
+  const busyNow = devScanning || devCleaning || tierTransferring || pending;
+  const cleanOk = canWrite(state) && canStart(state, d) && !busyNow;
+  const tuning = state?.windows?.system_tuning;
+  const target = analysis?.offload_target ?? null;
+  const visibleProjects = analysis
+    ? devFilter === "stale"
+      ? analysis.projects.filter((p) => p.stale)
+      : analysis.projects
+    : [];
+  const staleCount = analysis ? analysis.projects.filter((p) => p.stale).length : 0;
+  const envSnippet = devEnvSnippet(target?.letter || "D");
+
+  const analysisHtml = analysis
+    ? `<div class="dev-analysis-panel">
+        ${
+          analysis.replay
+            ? `<div class="mode-note">${icon("info")}<span>${e(lang === "en" ? analysis.summary_en : analysis.summary_tr)}</span></div>`
+            : `<div class="dev-summary-grid">
+                 <div><span>${L("Yeniden Üretilebilir Yük", "Rebuildable Artifacts", lang)}</span><strong>${fmtBytes(analysis.total_artifact_bytes)}</strong><small>${L(`${fmtBytes(analysis.stale_artifact_bytes)} (14+ gün eski)`, `${fmtBytes(analysis.stale_artifact_bytes)} (14+ days old)`, lang)}</small></div>
+                 <div><span>${L("Yerel LLM &amp; Paket Önbelleği", "Local LLM &amp; Pkg Caches", lang)}</span><strong>${fmtBytes(analysis.total_cache_bytes)}</strong><small>${fmt(analysis.global_caches.length)} ${L("konum", "locations", lang)}</small></div>
+                 <div><span>${L("WSL2 / Docker VHDX", "WSL2 / Docker VHDX", lang)}</span><strong>${fmtBytes(analysis.total_vhdx_bytes)}</strong><small>${fmt(analysis.vhdx_files.length)} ${L("sanal disk", "virtual disks", lang)}</small></div>
+               </div>
+               <div class="dev-subsection">
+                 <div class="tier-subhead">
+                   <div class="inline-actions">
+                     <h3>${L("Projeler &amp; Derleme Klasörleri", "Projects &amp; Build Artifacts", lang)}</h3>
+                     <div class="cat-pills" role="group" aria-label="${L("Proje yaş filtresi", "Project age filter", lang)}">
+                       <button type="button" class="button compact ${devFilter === "all" ? "selected" : "quiet"}" data-dev-filter="all">${L("Tümü", "All", lang)} (${analysis.projects.length})</button>
+                       <button type="button" class="button compact ${devFilter === "stale" ? "selected" : "quiet"}" data-dev-filter="stale">${L("14+ Gün Eski", "14+ Days Old", lang)} (${staleCount})</button>
+                     </div>
+                   </div>
+                   <span class="small-count">${visibleProjects.length}</span>
+                 </div>
+                 ${
+                   visibleProjects.length
+                     ? `<div class="dev-project-list">${visibleProjects
+                         .map((p) => {
+                           const sb = devStackBadge(p.stack);
+                           return `<div class="dev-project-card">
+                             <div class="dev-project-head">
+                               <div class="dev-project-meta">
+                                 <div class="inline-actions">
+                                   <strong>${e(p.name)}</strong>
+                                   ${pill(sb.label, sb.level)}
+                                   ${pill(formatUntouchedDays(p.days_untouched, lang), p.stale ? "warning" : "")}
+                                   ${p.has_env ? pill(L(".env korundu", ".env preserved", lang), "ok") : ""}
+                                   ${p.recent_git_edit ? pill(L("Git düzenleme izi", "Uncommitted git", lang), "info") : ""}
+                                 </div>
+                                 <small class="mono tier-cand-path">${e(p.path)}</small>
+                               </div>
+                               <strong class="mono dev-project-bytes">${fmtBytes(p.artifact_bytes)}</strong>
+                             </div>
+                             ${
+                               p.artifacts.length
+                                 ? `<div class="dev-artifact-list">${p.artifacts
+                                     .map(
+                                       (art) => `<div class="dev-artifact-chip">
+                                         <div class="dev-artifact-info">
+                                           <strong class="mono">${e(art.name)}</strong>
+                                           <small>${fmtBytes(art.size_bytes)} · ${fmt(art.file_count)} ${L("dosya", "files", lang)}</small>
+                                         </div>
+                                         <button type="button" class="button compact quiet" data-dev-clean-path="${e(art.path)}" data-dev-clean-token="${e(art.clean_token)}" data-dev-clean-name="${e(`${p.name}/${art.name}`)}" data-dev-clean-bytes="${art.size_bytes}" ${!cleanOk ? "disabled" : ""}>${icon("trash")}<span>${L("Güvenli Temizle", "Safe Clean", lang)}</span></button>
+                                       </div>`,
+                                     )
+                                     .join("")}</div>`
+                                 : `<p class="small-note muted">${L("Bu projede yeniden üretilebilir derleme klasörü yok.", "No rebuildable artifact folders in this project.", lang)}</p>`
+                             }
+                           </div>`;
+                         })
+                         .join("")}</div>`
+                     : `<div class="mode-note">${icon("check")}<span>${L("Bu filtrede proje tespit edilmedi.", "No projects matched this filter.", lang)}</span></div>`
+                 }
+               </div>
+               <div class="dev-subsection">
+                 <div class="tier-subhead">
+                   <h3>${L("Yerel LLM Modelleri &amp; Paket Önbellekleri", "Local LLM Models &amp; Package Caches", lang)}</h3>
+                   <span class="small-count">${analysis.global_caches.length}</span>
+                 </div>
+                 ${
+                   analysis.global_caches.length
+                     ? `<div class="dev-cache-list">${analysis.global_caches
+                         .map((c) => {
+                           const kb = devCacheKindBadge(c.kind, lang);
+                           const label = lang === "en" ? c.name_en : c.name;
+                           const note = lang === "en" ? c.note_en : c.note_tr;
+                           return `<div class="dev-cache-row">
+                             <div class="tier-cand-main">
+                               <div class="inline-actions">
+                                 <strong>${e(label)}</strong>
+                                 ${pill(kb.label, kb.level)}
+                                 ${c.is_junction ? pill("NTFS Junction", "ok") : ""}
+                               </div>
+                               <small class="mono tier-cand-path">${e(c.path)} · ${fmtBytes(c.size_bytes)} (${fmt(c.file_count)} ${L("dosya", "files", lang)})</small>
+                               <p class="tier-cand-reason">${e(note)}</p>
+                             </div>
+                             <div class="dev-cache-actions">
+                               ${
+                                 c.can_offload && target
+                                   ? `<button type="button" class="button compact primary" data-dev-offload-id="${e(c.id)}" ${!diskVolOk || busyNow ? "disabled" : ""}>${icon("arrow")}<span>${L(`Junction ile Taşı (${target.letter}:)`, `Offload Junction (${target.letter}:)`, lang)}</span></button>`
+                                   : ""
+                               }
+                               ${
+                                 c.can_clean && c.clean_token
+                                   ? `<button type="button" class="button compact quiet" data-dev-clean-path="${e(c.path)}" data-dev-clean-token="${e(c.clean_token)}" data-dev-clean-name="${e(label)}" data-dev-clean-bytes="${c.size_bytes}" ${!cleanOk ? "disabled" : ""}>${icon("trash")}<span>${L("Önbelleği Temizle", "Clean Cache", lang)}</span></button>`
+                                   : ""
+                               }
+                             </div>
+                           </div>`;
+                         })
+                         .join("")}</div>`
+                     : `<div class="mode-note">${icon("info")}<span>${L("10 MiB üzerinde yerel LLM modeli veya paket önbelleği bulunamadı.", "No local LLM models or package caches above 10 MiB detected.", lang)}</span></div>`
+                 }
+               </div>
+               <div class="dev-subsection">
+                 <div class="tier-subhead">
+                   <h3>${L("WSL2 &amp; Docker Sanal Diskleri (.vhdx)", "WSL2 &amp; Docker Virtual Disks (.vhdx)", lang)}</h3>
+                   <span class="small-count">${analysis.vhdx_files.length}</span>
+                 </div>
+                 ${
+                   analysis.vhdx_files.length
+                     ? `<div class="dev-cache-list">${analysis.vhdx_files
+                         .map(
+                           (v) => `<div class="dev-vhdx-row">
+                             <div class="tier-cand-main">
+                               <div class="inline-actions">
+                                 <strong>${e(v.name)}</strong>
+                                 ${pill(v.kind === "docker_vhdx" ? "Docker Desktop" : "WSL2", "info")}
+                               </div>
+                               <small class="mono tier-cand-path">${e(v.path)} · ${fmtBytes(v.size_bytes)}</small>
+                             </div>
+                             <div class="dev-cache-actions">
+                               ${optBtn("compact_wsl_vhdx", v.path, "compact", L("VHDX Sıkıştır (Compact)", "Compact VHDX", lang), !sysLive || busyNow, "primary")}
+                             </div>
+                           </div>`,
+                         )
+                         .join("")}</div>`
+                     : `<div class="mode-note">${icon("info")}<span>${L("Bu bölümde WSL2 veya Docker ext4.vhdx dosyası bulunamadı.", "No WSL2 or Docker ext4.vhdx virtual disks found on this volume.", lang)}</span></div>`
+                 }
+               </div>`
+        }
+      </div>`
+    : "";
+
+  return `<article class="card dev-workspace-card" id="dev-workspace-card" aria-label="${L("Geliştirici ve Vibe-Coding Depolama Alanı", "Developer & Vibe-Coding Storage")}">
+    <div class="tier-head">
+      <div class="tier-head-main">
+        <div class="eyebrow">${icon("code")} ${L("GELİŞTİRİCİ &amp; VIBE-CODING", "DEVELOPER &amp; VIBE-CODING", lang)}</div>
+        <h2>${L("Proje Bloat Radarı, Model Önbelleği &amp; VHDX", "Project Bloat Radar, Model Caches &amp; VHDX", lang)}</h2>
+      </div>
+      ${pill(L("Kaynak kod & .env korumalı", "Source & .env protected", lang), "ok")}
+    </div>
+    <p class="tier-desc">${L("node_modules, Rust target, .venv gibi yeniden üretilebilir derleme yüklerini tarar; Ollama/Hugging Face modellerini NTFS Junction ile ikinci diske taşır ve WSL2/Docker .vhdx ölü alanını sıkıştırır.", "Scans rebuildable artifacts (node_modules, target, .venv), offloads Ollama/Hugging Face caches to another drive via NTFS Junctions, and compacts WSL2/Docker .vhdx images.", lang)}</p>
+    <div class="tier-actions">
+      <button type="button" class="button primary" data-action="analyze-dev" ${!canScan ? "disabled" : ""}>${icon("search")}<span>${devScanning ? L("Projeler Taranıyor…", "Scanning Projects…", lang) : L("Projeleri & Önbellekleri Tara", "Scan Projects & Caches", lang)}</span></button>
+      <button type="button" class="button accent-outline" data-action="pick-dev-folder" ${state?.source === "replay" || busyNow ? "disabled" : ""}>${icon("folder")}<span>${L("Klasör Seç", "Pick Folder", lang)}</span></button>
+      ${devCustomRoot ? `<span class="tier-companion-chip">${icon("folder")}<span class="mono">${e(devCustomRoot)}</span><button type="button" class="button compact quiet" data-action="clear-dev-root" aria-label="${L("Özel klasörü temizle", "Clear custom folder")}">×</button></span>` : ""}
+      ${
+        target
+          ? `<span class="tier-companion-chip">${icon("disk")}<span>${L("Taşıma hedefi:", "Offload target:", lang)} <b>${e(target.letter)}:</b> (${e(target.model)} · ${fmtBytes(target.free_bytes)} ${L("boş", "free", lang)})</span></span>`
+          : ""
+      }
+    </div>
+    ${analysisHtml}
+    <details class="dev-guide-details" data-details-key="dev-drive-guide">
+      <summary><span><strong>${L("Windows 11 Dev Drive &amp; Paket Önbelleği Ortam Değişkenleri", "Windows 11 Dev Drive &amp; Cache Env Variables", lang)}</strong></span>${pill(tuning?.dev_drive_supported === true ? L("Dev Drive Hazır (ReFS)", "Dev Drive Ready (ReFS)", lang) : tuning?.dev_drive_supported === false ? L("Win 11 23H2+ Gerekir", "Needs Win 11 23H2+", lang) : L("Durum Ölçülmedi", "Status Unknown", lang), tuning?.dev_drive_supported === true ? "ok" : "")}${icon("chevron")}</summary>
+      <div class="dev-guide-body">
+        <p>${L("Yeni projelerdeki paket önbelleklerini ve yerel modelleri doğrudan ikincil sürücüye yönlendirmek için aşağıdaki PowerShell komutlarını kullanıcı ortamınızda çalıştırabilirsiniz:", "Run these PowerShell commands to point future package caches and local models straight to your secondary drive:", lang)}</p>
+        <pre class="defrag-output">${e(envSnippet)}</pre>
+        <div class="opt-actions">
+          <button type="button" class="button compact quiet" data-copy-text="${e(envSnippet)}">${icon("copy")}<span>${L("PowerShell Komutlarını Kopyala", "Copy PowerShell Commands", lang)}</span></button>
+        </div>
+      </div>
+    </details>
+  </article>`;
+}
+
 function optimizeView(d: Disk): string {
   const lang = getLang();
   const sysLive = canOptimizeSystem(state) && !pending;
@@ -1126,6 +1338,8 @@ function optimizeView(d: Disk): string {
   const trimRec = optRecord("ntfs_trim:system");
   const aspmRec = optRecord("pcie_aspm:system");
   const hibRec = optRecord("hibernation:system");
+  const longPathsRec = optRecord("long_paths:system");
+  const ntfs8dot3Rec = optRecord("ntfs_8dot3:system");
   const apmRec = optRecord(`hdd_apm:${d.id}`);
   const opRec = optRecord(`op:${d.id}:${selectedLetter}`);
 
@@ -1167,6 +1381,8 @@ function optimizeView(d: Disk): string {
 
     ${smartTierCard(d, selectedLetter, sysLive, diskVolOk)}
 
+    ${devWorkspaceCard(d, selectedLetter, sysLive, diskVolOk)}
+
     <details class="manual-controls" data-details-key="manual-controls">
     <summary>${icon("settings")}<span><strong>${L("Elle ayarla (ileri düzey)", "Manual tuning (advanced)", lang)}</strong><small>${L("Yukarıdaki profil bunları sırayla uygular; tekil politika kontrolü için açın.", "The policy profile applies these in sequence; expand for individual controls.", lang)}</small></span>${icon("chevron")}</summary>
     <section class="opt-grid" aria-label="${L("Hızlandırma işlemleri", "Optimization controls", lang)}">
@@ -1206,6 +1422,26 @@ function optimizeView(d: Disk): string {
           ${optBtn("hibernation", "system", "off", L("Kapat (SSD Tasarrufu)", "Disable (Save TBW)", lang), !sysLive || tuning?.hibernate_enabled === false, "primary")}
           ${optBtn("hibernation", "system", "on", L("Etkinleştir", "Enable", lang), !sysLive || tuning?.hibernate_enabled === true)}
           ${hibRec ? optBtn("hibernation", "system", "rollback", L("Geri Al", "Revert", lang), !sysLive) : ""}
+        </div>
+      </article>
+
+      <article class="card opt-card">
+        <div class="card-title">${icon("code")}<h2>${L("Windows Uzun Yol Desteği (>260 Karakter)", "Windows Long Paths (>260 chars)", lang)}</h2>${pill(tuning?.long_paths_enabled === true ? L("Etkin", "Enabled", lang) : tuning?.long_paths_enabled === false ? L("Kapalı (260 sınır)", "Disabled (260 cap)", lang) : L("Bilinmiyor", "Unknown", lang), tuning?.long_paths_enabled === true ? "ok" : tuning?.long_paths_enabled === false ? "warning" : "")}</div>
+        <p>${L("Derin node_modules, Rust/Cargo ve monorepo derleme hatalarını önlemek için Win32 LongPathsEnabled anahtarını etkinleştirir.", "Enables Win32 LongPathsEnabled in the registry to avoid deep node_modules, Rust/Cargo, and monorepo path errors.", lang)}</p>
+        <div class="opt-actions">
+          ${optBtn("long_paths", "system", "enable", L("Uzun Yolları Aç", "Enable Long Paths", lang), !sysLive || tuning?.long_paths_enabled === true, "primary")}
+          ${optBtn("long_paths", "system", "disable", L("Kapat", "Disable", lang), !sysLive || tuning?.long_paths_enabled === false)}
+          ${longPathsRec ? optBtn("long_paths", "system", "rollback", L("Geri Al", "Revert", lang), !sysLive) : ""}
+        </div>
+      </article>
+
+      <article class="card opt-card">
+        <div class="card-title">${icon("bolt")}<h2>${L("NTFS 8.3 Kısa Ad Oluşturma", "NTFS 8.3 Short Names", lang)}</h2>${pill(ntfs8dot3Label(tuning?.ntfs_8dot3_creation, lang), tuning?.ntfs_8dot3_creation === 1 ? "ok" : "")}</div>
+        <p>${L("Binlerce küçük dosya oluşturulan npm/pip/Cargo kurulumlarında gereksiz 8.3 kısa dosya adı yazımlarını kapatarak metadata I/O hızını artırır.", "Disables legacy 8.3 short-name generation to reduce metadata overhead during heavy npm/pip/Cargo installs.", lang)}</p>
+        <div class="opt-actions">
+          ${optBtn("ntfs_8dot3", "system", "disable", L("8.3 Üretimini Kapat", "Disable 8.3 Creation", lang), !sysLive || tuning?.ntfs_8dot3_creation === 1, "primary")}
+          ${optBtn("ntfs_8dot3", "system", "default", L("Varsayılan (Birim Bazlı)", "Default (Per-Volume)", lang), !sysLive || tuning?.ntfs_8dot3_creation === 2)}
+          ${ntfs8dot3Rec ? optBtn("ntfs_8dot3", "system", "rollback", L("Geri Al", "Revert", lang), !sysLive) : ""}
         </div>
       </article>
 
@@ -1702,11 +1938,13 @@ function recoveryView(d: Disk): string {
 
   const activeTab: "apps" | "files" = recoveryTabManual
     ? recoveryTab
-    : apps.length > 0
-      ? "apps"
-      : rawItems.length > 0
-        ? "files"
-        : "apps";
+    : job?.options?.mode === "dev"
+      ? "files"
+      : apps.length > 0
+        ? "apps"
+        : rawItems.length > 0
+          ? "files"
+          : "apps";
 
   const filtered = aiNaturalFilter(visiblePool, recoverySearch, recoveryCat);
   const sorted = [...filtered].sort((a, b) => {
@@ -1802,7 +2040,9 @@ function recoveryView(d: Disk): string {
   const recAuto =
     recConfig.mode === "deep"
       ? deepRecoveryEstimate(d)
-      : L("Geri Dönüşüm, gölge kopyalar, dosya tablosu ve program izleri taranır. Birkaç dakika sürer.", "Scans Recycle Bin, VSS Shadow Copies, NTFS $MFT, $UsnJrnl, and app traces. Read-only.", lang);
+      : recConfig.mode === "dev"
+        ? L("Geri Dönüşüm, VSS, $MFT ve $UsnJrnl yalnız .env, kaynak kod ve veritabanı dosyalarına odaklanarak taranır (salt okunur).", "Scans Recycle Bin, VSS, $MFT, and $UsnJrnl focusing on .env, source code, and database files (read-only).", lang)
+        : L("Geri Dönüşüm, gölge kopyalar, dosya tablosu ve program izleri taranır. Birkaç dakika sürer.", "Scans Recycle Bin, VSS Shadow Copies, NTFS $MFT, $UsnJrnl, and app traces. Read-only.", lang);
 
   const validItemIds = new Set(rawItems.map((i) => i.id));
   const activeSelectedIds = Array.from(selectedRecoveryIds).filter((id) =>
@@ -2017,9 +2257,10 @@ function recoveryView(d: Disk): string {
         <div class="section-title"><div><h2>${L("Nasıl tarayalım?", "Scan method", lang)}</h2><p>${L("Birini seçin, gerisini uygulama ayarlar", "Select mode — safe parameters are automatic", lang)}</p></div></div>
         ${volumeSelect(d)}
         ${recCard("quick", "search", L("Hızlı tarama", "Quick scan", lang), L("Yakın zamanda silinen dosya ve programları bulur.", "Finds recently deleted files, Recycle Bin, VSS copies, and app traces.", lang), L("Önce bunu", "Start here", lang))}
+        ${recCard("dev", "code", L("Geliştirici & Proje", "Developer & Project", lang), L(".env, kaynak kod, SQLite ve yapılandırma dosyalarını öncelikli tarar (salt okunur).", "Prioritizes .env, source code, SQLite DBs, and project configs (read-only).", lang), L("Vibe", "Dev", lang))}
         ${recCard("deep", "cpu", L("Derin tarama", "Deep signature carve", lang), `${L("Tüm boş alanı sektör sektör kazır; formatlanmış veya eski dosyaları da bulur.", "Carves unallocated space sector-by-sector for formatted or older files.", lang)}${!state?.admin ? L(" · Yönetici gerekir", " · Admin required", lang) : ""}`)}
         <div class="auto-budget">${icon("settings")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured", lang)}</strong><small>${e(recAuto)}</small></div></div>
-        ${button("start-recovery", recConfig.mode === "deep" ? L("Derin taramayı başlat", "Start Deep Scan", lang) : L("Hızlı taramayı başlat", "Start Quick Scan", lang), "recover", "primary full", startDisabled)}
+        ${button("start-recovery", recConfig.mode === "deep" ? L("Derin taramayı başlat", "Start Deep Scan", lang) : recConfig.mode === "dev" ? L("Geliştirici taramasını başlat", "Start Developer Scan", lang) : L("Hızlı taramayı başlat", "Start Quick Scan", lang), "recover", "primary full", startDisabled)}
         <p class="form-hint">${e(disabledReason(d) || (needsAdmin && !state?.admin ? L("Derin tarama için sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar for raw deep carving.", lang) : L("Tarama salt okunurdur; istediğiniz an durdurabilirsiniz.", "Scanning is read-only; stop anytime.", lang)))}</p>
       </article>
 
@@ -2125,6 +2366,10 @@ function currentPollSignature(): string {
     tierAnalysis,
     tierMoves,
     tierBusy: tierAnalyzing || tierTransferring,
+    devAnalysis,
+    devBusy: devScanning || devCleaning,
+    devFilter,
+    devCustomRoot,
   });
 }
 
@@ -2367,7 +2612,12 @@ async function openRecoveryPreview(
         res.width && res.height ? ` · ${res.width}×${res.height}` : "";
       body = `${repairBanner}<div class="preview-image-wrap"><img class="preview-image" src="${e(res.data_url)}" alt="${e(itemName)}"></div><p class="preview-meta">${e(res.mime)}${dims} · ${fmtBytes(res.size_bytes)}</p>`;
     } else if (res.kind === "text") {
-      body = `${repairBanner}<pre class="preview-text">${e(res.text)}</pre><p class="preview-meta">${fmtBytes(res.size_bytes)}${res.truncated ? ` · ${L("İlk 16 KiB gösteriliyor", "Showing first 16 KiB", lang)}` : ""}</p>`;
+      const maskedCount = Number(res.secrets_masked ?? 0);
+      const hasSecretMask = maskedCount > 0 && typeof res.raw_text === "string";
+      const secretBanner = hasSecretMask
+        ? `<div class="preview-secret-banner">${icon("lock")}<div><strong>${L(`${maskedCount} hassas satır (.env / API anahtarı) maskelendi`, `${maskedCount} sensitive line(s) (.env / API keys) masked`, lang)}</strong><p>${L("Kurtar dediğinizde orijinal içerik olduğu gibi kaydedilir.", "Restoring saves the original unmasked file bytes.", lang)}</p></div><button type="button" class="button compact quiet" id="toggle-secret-mask">${L("Gizli Değerleri Göster", "Reveal Secrets", lang)}</button></div>`
+        : "";
+      body = `${repairBanner}${secretBanner}<pre class="preview-text" id="preview-text-pre">${e(res.text)}</pre><p class="preview-meta">${fmtBytes(res.size_bytes)}${res.truncated ? ` · ${L("İlk 16 KiB gösteriliyor", "Showing first 16 KiB", lang)}` : ""}</p>`;
     } else if (res.kind === "binary") {
       const m = res.metadata ?? {};
       body = `<dl class="preview-kv">
@@ -2401,6 +2651,18 @@ async function openRecoveryPreview(
     dialog
       .querySelector("#close-result")!
       .addEventListener("click", () => dialog.close());
+    if (res.kind === "text" && res.secrets_masked && typeof res.raw_text === "string") {
+      let revealed = false;
+      const preEl = dialog.querySelector<HTMLPreElement>("#preview-text-pre");
+      const toggleBtn = dialog.querySelector<HTMLButtonElement>("#toggle-secret-mask");
+      toggleBtn?.addEventListener("click", () => {
+        revealed = !revealed;
+        if (preEl) preEl.textContent = revealed ? res.raw_text! : res.text;
+        toggleBtn.textContent = revealed
+          ? L("Gizli Değerleri Maskele", "Mask Secrets", lang)
+          : L("Gizli Değerleri Göster", "Reveal Secrets", lang);
+      });
+    }
     dialog.querySelector("#preview-restore")?.addEventListener("click", () => {
       dialog.close();
       void run(async () => {
@@ -2817,6 +3079,223 @@ async function analyzeStorageTiering() {
   }
 }
 
+async function analyzeDevWorkspace() {
+  const d = disk();
+  if (!d || devScanning || devCleaning || tierTransferring || pending) return;
+  const selectedLetter = letter || d.volumes[0]?.letter || "";
+  if (state?.source === "live" && !selectedLetter) {
+    toast(
+      L(
+        "Geliştirici taraması için seçili diskte NTFS bölüm eşlemesi gerekli.",
+        "An NTFS volume mapping is required for developer workspace analysis.",
+      ),
+      true,
+    );
+    return;
+  }
+  const diskId = d.id;
+  devScanning = true;
+  render();
+  try {
+    const res = await invoke<DevWorkspaceAnalysis>("analyze_dev_workspace", {
+      diskId,
+      letter: selectedLetter,
+      customRoot: devCustomRoot || null,
+    });
+    if (selected === diskId) {
+      devAnalysis = res;
+    }
+    const lang = getLang();
+    toast(
+      (lang === "en" ? res.summary_en : res.summary_tr) ||
+        L("Geliştirici alan analizi tamamlandı.", "Developer workspace scan completed."),
+    );
+  } catch (error) {
+    toast(String(error), true);
+  } finally {
+    devScanning = false;
+    render();
+  }
+}
+
+async function pickDevFolder() {
+  if (devScanning || devCleaning || pending) return;
+  try {
+    const picked = await invoke<string | null>("pick_dev_folder");
+    if (picked) {
+      devCustomRoot = picked;
+      render();
+      await analyzeDevWorkspace();
+    }
+  } catch (error) {
+    toast(String(error), true);
+  }
+}
+
+function cleanDevArtifact(
+  artifactPath: string,
+  confirmationToken: string,
+  label: string,
+  sizeBytes: number,
+) {
+  const d = disk();
+  if (!d || !canWrite(state) || !canStart(state, d) || devCleaning || tierTransferring) {
+    return;
+  }
+  const diskId = d.id;
+  confirm(
+    L(`"${label}" güvenle temizlensin mi?`, `Safely clean "${label}"?`),
+    L(
+      `${artifactPath} (${fmtBytes(sizeBytes)}) yalnızca yeniden üretilebilir derleme / önbellek dosyalarını içerir. Kaynak kod, .git ve .env dosyalarına dokunulmaz.`,
+      `${artifactPath} (${fmtBytes(sizeBytes)}) contains only rebuildable artifacts/caches. Source code, .git, and .env files remain untouched.`,
+    ),
+    async () => {
+      devCleaning = true;
+      render();
+      try {
+        const res = await invoke<{
+          freed_bytes?: number;
+          message_tr?: string;
+          message?: string;
+        }>("clean_dev_artifact", {
+          diskId,
+          artifactPath,
+          confirmation: confirmationToken,
+        });
+        if (devAnalysis && devAnalysis.disk_id === diskId) {
+          const normTarget = artifactPath.toLowerCase();
+          const projects = devAnalysis.projects.map((p) => {
+            const artifacts = p.artifacts.filter(
+              (a) => a.path.toLowerCase() !== normTarget,
+            );
+            return {
+              ...p,
+              artifacts,
+              artifact_bytes: artifacts.reduce((s, a) => s + a.size_bytes, 0),
+            };
+          });
+          const global_caches = devAnalysis.global_caches.filter(
+            (c) => c.path.toLowerCase() !== normTarget,
+          );
+          const total_artifact_bytes = projects.reduce(
+            (s, p) => s + p.artifact_bytes,
+            0,
+          );
+          const stale_artifact_bytes = projects
+            .filter((p) => p.stale)
+            .reduce((s, p) => s + p.artifact_bytes, 0);
+          const total_cache_bytes = global_caches
+            .filter((c) => !c.is_junction)
+            .reduce((s, c) => s + c.size_bytes, 0);
+          const reclaimable_cache = global_caches
+            .filter((c) => c.can_clean)
+            .reduce((s, c) => s + c.size_bytes, 0);
+          devAnalysis = {
+            ...devAnalysis,
+            projects,
+            global_caches,
+            total_artifact_bytes,
+            stale_artifact_bytes,
+            total_cache_bytes,
+            total_reclaimable_bytes: stale_artifact_bytes + reclaimable_cache,
+          };
+        }
+        const msg =
+          getLang() === "en"
+            ? res?.message ?? `${label} cleaned.`
+            : res?.message_tr ?? res?.message ?? `${label} temizlendi.`;
+        toast(msg);
+      } finally {
+        devCleaning = false;
+      }
+    },
+    {
+      mode: "mutating",
+      target: artifactPath,
+      apis: "Dev Allowlist Guard + Recursive Unlink (No Junction Traversal)",
+      writeBudget: `${fmtBytes(sizeBytes)} · ${L("Kaynak kod ve .env korunur", "Source code & .env protected")}`,
+      rollback: L(
+        "Silinen derleme önbelleği npm / cargo / pip / uv ile yeniden üretilebilir",
+        "Deleted cache/artifacts can be regenerated by npm / cargo / pip / uv",
+      ),
+      confirmationToken,
+    },
+  );
+}
+
+function offloadDevCache(cacheId: string) {
+  const d = disk();
+  if (!d || !devAnalysis || devAnalysis.disk_id !== d.id || tierTransferring || devCleaning) {
+    return;
+  }
+  const target = devAnalysis.offload_target;
+  const cache = devAnalysis.global_caches.find((c) => c.id === cacheId);
+  if (!cache || !target || !canMaintain(state, d) || !canStart(state, d)) return;
+  const diskId = d.id;
+  const targetLetter = target.letter;
+  const direction = target.direction || "to_archive";
+  const label = getLang() === "en" ? cache.name_en : cache.name;
+  const confirmationToken = `tier_relocate:${diskId}:${targetLetter}`;
+  confirm(
+    L(
+      `"${label}" ${targetLetter}: sürücüsüne Junction ile taşınsın mı?`,
+      `Offload "${label}" to ${targetLetter}: via NTFS Junction?`,
+    ),
+    L(
+      `${cache.path} (${fmtBytes(cache.size_bytes)}) → ${targetLetter}: sürücüsüne SHA-256 doğrulaması ile kopyalanacak ve orijinal yolda şeffaf NTFS Junction bırakılacak. Ollama / Cargo / Hugging Face yolları bozulmaz ve tek tıkla geri alınabilir.`,
+      `${cache.path} (${fmtBytes(cache.size_bytes)}) will be SHA-256 verified and moved to ${targetLetter}: with a transparent NTFS Junction at the original path. Ollama / Cargo / Hugging Face continue working seamlessly.`,
+    ),
+    async () => {
+      tierTransferring = true;
+      render();
+      try {
+        const rec = await invoke<TierMoveRecord>("relocate_tier_item", {
+          diskId,
+          sourcePath: cache.path,
+          targetLetter,
+          direction,
+          confirmation: confirmationToken,
+        });
+        tierMoves = [rec, ...tierMoves.filter((m) => m.id !== rec.id)];
+        if (devAnalysis && devAnalysis.disk_id === diskId) {
+          const global_caches = devAnalysis.global_caches.map((c) =>
+            c.id === cache.id
+              ? { ...c, is_junction: true, can_offload: false, can_clean: false }
+              : c,
+          );
+          devAnalysis = {
+            ...devAnalysis,
+            global_caches,
+            total_cache_bytes: global_caches
+              .filter((c) => !c.is_junction)
+              .reduce((s, c) => s + c.size_bytes, 0),
+          };
+        }
+        detailKey = "";
+        toast(
+          L(
+            `"${label}" ${targetLetter}: sürücüsüne taşındı (NTFS Junction aktif).`,
+            `"${label}" offloaded to ${targetLetter}: (NTFS Junction active).`,
+          ),
+        );
+      } finally {
+        tierTransferring = false;
+      }
+    },
+    {
+      mode: "mutating",
+      target: `${cache.path} → ${targetLetter}:\\SSD-Sentinel-Arsiv`,
+      apis: "SHA-256 Chunked Copy + Rename + FSCTL_SET_REPARSE_POINT (NTFS Junction)",
+      writeBudget: `${fmtBytes(cache.size_bytes)} · ≥10 GiB ${L("hedef boş alan rezervi", "target free reserve")}`,
+      rollback: L(
+        "Aktif Taşınmış Öğeler listesinden tek tıkla SHA-256 ile geri alınır",
+        "One-click SHA-256 verified rollback from Active Relocated Items",
+      ),
+      confirmationToken,
+    },
+  );
+}
+
 function startSmartTier(mode: "ssd_extent_optimize" | "hdd_outer_optimize") {
   const d = disk();
   if (!d || !canMaintain(state, d) || !canStart(state, d) || tierTransferring) return;
@@ -3082,8 +3561,20 @@ function startRecovery() {
   confirm(
     L("Kurtarma taraması başlatılsın mı?", "Start recovery scan?"),
     L(
-      `${d.model} · ${selectedLetter}: üzerinde ${recConfig.mode === "deep" ? "derin (tüm boş alan)" : "hızlı"} silinmiş dosya ve program taraması çalıştırılacak. Diske HİÇ yazma yapılmaz (salt okunur). Kurtarılan dosyaları her zaman farklı bir sürücüye kaydetmeniz gerekir.`,
-      `Runs a strictly read-only ${recConfig.mode === "deep" ? "deep signature carve" : "quick recovery"} scan on ${d.model} (${selectedLetter}:). Save any recovered output to a different physical drive.`,
+      `${d.model} · ${selectedLetter}: üzerinde ${
+        recConfig.mode === "deep"
+          ? "derin (tüm boş alan)"
+          : recConfig.mode === "dev"
+            ? "geliştirici (.env, kod ve veritabanı odaklı)"
+            : "hızlı"
+      } silinmiş dosya ve program taraması çalıştırılacak. Diske HİÇ yazma yapılmaz (salt okunur). Kurtarılan dosyaları her zaman farklı bir sürücüye kaydetmeniz gerekir.`,
+      `Runs a strictly read-only ${
+        recConfig.mode === "deep"
+          ? "deep signature carve"
+          : recConfig.mode === "dev"
+            ? "developer (.env, source code & DB) recovery"
+            : "quick recovery"
+      } scan on ${d.model} (${selectedLetter}:). Save any recovered output to a different physical drive.`,
     ),
     async () => {
       viewedJob = null;
@@ -3215,6 +3706,38 @@ function describeOptimization(
         `Removes .ssd-sentinel-quarantine marker files on ${target.split(":")[1] ?? ""}: so those clusters become allocatable again.`,
       ),
     ];
+  if (action === "long_paths")
+    return [
+      value === "rollback"
+        ? L("Windows uzun yol ayarı geri alınsın mı?", "Revert Windows Long Paths setting?")
+        : value === "enable"
+          ? L("Windows Uzun Yol Desteği (>260 karakter) açılsın mı?", "Enable Windows Long Paths (>260 chars)?")
+          : L("Windows Uzun Yol Desteği kapatılsın mı?", "Disable Windows Long Paths?"),
+      L(
+        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled kayıt değeri güncellenecek. Derin node_modules ve Cargo/Rust yollarındaki 260 karakter hatalarını önler; önceki değer SQLite kaydından geri alınabilir.",
+        "Updates HKLM\\...\\FileSystem\\LongPathsEnabled to prevent 260-character path failures in deep node_modules and Cargo trees; archived in SQLite for rollback.",
+      ),
+    ];
+  if (action === "ntfs_8dot3")
+    return [
+      value === "rollback"
+        ? L("NTFS 8.3 kısa dosya adı ayarı geri alınsın mı?", "Revert NTFS 8.3 short-name setting?")
+        : value === "disable"
+          ? L("NTFS 8.3 kısa dosya adı üretimi kapatılsın mı?", "Disable NTFS 8.3 short-name creation?")
+          : L("NTFS 8.3 ayarı birim bazlı varsayılana alınsın mı?", "Restore NTFS 8.3 default (per-volume)?"),
+      L(
+        "fsutil behavior set disable8dot3 komutu uygulanacak. Küçük dosya yoğun npm/pip/Cargo kurulumlarında metadata I/O yükünü azaltır; önceki ayar geri alınabilir.",
+        "Runs fsutil behavior set disable8dot3 to cut metadata I/O overhead during npm/pip/Cargo installs; reversible via SQLite rollback.",
+      ),
+    ];
+  if (action === "compact_wsl_vhdx")
+    return [
+      L("WSL2 / Docker VHDX sıkıştırılsın mı?", "Compact WSL2 / Docker VHDX?"),
+      L(
+        `Önce çalışan WSL/Docker oturumları kapatılacak (wsl --shutdown), ardından ${target} üzerinde salt-okunur bağlama + diskpart compact vdisk çalıştırılarak kullanılmayan boş alan geri kazanılacak. Çalışan konteyner veya açık WSL terminallerinizi kaydedin.`,
+        `Stops active WSL/Docker instances (wsl --shutdown), then attaches ${target} read-only and runs diskpart compact vdisk to reclaim sparse blocks. Save open WSL work first.`,
+      ),
+    ];
   return [
     L("Optimizasyon onaylansın mı?", "Confirm optimization?"),
     L(
@@ -3244,6 +3767,12 @@ function optimizeApiFor(action: string): string {
       return "Resize-Partition (extend)";
     case "release_quarantine":
       return "Remove .ssd-sentinel-quarantine markers";
+    case "long_paths":
+      return "RegSetKeyValueW (HKLM\\...\\FileSystem\\LongPathsEnabled)";
+    case "ntfs_8dot3":
+      return "fsutil.exe behavior set disable8dot3";
+    case "compact_wsl_vhdx":
+      return "wsl.exe --shutdown + diskpart.exe /s (attach vdisk readonly + compact vdisk)";
     default:
       return action;
   }
@@ -3339,6 +3868,9 @@ root.addEventListener("click", (event) => {
     healthForecast = null;
     surfaceCheckpoint = null;
     tierAnalysis = null;
+    devAnalysis = null;
+    devCustomRoot = "";
+    devFilter = "all";
     selectedRecoveryIds.clear();
     recoveryTabManual = false;
     lastRecoveryJobId = "";
@@ -3382,6 +3914,31 @@ root.addEventListener("click", (event) => {
     void copyText(cmd).then(() => {
       toast(L(`Komut panoya kopyalandı: ${cmd}`, `Command copied to clipboard: ${cmd}`));
     });
+    return;
+  }
+  if (target.dataset.copyText) {
+    const txt = target.dataset.copyText;
+    void copyText(txt).then(() => {
+      toast(L("Komutlar panoya kopyalandı.", "Commands copied to clipboard."));
+    });
+    return;
+  }
+  if (target.dataset.devFilter === "all" || target.dataset.devFilter === "stale") {
+    devFilter = target.dataset.devFilter;
+    render();
+    return;
+  }
+  if (target.dataset.devCleanPath && target.dataset.devCleanToken) {
+    cleanDevArtifact(
+      target.dataset.devCleanPath,
+      target.dataset.devCleanToken,
+      target.dataset.devCleanName ?? target.dataset.devCleanPath,
+      Number(target.dataset.devCleanBytes ?? 0),
+    );
+    return;
+  }
+  if (target.dataset.devOffloadId) {
+    offloadDevCache(target.dataset.devOffloadId);
     return;
   }
   if (target.dataset.recCat) {
@@ -3616,6 +4173,13 @@ root.addEventListener("click", (event) => {
     });
   else if (action === "start-autopilot") startAutopilot();
   else if (action === "analyze-tiering") void analyzeStorageTiering();
+  else if (action === "analyze-dev") void analyzeDevWorkspace();
+  else if (action === "pick-dev-folder") void pickDevFolder();
+  else if (action === "clear-dev-root") {
+    devCustomRoot = "";
+    render();
+    void analyzeDevWorkspace();
+  }
   else if (action === "start-recovery") startRecovery();
   else if (action === "rec-select-all") {
     const job = currentJob("recovery") ?? recoveryHistory[0] ?? null;
@@ -3774,6 +4338,9 @@ root.addEventListener("change", (event) => {
     opBounds = null;
     if (tierAnalysis && tierAnalysis.letter !== letter) {
       tierAnalysis = null;
+    }
+    if (devAnalysis && devAnalysis.letter !== letter) {
+      devAnalysis = null;
     }
     render();
   } else if (t.dataset.recSelect) {

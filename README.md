@@ -21,7 +21,7 @@
 <br/>
 
 <p align="center">
-  <img src="docs/screenshots/overview-dark.png" alt="SSD Sentinel Precision Storage Lab dark overview showing NVMe SMART health, telemetry, and command bar" width="920" />
+  <img src="docs/screenshots/overview-dark-en.png" alt="SSD Sentinel dark overview showing NVMe SMART health, Read-Only guard, telemetry, and endurance forecast" width="920" />
 </p>
 
 ---
@@ -41,6 +41,7 @@ Disk utilities carry real data-loss risk. **SSD Sentinel** is built from scratch
 | **Raw Disk Benchmark** | Built-in **Win32 IOCP Direct-I/O** (`FILE_FLAG_NO_BUFFERING \| OVERLAPPED`), SEQ/RND 4K MB/s, IOPS & µs latency with PCIe/SATA link bottleneck detection. |
 | **Surface Scan & Pinpoint Repair** | **Read-only raw LBA 200-zone map**, thermal (`53 °C`) & SMART cascade (`+8` reallocated) watchdogs, deterministic statistical triage ([`surface_triage.rs`](src-tauri/src/surface_triage.rs)), resumable checkpoints, `FSCTL_MOVE_FILE` relocation & `.ssd-sentinel-quarantine`. |
 | **Smart Storage Tiering** | Blocks classic SSD defrag; identifies cold SSD data & hot HDD folders (respecting 25 protected system paths & 10 GiB reserve), relocates with **SHA-256 verification + native `FSCTL_SET_REPARSE_POINT` NTFS Junctions** and one-click rollback. |
+| **Developer & WSL2 Storage** | Read-only radar for rebuildable project artifacts (`node_modules`, `target`, `.venv` — `.git`/`.env*` untouched), local LLM/package cache offloading via junctions, **WSL2/Docker `.vhdx` compaction**, and Win32 Long Paths / NTFS 8.3 toggles. |
 | **Forensic Recovery** | Strictly **read-only** `$MFT`, `$UsnJrnl`, `$I30` slack, VSS Shadow Copies, Recycle Bin & carving, **Deleted Apps & Games reconstruction**, plus JPEG/PNG/MP4 buffer header repair. |
 
 ---

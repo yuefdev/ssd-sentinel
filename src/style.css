@@ -4901,3 +4901,249 @@ dialog:has(.preview-modal) {
     margin-top: 4px;
   }
 }
+
+/* Developer & Vibe-Coding Workspace */
+.dev-workspace-card {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-left: 3px solid var(--ok);
+  background: var(--card);
+}
+.dev-analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.dev-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.dev-summary-grid > div {
+  padding: 11px 12px;
+  border-radius: 8px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.dev-summary-grid span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.dev-summary-grid strong {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dev-summary-grid small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--secondary);
+}
+.dev-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.dev-project-list,
+.dev-cache-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.dev-project-card,
+.dev-cache-row,
+.dev-vhdx-row {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.dev-project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dev-project-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.dev-project-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dev-project-meta strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dev-project-bytes {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.dev-artifact-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.dev-artifact-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  min-width: 0;
+  max-width: 100%;
+}
+.dev-artifact-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dev-artifact-info strong {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.dev-artifact-info small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.dev-cache-row,
+.dev-vhdx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.dev-cache-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.dev-guide-details {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+.dev-guide-details > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.dev-guide-details > summary::-webkit-details-marker {
+  display: none;
+}
+.dev-guide-details > summary > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.dev-guide-details > summary .icon:last-child {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.dev-guide-details[open] > summary .icon:last-child {
+  transform: rotate(180deg);
+}
+.dev-guide-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dev-guide-body p {
+  font-size: 11.5px;
+  color: var(--secondary);
+}
+.preview-secret-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  background: var(--amber-soft);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  font-size: 11.5px;
+}
+.preview-secret-banner .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.preview-secret-banner > div {
+  flex: 1;
+  min-width: 180px;
+}
+.preview-secret-banner p {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--secondary);
+}
+@media (max-width: 1000px) {
+  .dev-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .dev-summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .dev-project-head,
+  .dev-cache-row,
+  .dev-vhdx-row,
+  .dev-artifact-chip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .dev-artifact-chip {
+    width: 100%;
+  }
+  .dev-artifact-chip .button,
+  .dev-cache-actions,
+  .dev-cache-actions .button {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+    height: auto;
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+  .dev-workspace-card .pill {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+  }
+}

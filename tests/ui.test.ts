@@ -12,6 +12,9 @@ import {
   canMaintain,
   canOptimizeSystem,
   canWrite,
+  devCacheKindBadge,
+  devEnvSnippet,
+  devStackBadge,
   escape,
   evaluateBenchmarkSpeed,
   filterDeletedApps,
@@ -26,6 +29,7 @@ import {
   isWriteLocked,
   maskSerial,
   mediaStatusBadge,
+  ntfs8dot3Label,
   slcPressureBadge,
   tierCategoryBadge,
   tierScoreBadge,
@@ -631,4 +635,61 @@ test("read_only_guard locks mutating controls while leaving read-only discovery 
     connectionError: "",
   });
   assert.notEqual(sigLocked, sigUnlocked);
+});
+
+test("dev workspace helpers format stacks, cache kinds, 8.3 status, env snippet, and aiNaturalFilter dev tokens", () => {
+  assert.deepEqual(devStackBadge("Rust"), { label: "Rust", level: "warning" });
+  assert.deepEqual(devStackBadge("Node / JS"), { label: "Node / JS", level: "info" });
+  assert.deepEqual(devCacheKindBadge("ai_model", "tr"), {
+    label: "Yerel LLM",
+    level: "warning",
+  });
+  assert.deepEqual(devCacheKindBadge("pkg_cache", "en"), {
+    label: "Pkg Cache",
+    level: "info",
+  });
+  assert.equal(ntfs8dot3Label(1, "tr"), "Kapalı (Hızlı)");
+  assert.equal(ntfs8dot3Label(2, "en"), "Per-volume (Default)");
+  const snippet = devEnvSnippet("e:");
+  assert.match(snippet, /E:\\DevCaches\\cargo/);
+  assert.match(snippet, /OLLAMA_MODELS/);
+
+  const devRows = [
+    {
+      name: ".env.local",
+      category: "database_code",
+      confidence: 100,
+      extension: "local",
+      original_path: "D:\\Projects\\vibe\\.env.local",
+      ai_summary: "Ortam değişkenleri",
+    },
+    {
+      name: "App.tsx",
+      category: "database_code",
+      confidence: 92,
+      extension: "tsx",
+      original_path: "D:\\Projects\\vibe\\src\\App.tsx",
+      ai_summary: "React bileşeni",
+    },
+    {
+      name: "tatil.jpg",
+      category: "photo",
+      confidence: 88,
+      extension: "jpg",
+      original_path: "D:\\Photos\\tatil.jpg",
+      ai_summary: "Fotoğraf",
+    },
+  ];
+  assert.deepEqual(
+    aiNaturalFilter(devRows, "vibe").map((r) => r.name),
+    [".env.local", "App.tsx"],
+  );
+  assert.deepEqual(
+    aiNaturalFilter(devRows, ".env").map((r) => r.name),
+    [".env.local"],
+  );
+  assert.deepEqual(
+    aiNaturalFilter(devRows, "tsx").map((r) => r.name),
+    ["App.tsx"],
+  );
 });

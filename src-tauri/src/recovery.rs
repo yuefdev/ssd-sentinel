@@ -813,6 +813,106 @@ fn pe_subtype_label(pe: &PeIntelligence) -> String {
     }
 }
 
+fn file_name_lower(path_or_name: &str) -> String {
+    path_or_name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+pub fn is_env_filename(path_or_name: &str) -> bool {
+    let name = file_name_lower(path_or_name);
+    name == ".env" || name.starts_with(".env.")
+}
+
+pub fn is_sensitive_dev_file(name_or_path: &str) -> bool {
+    let name = file_name_lower(name_or_path);
+    is_env_filename(&name)
+        || matches!(
+            name.as_str(),
+            ".npmrc" | "secrets.json" | "secrets.yaml" | "secrets.yml" | "credentials.json"
+        )
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+}
+
+pub fn is_dev_project_file(full_path: &str, ext: &str) -> bool {
+    let name = file_name_lower(full_path);
+    if is_env_filename(&name)
+        || matches!(
+            name.as_str(),
+            ".gitignore"
+                | ".dockerignore"
+                | ".npmrc"
+                | "dockerfile"
+                | "docker-compose.yml"
+                | "docker-compose.yaml"
+                | "makefile"
+                | "cargo.toml"
+                | "package.json"
+                | "tsconfig.json"
+                | "pyproject.toml"
+        )
+    {
+        return true;
+    }
+    let lower_ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    matches!(
+        lower_ext.as_str(),
+        "tsx"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "vue"
+            | "svelte"
+            | "astro"
+            | "go"
+            | "java"
+            | "kt"
+            | "kts"
+            | "swift"
+            | "rb"
+            | "php"
+            | "c"
+            | "h"
+            | "hpp"
+            | "prisma"
+            | "graphql"
+            | "gql"
+            | "proto"
+            | "tf"
+            | "hcl"
+            | "sh"
+            | "scss"
+            | "sass"
+            | "less"
+            | "env"
+            | "sql"
+            | "sqlite"
+            | "sqlite3"
+            | "db"
+            | "duckdb"
+            | "rs"
+            | "ts"
+            | "js"
+            | "py"
+            | "json"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "md"
+            | "cpp"
+            | "cs"
+            | "html"
+            | "css"
+            | "xml"
+            | "ini"
+            | "cfg"
+    )
+}
+
 pub fn category_for_file(
     ext: &str,
     full_path: &str,
@@ -821,6 +921,23 @@ pub fn category_for_file(
 ) -> (&'static str, String) {
     let lower_ext = ext.trim_start_matches('.').to_ascii_lowercase();
     let lower_path = full_path.to_ascii_lowercase();
+    let fname = file_name_lower(full_path);
+
+    if is_env_filename(&fname) {
+        return ("database_code", "Ortam Değişkenleri (.env)".into());
+    }
+    if matches!(
+        fname.as_str(),
+        ".gitignore"
+            | ".dockerignore"
+            | ".npmrc"
+            | "dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "makefile"
+    ) {
+        return ("database_code", format!("Proje Yapılandırması ({fname})"));
+    }
 
     if let Some(p) = pe {
         let sub = pe_subtype_label(p);
@@ -863,11 +980,14 @@ pub fn category_for_file(
         "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "cab" | "iso" => {
             ("archive", format!("Sıkıştırılmış Arşiv (.{lower_ext})"))
         }
-        "sqlite" | "sqlite3" | "db" | "mdb" | "sql" | "bak" => {
+        "sqlite" | "sqlite3" | "db" | "mdb" | "sql" | "bak" | "duckdb" => {
             ("database_code", format!("Veritabanı (.{lower_ext})"))
         }
-        "json" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "rs" | "ts" | "js" | "py"
-        | "cs" | "cpp" | "html" | "css" => (
+        "json" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "rs" | "ts" | "tsx" | "js"
+        | "jsx" | "mjs" | "cjs" | "vue" | "svelte" | "astro" | "py" | "go" | "java" | "kt"
+        | "kts" | "swift" | "rb" | "php" | "c" | "h" | "hpp" | "cs" | "cpp" | "html" | "css"
+        | "scss" | "sass" | "less" | "prisma" | "graphql" | "gql" | "proto" | "tf" | "hcl"
+        | "sh" | "env" => (
             "database_code",
             format!("Kod / Yapılandırma (.{lower_ext})"),
         ),
@@ -1594,6 +1714,9 @@ fn is_previewable_text_ext(ext: &str) -> bool {
             | "jsx"
             | "mjs"
             | "cjs"
+            | "vue"
+            | "svelte"
+            | "astro"
             | "py"
             | "cs"
             | "cpp"
@@ -1601,13 +1724,24 @@ fn is_previewable_text_ext(ext: &str) -> bool {
             | "h"
             | "hpp"
             | "java"
+            | "kt"
+            | "kts"
             | "go"
             | "rb"
             | "php"
+            | "swift"
+            | "prisma"
+            | "graphql"
+            | "gql"
+            | "proto"
+            | "tf"
+            | "hcl"
             | "html"
             | "htm"
             | "css"
             | "scss"
+            | "sass"
+            | "less"
             | "bat"
             | "cmd"
             | "ps1"
@@ -1616,6 +1750,156 @@ fn is_previewable_text_ext(ext: &str) -> bool {
             | "svg"
             | "rtf"
     )
+}
+
+fn is_previewable_dev_name(path_or_name: &str) -> bool {
+    let fname = file_name_lower(path_or_name);
+    is_env_filename(&fname)
+        || matches!(
+            fname.as_str(),
+            ".gitignore"
+                | ".dockerignore"
+                | ".npmrc"
+                | "dockerfile"
+                | "docker-compose.yml"
+                | "docker-compose.yaml"
+                | "makefile"
+        )
+}
+
+fn is_benign_env_key(key: &str) -> bool {
+    matches!(
+        key,
+        "NODE_ENV"
+            | "PORT"
+            | "HOST"
+            | "DEBUG"
+            | "TZ"
+            | "LANG"
+            | "LOG_LEVEL"
+            | "ENVIRONMENT"
+            | "APP_ENV"
+    )
+}
+
+fn is_sensitive_key_name(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        "api_key",
+        "apikey",
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "private_key",
+        "database_url",
+        "connection_string",
+        "client_secret",
+        "access_key",
+        "auth_token",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+/// Masks secret values inside read-only text previews without altering restored file bytes.
+pub fn mask_sensitive_lines(text: &str, is_env_file: bool) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut masked = 0usize;
+    let mut in_pem = false;
+
+    for chunk in text.split_inclusive('\n') {
+        let (line, nl) = if let Some(stripped) = chunk.strip_suffix("\r\n") {
+            (stripped, "\r\n")
+        } else if let Some(stripped) = chunk.strip_suffix('\n') {
+            (stripped, "\n")
+        } else {
+            (chunk, "")
+        };
+        let trimmed = line.trim();
+        let upper = trimmed.to_ascii_uppercase();
+
+        if upper.contains("-----BEGIN") && upper.contains("PRIVATE KEY-----") {
+            in_pem = true;
+            out.push_str(line);
+            out.push_str(nl);
+            continue;
+        }
+        if in_pem {
+            if upper.contains("-----END") && upper.contains("PRIVATE KEY-----") {
+                in_pem = false;
+                out.push_str(line);
+            } else {
+                masked += 1;
+                out.push_str("••••••••");
+            }
+            out.push_str(nl);
+            continue;
+        }
+
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            out.push_str(line);
+            out.push_str(nl);
+            continue;
+        }
+
+        let sep_idx = if is_env_file {
+            line.find('=')
+        } else {
+            line.find(['=', ':'])
+        };
+
+        let mut replaced = false;
+        if let Some(idx) = sep_idx {
+            let (lhs, rhs_with_sep) = line.split_at(idx);
+            let sep = &rhs_with_sep[..1];
+            let rhs = &rhs_with_sep[1..];
+            let key_raw = lhs.trim();
+            let key_clean = key_raw
+                .strip_prefix("export ")
+                .unwrap_or(key_raw)
+                .trim()
+                .trim_matches(['"', '\''])
+                .trim();
+            let val_trim = rhs.trim();
+            let has_non_empty_val = !val_trim.is_empty()
+                && !matches!(val_trim, "{" | "[" | "null" | "\"\"" | "''" | "|");
+            let should_mask = if !key_clean.is_empty() && has_non_empty_val {
+                if is_env_file {
+                    !is_benign_env_key(&key_clean.to_ascii_uppercase())
+                } else {
+                    is_sensitive_key_name(key_clean)
+                }
+            } else {
+                false
+            };
+            if should_mask {
+                let trailing_comma = if rhs.trim_end().ends_with(',') {
+                    ","
+                } else {
+                    ""
+                };
+                let space_after = if sep == ":" && rhs.starts_with(' ') {
+                    " "
+                } else {
+                    ""
+                };
+                out.push_str(lhs);
+                out.push_str(sep);
+                out.push_str(space_after);
+                out.push_str("••••••••");
+                out.push_str(trailing_comma);
+                masked += 1;
+                replaced = true;
+            }
+        }
+        if !replaced {
+            out.push_str(line);
+        }
+        out.push_str(nl);
+    }
+
+    (out, masked)
 }
 
 fn decode_utf8_preview(bytes: &[u8], max_bytes: usize) -> Option<String> {
@@ -1857,7 +2141,10 @@ pub fn preview_item(job: &Value, item_id: &str) -> Result<Value, String> {
             | "ico"
             | "pak"
     );
-    if is_previewable_text_ext(&ext) || !is_known_binary {
+    let item_name = item["name"].as_str().unwrap_or("");
+    let orig_path = item["original_path"].as_str().unwrap_or("");
+    let dev_text_name = is_previewable_dev_name(item_name) || is_previewable_dev_name(orig_path);
+    if is_previewable_text_ext(&ext) || dev_text_name || !is_known_binary {
         match read_item_bytes_readonly(source_letter, item, MAX_PREVIEW_TEXT_BYTES + 1) {
             Ok((raw, actual_size)) => {
                 if !raw.is_empty()
@@ -1866,6 +2153,18 @@ pub fn preview_item(job: &Value, item_id: &str) -> Result<Value, String> {
                     if let Some(text) = decode_utf8_preview(&raw, MAX_PREVIEW_TEXT_BYTES) {
                         let truncated = actual_size > MAX_PREVIEW_TEXT_BYTES as u64
                             || raw.len() > MAX_PREVIEW_TEXT_BYTES;
+                        let is_env = is_env_filename(item_name) || is_env_filename(orig_path);
+                        let (masked_text, masked_count) = mask_sensitive_lines(&text, is_env);
+                        if masked_count > 0 {
+                            return Ok(json!({
+                                "kind": "text",
+                                "text": masked_text,
+                                "raw_text": text,
+                                "secrets_masked": masked_count,
+                                "truncated": truncated,
+                                "size_bytes": actual_size.max(raw.len() as u64)
+                            }));
+                        }
                         return Ok(json!({
                             "kind": "text",
                             "text": text,
@@ -1876,7 +2175,7 @@ pub fn preview_item(job: &Value, item_id: &str) -> Result<Value, String> {
                 }
             }
             Err(reason) => {
-                if is_previewable_text_ext(&ext) {
+                if is_previewable_text_ext(&ext) || dev_text_name {
                     return Ok(json!({
                         "kind": "unavailable",
                         "reason": reason
@@ -3039,6 +3338,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
                 core,
                 &request.letter,
                 mode == "apps_only",
+                mode == "dev",
                 is_ssd,
                 max_records,
             ) {
@@ -3080,6 +3380,9 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
                     continue;
                 }
                 if mode == "apps_only" && !matches!(ext.as_str(), "exe" | "msi" | "msix") {
+                    continue;
+                }
+                if mode == "dev" && !is_dev_project_file(&full_path, &ext) {
                     continue;
                 }
                 if existing_paths.insert(full_path.to_ascii_lowercase()) {
@@ -3255,10 +3558,20 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
     );
     if mode == "apps_only" {
         items.retain(|i| matches!(i.category.as_str(), "exe_setup" | "game_portable"));
+    } else if mode == "dev" {
+        items.retain(|i| {
+            i.category == "database_code"
+                || is_dev_project_file(&i.original_path, &i.extension)
+                || is_dev_project_file(&i.name, &i.extension)
+        });
     }
     items.sort_by(|a, b| {
         let a_vss = a.source == "vss_shadow";
         let b_vss = b.source == "vss_shadow";
+        let a_env =
+            mode == "dev" && (is_env_filename(&a.name) || is_env_filename(&a.original_path));
+        let b_env =
+            mode == "dev" && (is_env_filename(&b.name) || is_env_filename(&b.original_path));
         let a_app = matches!(a.category.as_str(), "exe_setup" | "game_portable");
         let b_app = matches!(b.category.as_str(), "exe_setup" | "game_portable");
         let a_sys = a.category == "system_lib";
@@ -3266,6 +3579,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         b.openable
             .cmp(&a.openable)
             .then_with(|| b_vss.cmp(&a_vss))
+            .then_with(|| b_env.cmp(&a_env))
             .then_with(|| a_sys.cmp(&b_sys))
             .then_with(|| b_app.cmp(&a_app))
             .then_with(|| b.confidence.cmp(&a.confidence))
@@ -3273,6 +3587,14 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
     });
     items.truncate(MAX_RESULTS);
 
+    let dev_files_found = items
+        .iter()
+        .filter(|i| {
+            i.category == "database_code"
+                || is_dev_project_file(&i.original_path, &i.extension)
+                || is_dev_project_file(&i.name, &i.extension)
+        })
+        .count();
     let high_conf = items
         .iter()
         .filter(|i| i.openable && i.confidence >= 75 && i.category != "system_lib")
@@ -3313,6 +3635,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         "media_repairable": media_repairable,
         "media_unrecoverable": media_unrecoverable,
         "deleted_apps": apps.len(),
+        "dev_files_found": dev_files_found,
         "scope": "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt)."
     });
     Ok(())
@@ -3641,13 +3964,19 @@ mod win {
     fn candidate_priority(name: &str, full_path: &str, size: u64) -> i32 {
         let ext = extension_of(name);
         let lower_path = full_path.to_ascii_lowercase();
-        let mut score = match ext.as_str() {
-            "exe" | "msi" | "msix" | "apk" => 120,
-            "pdf" | "docx" | "xlsx" | "pptx" | "doc" | "xls" => 80,
-            "jpg" | "jpeg" | "png" | "mp4" | "mkv" | "mov" | "zip" | "rar" | "7z" | "sqlite"
-            | "sqlite3" | "db" => 70,
-            "dll" | "sys" | "bat" | "cmd" | "ps1" => -40,
-            _ => 30,
+        let mut score = if is_env_filename(name) {
+            115
+        } else {
+            match ext.as_str() {
+                "exe" | "msi" | "msix" | "apk" => 120,
+                "pdf" | "docx" | "xlsx" | "pptx" | "doc" | "xls" => 80,
+                "jpg" | "jpeg" | "png" | "mp4" | "mkv" | "mov" | "zip" | "rar" | "7z"
+                | "sqlite" | "sqlite3" | "db" | "duckdb" | "sql" => 75,
+                "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "json" | "toml" | "yaml"
+                | "yml" | "prisma" | "env" => 65,
+                "dll" | "sys" | "bat" | "cmd" | "ps1" => -40,
+                _ => 30,
+            }
         };
         if is_game_path(&lower_path) {
             score += 40;
@@ -3677,6 +4006,7 @@ mod win {
         core: &Core,
         letter: &str,
         apps_only: bool,
+        dev_only: bool,
         is_ssd: bool,
         max_records: usize,
     ) -> Result<MftScanResult, String> {
@@ -3789,6 +4119,9 @@ mod win {
                     return None;
                 }
                 if apps_only && !matches!(ext.as_str(), "exe" | "msi" | "msix") {
+                    return None;
+                }
+                if dev_only && !is_dev_project_file(&full_path, &ext) {
                     return None;
                 }
                 let priority = candidate_priority(&parsed.name, &full_path, parsed.real_size);
@@ -5200,5 +5533,85 @@ mod tests {
             std::fs::read(dst_dir.join("from_rb.txt")).unwrap(),
             b"cop kutusu"
         );
+    }
+
+    #[test]
+    fn dev_recovery_classifies_dotfiles_and_masks_secret_previews_without_touching_disk() {
+        assert_eq!(
+            category_for_file("", "C:\\Dev\\App\\.env", b"", None).0,
+            "database_code"
+        );
+        assert_eq!(
+            category_for_file("local", "C:\\Dev\\App\\.env.local", b"", None).0,
+            "database_code"
+        );
+        assert_eq!(
+            category_for_file("", "C:\\Dev\\App\\Dockerfile", b"", None).0,
+            "database_code"
+        );
+        assert_eq!(
+            category_for_file("tsx", "C:\\Dev\\App\\src\\App.tsx", b"", None).0,
+            "database_code"
+        );
+        assert_eq!(
+            category_for_file("prisma", "C:\\Dev\\App\\prisma\\schema.prisma", b"", None).0,
+            "database_code"
+        );
+        assert_eq!(
+            category_for_file("duckdb", "C:\\Dev\\App\\dev.duckdb", b"", None).0,
+            "database_code"
+        );
+        assert!(is_dev_project_file("C:\\Dev\\App\\.env", ""));
+        assert!(is_dev_project_file("C:\\Dev\\App\\.gitignore", "gitignore"));
+        assert!(!is_dev_project_file("C:\\Photos\\vacation.jpg", "jpg"));
+
+        let env_raw = "NODE_ENV=development\nPORT=3000\nOPENAI_API_KEY=sk-proj-12345\nDATABASE_URL=postgres://user:pass@localhost/db\n";
+        let (masked_env, count_env) = mask_sensitive_lines(env_raw, true);
+        assert_eq!(count_env, 2);
+        assert!(masked_env.contains("NODE_ENV=development"));
+        assert!(masked_env.contains("PORT=3000"));
+        assert!(masked_env.contains("OPENAI_API_KEY=••••••••"));
+        assert!(masked_env.contains("DATABASE_URL=••••••••"));
+        assert!(!masked_env.contains("sk-proj-12345"));
+
+        let json_raw = "{\n  \"port\": 8080,\n  \"api_key\": \"top-secret\",\n  \"pem\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\"\n}\n";
+        let (masked_json, count_json) = mask_sensitive_lines(json_raw, false);
+        assert!(count_json >= 1);
+        assert!(masked_json.contains("\"port\": 8080"));
+        assert!(!masked_json.contains("top-secret"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let env_file = tmp.path().join(".env.local");
+        std::fs::write(&env_file, env_raw).unwrap();
+        let job = json!({
+            "letter": "D",
+            "recovery_items": [{
+                "id": "dev-env-1",
+                "name": ".env.local",
+                "original_path": "D:\\Dev\\App\\.env.local",
+                "extension": "local",
+                "category": "database_code",
+                "source": "recycle_bin",
+                "size_bytes": env_raw.len(),
+                "trim_zeroed": false,
+                "source_letter": "D",
+                "locator": { "r_path": env_file.to_string_lossy() }
+            }]
+        });
+        let preview = preview_item(&job, "dev-env-1").unwrap();
+        assert_eq!(preview["kind"], "text");
+        assert_eq!(preview["secrets_masked"], 2);
+        assert!(!preview["text"].as_str().unwrap().contains("sk-proj-12345"));
+        assert!(preview["raw_text"]
+            .as_str()
+            .unwrap()
+            .contains("sk-proj-12345"));
+        assert_eq!(std::fs::read_to_string(&env_file).unwrap(), env_raw);
+
+        assert!(crate::jobs::validate_options(
+            "recovery",
+            &json!({ "mode": "dev", "size_mib": "auto" })
+        )
+        .is_ok());
     }
 }

@@ -176,7 +176,7 @@ fn strip_verbatim(p: &Path) -> PathBuf {
     }
 }
 
-fn is_forbidden_in_test_sandbox(path: &Path, is_dir_hint: Option<bool>) -> bool {
+pub(crate) fn is_forbidden_in_test_sandbox(path: &Path, is_dir_hint: Option<bool>) -> bool {
     if path.components().any(|c| matches!(c, Component::ParentDir)) || is_existing_reparse(path) {
         return true;
     }
@@ -1394,8 +1394,8 @@ pub fn relocate_item_with_progress(
     cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, u64, u64, u64, &str),
 ) -> Result<Value, String> {
-    if !matches!(direction, "to_hdd" | "to_ssd") {
-        return Err("Geçersiz katmanlama yönü (to_hdd veya to_ssd olmalı).".into());
+    if !matches!(direction, "to_hdd" | "to_ssd" | "to_archive") {
+        return Err("Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).".into());
     }
     if target_letter.len() != 1 || !target_letter.as_bytes()[0].is_ascii_uppercase() {
         return Err("Geçersiz hedef bölüm harfi.".into());
@@ -1481,8 +1481,8 @@ pub fn relocate_item_into_dir_with_cancel(
     cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, u64, u64, u64, &str),
 ) -> Result<Value, String> {
-    if !matches!(direction, "to_hdd" | "to_ssd") {
-        return Err("Geçersiz katmanlama yönü (to_hdd veya to_ssd olmalı).".into());
+    if !matches!(direction, "to_hdd" | "to_ssd" | "to_archive") {
+        return Err("Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).".into());
     }
     let meta = std::fs::symlink_metadata(source_path)
         .map_err(|_| "Kaynak dosya veya klasör bulunamadı.".to_owned())?;

@@ -47,6 +47,10 @@ const paths: Record<string, string> = {
     '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
   reset:
     '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  code:
+    '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  trash:
+    '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
 };
 export const icon = (name: string, cls = "") =>
   `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.disk}</svg>`;

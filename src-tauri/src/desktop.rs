@@ -149,6 +149,46 @@ fn list_tier_moves(core: State<'_, Arc<Core>>) -> Result<Value, String> {
     core.list_tier_moves()
 }
 #[tauri::command]
+async fn analyze_dev_workspace(
+    core: State<'_, Arc<Core>>,
+    disk_id: String,
+    letter: String,
+    custom_root: Option<String>,
+) -> Result<Value, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.analyze_dev_workspace(&disk_id, &letter, custom_root.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn clean_dev_artifact(
+    core: State<'_, Arc<Core>>,
+    disk_id: String,
+    artifact_path: String,
+    confirmation: String,
+) -> Result<Value, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.clean_dev_artifact(&disk_id, &artifact_path, &confirmation)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn pick_dev_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected) = app.dialog().file().blocking_pick_folder() else {
+            return Ok(None);
+        };
+        let path = selected.into_path().map_err(|e| e.to_string())?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 fn restart_as_admin(app: tauri::AppHandle) -> Result<Value, String> {
     #[cfg(windows)]
     {
@@ -1172,6 +1212,9 @@ pub fn run() {
             relocate_tier_item,
             rollback_tier_move,
             list_tier_moves,
+            analyze_dev_workspace,
+            clean_dev_artifact,
+            pick_dev_folder,
             restart_as_admin,
             check_updates,
             open_release_url,

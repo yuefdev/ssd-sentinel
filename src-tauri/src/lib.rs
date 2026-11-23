@@ -1,4 +1,5 @@
 pub mod core;
+pub mod dev_workspace;
 pub mod forensics;
 pub mod jobs;
 pub mod media_repair;

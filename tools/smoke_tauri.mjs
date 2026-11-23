@@ -270,6 +270,44 @@ try {
             message_tr: "Öğe SHA-256 doğrulaması ile orijinal konumuna geri alındı.",
           };
         }
+        if (cmd === "analyze_dev_workspace") {
+          const pre =
+            window.__fixture.devAnalyses &&
+            window.__fixture.devAnalyses[args.diskId];
+          if (pre) return structuredClone(pre);
+          return {
+            disk_id: args.diskId,
+            letter: args.letter || "",
+            replay: window.__fixture.state.source === "replay",
+            scanned_roots: [],
+            scan_ms: 0,
+            truncated: false,
+            total_artifact_bytes: 0,
+            stale_artifact_bytes: 0,
+            total_cache_bytes: 0,
+            total_vhdx_bytes: 0,
+            total_reclaimable_bytes: 0,
+            offload_target: null,
+            projects: [],
+            global_caches: [],
+            vhdx_files: [],
+            summary_tr:
+              "Kayıt modunda canlı proje taraması kapalıdır; canlı bir makinede proje ve önbellek analizi etkinleşir.",
+            summary_en:
+              "Live project scanning is disabled in snapshot replay; switch to a live machine to analyze projects and caches.",
+          };
+        }
+        if (cmd === "clean_dev_artifact")
+          return {
+            status: "completed",
+            path: args.artifactPath,
+            freed_bytes: 1_500_000_000,
+            removed_files: 4200,
+            root_removed: true,
+            message_tr: `${args.artifactPath} temizlendi: 1,4 GiB serbest bırakıldı.`,
+            message: `${args.artifactPath} cleaned: 1.4 GiB freed.`,
+          };
+        if (cmd === "pick_dev_folder") return "C:\\Users\\Demo\\Projects";
         if (cmd === "get_health_forecast")
           return structuredClone(
             (window.__fixture.forecasts &&
@@ -324,6 +362,17 @@ try {
               text: "Fatura No: 2026-11-18\nToplam: 1.250 TL",
               truncated: false,
               size_bytes: 40,
+            };
+          }
+          if (args.itemId === "rec-env") {
+            return {
+              kind: "text",
+              text: "NODE_ENV=development\nOPENAI_API_KEY=••••••••\nDATABASE_URL=••••••••",
+              raw_text:
+                "NODE_ENV=development\nOPENAI_API_KEY=sk-demo-12345\nDATABASE_URL=postgres://dev:pw@localhost/app",
+              secrets_masked: 2,
+              truncated: false,
+              size_bytes: 95,
             };
           }
           return {
@@ -1603,6 +1652,235 @@ try {
   checks.push(
     "Recovery Center 2-tab UI, Lost Apps filters/details, media auto-repair badges, hidden unopenable media toggle, preview modal, and batch folder restore verified",
   );
+  // Developer & Vibe-Coding suite smoke verification (Dev Workspace, LongPaths/8.3, VHDX Compact, Dev Recovery & .env secret masking)
+  await page.evaluate(() => {
+    const s = window.__fixture.state;
+    const ssd = s.disks[1];
+    const hdd = s.disks[0];
+    s.windows = {
+      ...(s.windows || {}),
+      trim_enabled: true,
+      system_tuning: {
+        ...(s.windows?.system_tuning || {}),
+        trim_enabled: true,
+        long_paths_enabled: false,
+        ntfs_8dot3_creation: 2,
+        dev_drive_supported: true,
+      },
+    };
+    window.__fixture.devAnalyses = {
+      [ssd.id]: {
+        disk_id: ssd.id,
+        letter: "C",
+        replay: false,
+        scanned_roots: ["C:\\Users\\Demo\\Projects"],
+        scan_ms: 85,
+        truncated: false,
+        total_artifact_bytes: 6_200_000_000,
+        stale_artifact_bytes: 4_800_000_000,
+        total_cache_bytes: 9_400_000_000,
+        total_vhdx_bytes: 28_000_000_000,
+        total_reclaimable_bytes: 5_700_000_000,
+        offload_target: {
+          disk_id: hdd.id,
+          model: hdd.model,
+          letter: "E",
+          type: "HDD",
+          free_bytes: 240e9,
+          direction: "to_archive",
+        },
+        projects: [
+          {
+            id: "prj-vibe",
+            name: "vibe-saas",
+            path: "C:\\Users\\Demo\\Projects\\vibe-saas",
+            stack: "Node / JS",
+            days_untouched: 21,
+            stale: true,
+            has_git: true,
+            has_env: true,
+            recent_git_edit: true,
+            artifact_bytes: 4_800_000_000,
+            artifacts: [
+              {
+                id: "art-nm",
+                name: "node_modules",
+                path: "C:\\Users\\Demo\\Projects\\vibe-saas\\node_modules",
+                size_bytes: 1_500_000_000,
+                file_count: 4200,
+                clean_token: `dev_clean:${ssd.id}:abcdef0123456789`,
+              },
+              {
+                id: "art-next",
+                name: ".next",
+                path: "C:\\Users\\Demo\\Projects\\vibe-saas\\.next",
+                size_bytes: 3_300_000_000,
+                file_count: 850,
+                clean_token: `dev_clean:${ssd.id}:1234567890abcdef`,
+              },
+            ],
+          },
+          {
+            id: "prj-api",
+            name: "fast-api",
+            path: "C:\\Users\\Demo\\Projects\\fast-api",
+            stack: "Python",
+            days_untouched: 2,
+            stale: false,
+            has_git: true,
+            has_env: false,
+            recent_git_edit: false,
+            artifact_bytes: 1_400_000_000,
+            artifacts: [
+              {
+                id: "art-venv",
+                name: ".venv",
+                path: "C:\\Users\\Demo\\Projects\\fast-api\\.venv",
+                size_bytes: 1_400_000_000,
+                file_count: 1900,
+                clean_token: `dev_clean:${ssd.id}:fedcba9876543210`,
+              },
+            ],
+          },
+        ],
+        global_caches: [
+          {
+            id: "cache-ollama",
+            name: "Ollama yerel LLM modelleri",
+            name_en: "Ollama local LLM models",
+            kind: "ai_model",
+            path: "C:\\Users\\Demo\\.ollama\\models",
+            size_bytes: 8_500_000_000,
+            file_count: 14,
+            days_untouched: 5,
+            is_junction: false,
+            can_offload: true,
+            can_clean: false,
+            clean_token: null,
+            note_tr: "NTFS Junction ile ikinci diske taşınabilir.",
+            note_en: "Can move to another drive via NTFS Junction.",
+          },
+          {
+            id: "cache-npm",
+            name: "npm önbelleği",
+            name_en: "npm cache",
+            kind: "pkg_cache",
+            path: "C:\\Users\\Demo\\.npm",
+            size_bytes: 900_000_000,
+            file_count: 3200,
+            days_untouched: 1,
+            is_junction: false,
+            can_offload: true,
+            can_clean: true,
+            clean_token: `dev_clean:${ssd.id}:9988776655443322`,
+            note_tr: "npm install sırasında yeniden oluşur.",
+            note_en: "Rebuilt automatically by npm install.",
+          },
+        ],
+        vhdx_files: [
+          {
+            id: "vhdx-wsl",
+            name: "ext4.vhdx",
+            kind: "wsl_vhdx",
+            path: "C:\\Users\\Demo\\AppData\\Local\\wsl\\ubuntu\\ext4.vhdx",
+            drive_letter: "C",
+            size_bytes: 28_000_000_000,
+            modified_at: "2026-11-20T10:00:00Z",
+          },
+        ],
+        summary_tr: "2 proje ve yerel model önbelleği bulundu.",
+        summary_en: "2 projects and local model caches found.",
+      },
+    };
+    const recJob = window.__fixture.jobs.find((j) => j.id === "sim-recovery-1");
+    if (recJob) {
+      recJob.recovery_items.push({
+        id: "rec-env",
+        name: ".env.local",
+        original_path: "D:\\Projects\\vibe-saas\\.env.local",
+        extension: "local",
+        category: "database_code",
+        sub_type: "Ortam Değişkenleri (.env)",
+        size_bytes: 95,
+        deleted_at: "2026-11-18T11:40:00Z",
+        source: "vss_shadow",
+        confidence: 100,
+        status_label: "VSS Gölge Kopya (%100 Sağlam)",
+        entropy: 4.5,
+        trim_zeroed: false,
+        ai_summary: "Geliştirici ortam değişkenleri dosyası.",
+        source_letter: "D",
+        openable: true,
+      });
+    }
+  });
+  await page.locator(".disk-tile").nth(1).click();
+  await page.locator('[data-page="optimize"]').first().click();
+  await expect(page.locator("#dev-workspace-card")).toBeVisible();
+  await page.locator('[data-action="analyze-dev"]').click();
+  await expect(page.locator("#dev-workspace-card")).toContainText("vibe-saas");
+  await expect(page.locator("#dev-workspace-card")).toContainText(".env korundu");
+  await expect(page.locator("#dev-workspace-card")).toContainText("Ollama yerel LLM");
+  await expect(page.locator("#dev-workspace-card")).toContainText("ext4.vhdx");
+  await page.locator('[data-dev-filter="stale"]').click();
+  await expect(page.locator(".dev-project-card")).toHaveCount(1);
+  await page.locator('[data-dev-filter="all"]').click();
+  await expect(page.locator(".dev-project-card")).toHaveCount(2);
+  // Safe Clean Dry-Run + IPC
+  await page.locator('[data-dev-clean-path*="node_modules"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText("dev_clean:");
+  await page.locator("#confirm-run").click();
+  await expect(page.locator("#dev-workspace-card")).not.toContainText("vibe-saas/node_modules");
+  const cleanCall = await page.evaluate(() =>
+    window.__calls.filter((c) => c.cmd === "clean_dev_artifact").at(-1),
+  );
+  if (!cleanCall || !String(cleanCall.args.artifactPath).endsWith("node_modules")) {
+    throw new Error(`Expected clean_dev_artifact IPC, got ${JSON.stringify(cleanCall)}`);
+  }
+  // AI model Junction offload Dry-Run
+  await page.locator('[data-dev-offload-id="cache-ollama"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText("FSCTL_SET_REPARSE_POINT");
+  await page.locator("#confirm-cancel").click();
+  // VHDX compact Dry-Run
+  await page.locator('[data-opt-action="compact_wsl_vhdx"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText("diskpart.exe");
+  await page.locator("#confirm-cancel").click();
+  // LongPaths & NTFS 8.3 manual cards Dry-Run
+  const manualOpenDev = await page
+    .locator("details.manual-controls")
+    .evaluate((el) => el.hasAttribute("open"));
+  if (!manualOpenDev) await page.locator("details.manual-controls > summary").click();
+  await page.locator('[data-opt-action="long_paths"][data-opt-value="enable"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText("LongPathsEnabled");
+  await page.locator("#confirm-cancel").click();
+  await page.locator('[data-opt-action="ntfs_8dot3"][data-opt-value="disable"]').click();
+  await expect(page.locator("#confirmation .dry-run-box")).toContainText("disable8dot3");
+  await page.locator("#confirm-cancel").click();
+  // 390px responsive overflow check with Dev Workspace open
+  await page.setViewportSize({ width: 390, height: 844 });
+  const devOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  if (devOverflow) throw new Error("Horizontal document overflow on #dev-workspace-card at 390px");
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  // Dev recovery mode & masked .env preview toggle
+  await page.locator(".disk-tile").first().click();
+  await page.locator('[data-page="recovery"]').first().click();
+  await expect(page.locator('input[name="rec-mode"][value="dev"]')).toBeVisible();
+  await page.locator('[data-rec-tab="files"]').click();
+  await page.locator("#recovery-search").fill(".env");
+  await expect(page.locator(".recovery-row")).toHaveCount(1);
+  await page.locator('[data-preview-id="rec-env"]').click();
+  await expect(page.locator(".preview-secret-banner")).toContainText("2 hassas satır");
+  await expect(page.locator("#preview-text-pre")).toContainText("••••••••");
+  await expect(page.locator("#preview-text-pre")).not.toContainText("sk-demo-12345");
+  await page.locator("#toggle-secret-mask").click();
+  await expect(page.locator("#preview-text-pre")).toContainText("sk-demo-12345");
+  await page.locator("#close-result").click();
+  await page.locator("#recovery-search").fill("");
+  checks.push(
+    "Developer & Vibe-Coding Suite verified: project bloat radar, safe clean Dry-Run, Ollama Junction offload, VHDX compact, LongPaths & 8.3 tuning, dev recovery mode, .env secret masking toggle, and 0 overflow at 390px",
+  );
   await page.locator('[data-page="tools"]').click();
   await expect(page.locator('[data-action="retrim"]')).toBeEnabled();
   await page.locator('[data-action="retrim"]').click();
@@ -1671,16 +1949,59 @@ try {
   await expect(page.locator("#confirmation")).toContainText("v2.0.0");
   await page.locator("#confirm-cancel").click();
 
+  await page.evaluate(() => {
+    const s = window.__fixture.state;
+    s.disks[0].type = "HDD";
+    s.read_only_guard = true;
+    const nvme = s.disks[1];
+    if (nvme) {
+      window.__fixture.forecasts[nvme.id] = {
+        ready: true,
+        sample_count: 14,
+        span_hours: 168.0,
+        daily_written_gb: 26.4,
+        estimated_remaining_years: 7.2,
+        pending_delta_7d: 0,
+        reallocated_delta_7d: 0,
+        uncorrectable_delta_7d: 0,
+        temp_avg_7d: 44.8,
+        risk_level: "ok",
+        summary_tr: "Son 7 günde hata sayacı artışı yok; disk kararlı.",
+        advice_tr: "Düzenli yedekleme alışkanlığınızı koruyun.",
+      };
+    }
+  });
   await page.locator('[data-lang="en"]').click();
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await page.locator('[data-action="refresh"]').click();
+  await expect(page.locator(".disk-tile").nth(0)).toContainText("HDD");
+  const guardBtn = page.locator('[data-action="toggle-write-guard"]');
+  if ((await guardBtn.getAttribute("aria-pressed")) === "true") {
+    await guardBtn.click();
+  }
+  await expect(guardBtn).toContainText("Read-Only");
 
   await page.locator('[data-page="overview"]').first().click();
+  await page.locator(".disk-tile").nth(1).click();
   await expect(page.locator("main")).toContainText("Health & endurance");
   await expect(page.locator("body")).not.toContainText("HDS Uyumlu");
+  await page.evaluate(() => {
+    const t = document.getElementById("toast");
+    if (t) t.hidden = true;
+  });
   await page.screenshot({
     path: path.join(output, "overview-en.png"),
     fullPage: true,
   });
+
+  await page.locator('[data-action="theme"]').click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.screenshot({
+    path: path.join(output, "overview-dark-en.png"),
+    fullPage: true,
+  });
+  await page.locator('[data-action="theme"]').click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
   await page.locator('[data-page="optimize"]').first().click();
   await expect(page.locator("#smart-tiering-card")).toContainText(
@@ -1691,6 +2012,8 @@ try {
     path: path.join(output, "optimize-en.png"),
     fullPage: true,
   });
+
+  await page.locator(".disk-tile").nth(0).click();
 
   await page.locator('[data-page="surface"]').first().click();
   await expect(page.locator("main")).toContainText("200-Zone Surface");

@@ -178,7 +178,12 @@ pub fn validate_options(kind: &str, options: &Value) -> Result<(), String> {
             vec![
                 (
                     "mode",
-                    vec![json!("quick"), json!("deep"), json!("apps_only")],
+                    vec![
+                        json!("quick"),
+                        json!("deep"),
+                        json!("apps_only"),
+                        json!("dev"),
+                    ],
                 ),
                 (
                     "size_mib",

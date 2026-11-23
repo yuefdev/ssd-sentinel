@@ -77,7 +77,8 @@ flowchart TB
 | [`jobs.rs`](../src-tauri/src/jobs.rs) | Win32 IOCP Direct-I/O benchmark, file read/write surface checks | Temp payload on target volume | None | **Yes** (except `defrag /A`) |
 | [`surface_heal.rs`](../src-tauri/src/surface_heal.rs) | Raw LBA 200-zone scan, 4K sector micro-probe, pinpoint relocation, quarantine | `physical_scan`: Read-only; repair/isolate: Mutating | None | **Yes** for repair/isolate |
 | [`tiering.rs`](../src-tauri/src/tiering.rs) | Hot/cold candidate scoring, SHA-256 relocation, `FSCTL_SET_REPARSE_POINT` junctions | Analysis: Read-only; relocate/rollback/tier job: Mutating | None | **Yes** for relocate/rollback/tier jobs |
-| [`optimize.rs`](../src-tauri/src/optimize.rs) | Write cache IOCTL, TRIM, PCIe ASPM, hibernation, APM, OP shrink/extend | `query_op_bounds`: Read-only; mutations: Mutating | None | **Yes** (except `query_op_bounds`, `autostart`) |
+| [`dev_workspace.rs`](../src-tauri/src/dev_workspace.rs) | Developer project artifact radar, AI model/package cache & WSL/Docker VHDX discovery, allowlisted safe cleaning | Analysis: Read-only; `clean_dev_artifact`: Mutating | None | **Yes** for `clean_dev_artifact` |
+| [`optimize.rs`](../src-tauri/src/optimize.rs) | Write cache IOCTL, TRIM, PCIe ASPM, hibernation, APM, OP shrink/extend, `long_paths`, `ntfs_8dot3`, `compact_wsl_vhdx` | `query_op_bounds`: Read-only; mutations: Mutating | None | **Yes** (except `query_op_bounds`, `autostart`) |
 
 ---
 
@@ -94,7 +95,9 @@ flowchart TB
 | `SetupDiGetClassDevsW`, `CM_Get_Parent`, `CM_Get_DevNode_PropertyW` | `platform.rs` | Queries PCIe link width & speed properties (`DEVPKEY_PciDevice_*`) read-only |
 | `WinHttp*` (`WinHttpOpen`, `WinHttpConnect`, etc.) | `desktop.rs` | User-initiated HTTPS release checks & SHA-256 verified update download (host allowlist enforced) |
 | `smartctl.exe` (`--scan-open`, `-i -H -A`, `-a`, `-t`, `-X`, `-s apm`) | `core.rs`, `platform.rs`, `optimize.rs` | SMART JSON telemetry, log reading, firmware self-test triggers, HDD APM level |
+| `RegSetKeyValueW` (`LongPathsEnabled`) | `optimize.rs` | Enables/disables Win32 >260-character path support with SQLite rollback |
 | `chkdsk.exe /scan`, `defrag.exe /A /O /X /L`, `fsutil.exe`, `powercfg.exe` | `jobs.rs`, `surface_heal.rs`, `tiering.rs`, `optimize.rs` | Invoked strictly via `System32` absolute path + `Command::arg` vectors |
+| `wsl.exe --shutdown` + `diskpart.exe /s` (`compact vdisk`) | `optimize.rs`, `dev_workspace.rs` | Shuts down WSL and compacts validated WSL2 / Docker `ext4.vhdx` / `docker_data.vhdx` virtual disks read-only |
 
 ---
 

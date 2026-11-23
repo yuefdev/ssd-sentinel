@@ -902,8 +902,8 @@ impl Core {
         if clean_target.len() != 1 || !clean_target.as_bytes()[0].is_ascii_uppercase() {
             return Err("Geçersiz hedef bölüm harfi.".into());
         }
-        if !matches!(direction, "to_hdd" | "to_ssd") {
-            return Err("Geçersiz katmanlama yönü (to_hdd veya to_ssd olmalı).".into());
+        if !matches!(direction, "to_hdd" | "to_ssd" | "to_archive") {
+            return Err("Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).".into());
         }
         let expected = format!("tier_relocate:{disk_id}:{clean_target}");
         if confirmation != expected {
@@ -951,6 +951,12 @@ impl Core {
         }
         if direction == "to_ssd" && !crate::tiering::is_ssd_disk(target_disk) {
             return Err("Sıcak veri terfi hedefi bir SSD bölümü olmalıdır.".into());
+        }
+        if direction == "to_archive"
+            && target_disk.kind != "HDD"
+            && !crate::tiering::is_ssd_disk(target_disk)
+        {
+            return Err("Arşiv hedefi geçerli bir HDD veya SSD bölümü olmalıdır.".into());
         }
         let job_id = uuid::Uuid::new_v4().simple().to_string();
         let rec = {
@@ -1118,6 +1124,149 @@ impl Core {
                     job["progress"] = json!(100);
                     job["completed"] = json!(100);
                     job["cleanup_error"] = res["cleanup_warning"].clone();
+                    job["finished_at"] = json!(Utc::now().to_rfc3339());
+                }
+                Err(e) => {
+                    let cancelled = e == crate::process::CANCELLED;
+                    let mut job = lock(&self.job);
+                    job["status"] = json!(if cancelled { "cancelled" } else { "failed" });
+                    job["phase"] = json!(if cancelled {
+                        "İptal edildi"
+                    } else {
+                        "Tamamlanamadı"
+                    });
+                    job["error"] = json!(e);
+                    job["finished_at"] = json!(Utc::now().to_rfc3339());
+                }
+            }
+            outcome?
+        };
+        if self.refresh_now().is_err() {
+            self.refresh();
+        }
+        Ok(res)
+    }
+
+    pub fn analyze_dev_workspace(
+        &self,
+        disk_id: &str,
+        letter: &str,
+        custom_root: Option<&str>,
+    ) -> Result<Value, String> {
+        let clean_letter = letter.trim().trim_end_matches(':').to_ascii_uppercase();
+        let disks = self.disks()?;
+        let selected = disks
+            .iter()
+            .find(|d| d.id == disk_id)
+            .ok_or("Disk bulunamadı.")?;
+        if self.config.snapshot_dir.is_some() || lock(&self.data)["source"] == "replay" {
+            let replay_letter =
+                if clean_letter.len() == 1 && clean_letter.as_bytes()[0].is_ascii_uppercase() {
+                    clean_letter.as_str()
+                } else {
+                    ""
+                };
+            return Ok(crate::dev_workspace::analyze_dev_workspace_replay(
+                &disks,
+                selected,
+                replay_letter,
+            ));
+        }
+        if clean_letter.len() != 1 || !clean_letter.as_bytes()[0].is_ascii_uppercase() {
+            return Err("Geçersiz bölüm harfi.".into());
+        }
+        if !selected.volumes.iter().any(|v| {
+            v["letter"]
+                .as_str()
+                .is_some_and(|l| l.eq_ignore_ascii_case(&clean_letter))
+        }) {
+            return Err("Seçilen bölüm bu diske ait değil.".into());
+        }
+        crate::dev_workspace::analyze_dev_workspace(&disks, selected, &clean_letter, custom_root)
+    }
+
+    pub fn clean_dev_artifact(
+        &self,
+        disk_id: &str,
+        artifact_path: &str,
+        confirmation: &str,
+    ) -> Result<Value, String> {
+        let path_str = artifact_path.trim();
+        if path_str.is_empty() {
+            return Err("Temizlenecek klasör yolu eksik.".into());
+        }
+        let expected = crate::dev_workspace::clean_token(disk_id, path_str);
+        if confirmation != expected {
+            return Err(
+                "Geliştirici yük temizliği için açık onay anahtarı eksik veya hatalı.".into(),
+            );
+        }
+        let disk = self.live_disk(disk_id)?;
+        self.require_write_unlocked("dev_clean")?;
+        let src_letter =
+            crate::dev_workspace::drive_letter(path_str).ok_or("Geçersiz temizlik klasör yolu.")?;
+        if !disk.volumes.iter().any(|v| {
+            v["letter"]
+                .as_str()
+                .is_some_and(|l| l.eq_ignore_ascii_case(&src_letter))
+        }) {
+            return Err("Temizlenecek klasör seçilen diske ait değil.".into());
+        }
+        let path = std::path::Path::new(path_str);
+        crate::dev_workspace::validate_cleanable_dev_path(
+            path,
+            &crate::tiering::is_forbidden_path,
+        )?;
+        let job_id = uuid::Uuid::new_v4().simple().to_string();
+        let res = {
+            let _permit = self.reserve()?;
+            self.job_cancel.store(false, Ordering::SeqCst);
+            *lock(&self.job) = json!({
+                "id": job_id,
+                "kind": "dev_clean",
+                "disk_id": disk.id,
+                "model": disk.model,
+                "letter": src_letter,
+                "options": { "path": path_str },
+                "status": "running",
+                "phase": "Yeniden üretilebilir derleme / önbellek dosyaları temizleniyor",
+                "progress": 10,
+                "completed": 10,
+                "total": 100,
+                "results": [],
+                "blocks": [],
+                "summary": {},
+                "damaged_files": [],
+                "read_bytes": 0,
+                "write_bytes": 0,
+                "prepared_bytes": 0,
+                "started_at": Utc::now().to_rfc3339(),
+                "finished_at": null,
+                "error": null,
+                "cleanup_error": null
+            });
+            let outcome = {
+                let mut on_progress = |files: u64, freed: u64| {
+                    let mut job = lock(&self.job);
+                    job["phase"] = json!(format!("{files} dosya temizlendi"));
+                    job["write_bytes"] = json!(freed);
+                    job["progress"] = json!(55);
+                    job["completed"] = json!(55);
+                };
+                crate::dev_workspace::clean_dev_artifact_checked(
+                    path,
+                    &self.job_cancel,
+                    &mut on_progress,
+                )
+            };
+            match &outcome {
+                Ok(res) => {
+                    let mut job = lock(&self.job);
+                    job["status"] = json!("completed");
+                    job["phase"] = json!("Tamamlandı");
+                    job["progress"] = json!(100);
+                    job["completed"] = json!(100);
+                    job["write_bytes"] = res["freed_bytes"].clone();
                     job["finished_at"] = json!(Utc::now().to_rfc3339());
                 }
                 Err(e) => {

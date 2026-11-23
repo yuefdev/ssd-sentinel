@@ -11,12 +11,13 @@ This document defines the enforceable safety invariants, crash-consistency guara
 - While locked, **all** mutating IPC paths fail closed inside Rust (`Core::require_write_unlocked`) before any write handle or system modification is attempted:
   - Mutating jobs in `Core::start_job`: `benchmark`, `autopilot`, `smart_tier`, `defrag` (`/O`, `/X`), and mutating `surface` modes (`data_refresh`, `targeted_repair`, `magnetic_refresh`, `bad_zone_isolate`).
   - Mutating maintenance in `Core::disk_action`: `short_test`, `long_test`, `abort_test`, `retrim`.
-  - Tier relocations & rollbacks: `Core::relocate_tier_item`, `Core::rollback_tier_move`.
-  - System/partition tuning: `optimize::execute_unlocked` (except read-only `query_op_bounds` and user-level `autostart`).
-- Strictly read-only diagnostics (`refresh`, `logs`, `recovery`, `surface` `read_scan` & `physical_scan`, `defrag /A`, `analyze_storage_tiering`) remain operational while Read-Only Guard is enabled.
+  - Tier relocations & rollbacks: `Core::relocate_tier_item` (`to_hdd`, `to_ssd`, `to_archive`), `Core::rollback_tier_move`.
+  - Developer workspace cleaning: `Core::clean_dev_artifact` (manifest-paired rebuildable artifacts & allowlisted package caches only; AI models never deletable).
+  - System/partition tuning: `optimize::execute_unlocked` (including `long_paths`, `ntfs_8dot3`, `compact_wsl_vhdx`; except read-only `query_op_bounds` and user-level `autostart`).
+- Strictly read-only diagnostics (`refresh`, `logs`, `recovery` including `dev` mode, `surface` `read_scan` & `physical_scan`, `defrag /A`, `analyze_storage_tiering`, `analyze_dev_workspace`) remain operational while Read-Only Guard is enabled.
 
 ### S2. Dry-Run Impact Preview & Deterministic IPC Confirmation Tokens
-- Every mutating UI workflow renders an **Execution Manifest (Dry-Run)** box inside `#confirmation` listing the exact target volume/device, underlying Win32/CLI APIs, write budget, rollback mechanism, and deterministic IPC confirmation token (`<kind>:<disk_id>:<letter>[:<mode>]` or `optimize:<action>:<target>`).
+- Every mutating UI workflow renders an **Execution Manifest (Dry-Run)** box inside `#confirmation` listing the exact target volume/device, underlying Win32/CLI APIs, write budget, rollback mechanism, and deterministic IPC confirmation token (`<kind>:<disk_id>:<letter>[:<mode>]`, `optimize:<action>:<target>`, or `dev_clean:<disk_id>:<sha256_16(path)>`).
 - Rust validates `request.confirmation == expected` before reserving `Permit` or touching storage. Unknown JSON keys are rejected via `#[serde(deny_unknown_fields)]`.
 
 ### S3. Unique Verified Physical Identity
@@ -44,7 +45,7 @@ This document defines the enforceable safety invariants, crash-consistency guara
 - Unconfigured/unreachable update queries never claim `up_to_date`.
 
 ### S8. Protected Path Firewall (25 System Entries)
-`tiering.rs` unconditionally blocks analysis or relocation of any path containing or matching:
+`tiering.rs` unconditionally blocks analysis or relocation — and `dev_workspace.rs` blocks scanning or cleaning — of any path containing or matching:
 `windows`, `program files`, `program files (x86)`, `programdata`, `appdata`, `$recycle.bin`, `system volume information`, `recovery`, `perflogs`, `msocache`, `config.msi`, `ssd-sentinel-arsiv`, `.ssd-sentinel-quarantine`, `$windows.~bt`, `$windows.~ws`, `$sysreset`, `pagefile.sys`, `hiberfil.sys`, `swapfile.sys`, `dumpstack.log`, `dumpstack.log.tmp`, `bootmgr`, `bootnxt`, `ntuser.dat`, `usrclass.dat`, as well as any pre-existing reparse point / symlink.
 
 ---

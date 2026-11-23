@@ -351,6 +351,8 @@ export type RecoveryPreview =
   | {
       kind: "text";
       text: string;
+      raw_text?: string;
+      secrets_masked?: number;
       truncated: boolean;
       size_bytes: number;
       repaired?: boolean;
@@ -487,6 +489,82 @@ export interface SystemTuning {
   wsearch_running?: boolean | null;
   pcie_aspm?: number | null;
   autostart_enabled?: boolean;
+  long_paths_enabled?: boolean | null;
+  ntfs_8dot3_creation?: number | null;
+  dev_drive_supported?: boolean | null;
+}
+export interface DevArtifact {
+  id: string;
+  name: string;
+  path: string;
+  size_bytes: number;
+  file_count: number;
+  clean_token: string;
+}
+export interface DevProject {
+  id: string;
+  name: string;
+  path: string;
+  stack: string;
+  days_untouched: number;
+  stale: boolean;
+  has_git: boolean;
+  has_env: boolean;
+  recent_git_edit: boolean;
+  artifact_bytes: number;
+  artifacts: DevArtifact[];
+}
+export interface DevCacheItem {
+  id: string;
+  name: string;
+  name_en: string;
+  kind: "ai_model" | "pkg_cache" | "toolchain" | string;
+  path: string;
+  size_bytes: number;
+  file_count: number;
+  days_untouched: number;
+  is_junction: boolean;
+  can_offload: boolean;
+  can_clean: boolean;
+  clean_token?: string | null;
+  note_tr: string;
+  note_en: string;
+}
+export interface WslVhdxItem {
+  id: string;
+  name: string;
+  kind: "docker_vhdx" | "wsl_vhdx" | string;
+  path: string;
+  drive_letter: string;
+  size_bytes: number;
+  modified_at?: string | null;
+}
+export interface DevOffloadTarget {
+  disk_id: string;
+  model: string;
+  letter: string;
+  type: string;
+  free_bytes: number;
+  direction: "to_hdd" | "to_archive" | string;
+}
+export interface DevWorkspaceAnalysis {
+  disk_id: string;
+  letter: string;
+  replay?: boolean;
+  scanned_roots: string[];
+  scan_ms: number;
+  truncated: boolean;
+  total_artifact_bytes: number;
+  stale_artifact_bytes: number;
+  total_cache_bytes: number;
+  total_vhdx_bytes: number;
+  total_reclaimable_bytes: number;
+  offload_target: DevOffloadTarget | null;
+  projects: DevProject[];
+  global_caches: DevCacheItem[];
+  vhdx_files: WslVhdxItem[];
+  summary_tr: string;
+  summary_en: string;
 }
 export interface OptimizationRecord {
   key: string;

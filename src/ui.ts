@@ -254,6 +254,9 @@ export function aiNaturalFilter<
         "database",
         "code",
         "config",
+        "vibe",
+        "proje",
+        "project",
       ].includes(tok)
     ) {
       list = list.filter((i) => i.category === "database_code");
@@ -834,6 +837,69 @@ export function findCompanionDrive<
   return best;
 }
 
+export function devStackBadge(stack: string | null | undefined): TierBadge {
+  const s = (stack ?? "").trim();
+  switch (s) {
+    case "Node / JS":
+      return { label: "Node / JS", level: "info" };
+    case "Rust":
+      return { label: "Rust", level: "warning" };
+    case "Python":
+      return { label: "Python", level: "ok" };
+    case "Go":
+      return { label: "Go", level: "info" };
+    case ".NET":
+      return { label: ".NET", level: "info" };
+    case "Java / Gradle":
+      return { label: "Java / Gradle", level: "warning" };
+    case "Flutter / Dart":
+      return { label: "Flutter / Dart", level: "info" };
+    default:
+      return { label: s || "Git Repo", level: "" };
+  }
+}
+
+export function devCacheKindBadge(
+  kind: string | null | undefined,
+  lang: Lang = "tr",
+): TierBadge {
+  const en = lang === "en";
+  switch ((kind ?? "").toLowerCase()) {
+    case "ai_model":
+      return { label: en ? "Local LLM" : "Yerel LLM", level: "warning" };
+    case "pkg_cache":
+      return { label: en ? "Pkg Cache" : "Paket Önbelleği", level: "info" };
+    case "toolchain":
+      return { label: en ? "Toolchain" : "Araç Zinciri", level: "" };
+    default:
+      return { label: en ? "Cache" : "Önbellek", level: "" };
+  }
+}
+
+export function ntfs8dot3Label(
+  val: number | null | undefined,
+  lang: Lang = "tr",
+): string {
+  const en = lang === "en";
+  if (val === 1) return en ? "Disabled (Fast)" : "Kapalı (Hızlı)";
+  if (val === 0) return en ? "Enabled on all" : "Tümünde Açık";
+  if (val === 2) return en ? "Per-volume (Default)" : "Birim Bazlı (Varsayılan)";
+  if (val === 3) return en ? "Disabled on system" : "Sistemde Kapalı";
+  return en ? "Unknown" : "Bilinmiyor";
+}
+
+export function devEnvSnippet(targetLetter: string): string {
+  const clean = (targetLetter || "D").trim().replace(/:+$/, "").toUpperCase() || "D";
+  const root = `${clean}:\\DevCaches`;
+  return [
+    `[Environment]::SetEnvironmentVariable("CARGO_HOME", "${root}\\cargo", "User")`,
+    `[Environment]::SetEnvironmentVariable("NPM_CONFIG_CACHE", "${root}\\npm-cache", "User")`,
+    `[Environment]::SetEnvironmentVariable("PIP_CACHE_DIR", "${root}\\pip-cache", "User")`,
+    `[Environment]::SetEnvironmentVariable("UV_CACHE_DIR", "${root}\\uv-cache", "User")`,
+    `[Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "${root}\\ollama-models", "User")`,
+  ].join("\n");
+}
+
 export function computePollSignature(
   state: unknown,
   opts: {
@@ -848,6 +914,10 @@ export function computePollSignature(
     tierAnalysis?: unknown;
     tierMoves?: unknown;
     tierBusy?: boolean;
+    devAnalysis?: unknown;
+    devBusy?: boolean;
+    devFilter?: string;
+    devCustomRoot?: string;
   },
 ): string {
   const s = state as Record<string, unknown> | null;
@@ -882,6 +952,10 @@ export function computePollSignature(
     tierAnalysis: opts.tierAnalysis ?? null,
     tierMoves: opts.tierMoves ?? null,
     tierBusy: !!opts.tierBusy,
+    devAnalysis: opts.devAnalysis ?? null,
+    devBusy: !!opts.devBusy,
+    devFilter: opts.devFilter ?? "all",
+    devCustomRoot: opts.devCustomRoot ?? "",
   };
   if (opts.page === "performance") {
     core.performance = s.performance;

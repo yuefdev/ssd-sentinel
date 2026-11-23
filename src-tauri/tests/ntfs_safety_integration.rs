@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use ssd_sentinel_core::{
     core::{Config, Core, JobRequest},
-    jobs, model,
+    dev_workspace, jobs, model,
     optimize::OptimizeRequest,
     platform, process, tiering,
 };
@@ -468,4 +468,102 @@ fn vhdx_real_ntfs_cross_volume_junction_and_rollback() {
     assert!(!is_reparse_point(&folder));
     assert_eq!(sha256_file(&path_a), hash_a);
     assert_eq!(sha256_file(&path_b), hash_b);
+}
+
+#[test]
+fn dev_workspace_and_dev_optimizations_respect_read_only_guard_and_to_archive_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _hdd, ssd) = live_test_core(dir.path());
+    assert_eq!(core.state()["read_only_guard"], true);
+
+    // 1. Read-only dev workspace analysis works while guard is active.
+    let analysis = core.analyze_dev_workspace(&ssd.id, "C", None).unwrap();
+    assert_eq!(analysis["disk_id"], ssd.id);
+    assert_eq!(analysis["letter"], "C");
+    assert_eq!(analysis["replay"], false);
+
+    // 2. Snapshot replay mode also stays safe and never touches disks.
+    let replay_dir = tempfile::tempdir().unwrap();
+    let replay_core = Core::new(Config {
+        smartctl: "unused.exe".into(),
+        data_dir: replay_dir.path().into(),
+        snapshot_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")),
+    })
+    .unwrap();
+    replay_core.refresh_now().unwrap();
+    let replay_ssd_id = replay_core.disks().unwrap()[1].id.clone();
+    let replay_dev = replay_core
+        .analyze_dev_workspace(&replay_ssd_id, "C", None)
+        .unwrap();
+    assert_eq!(replay_dev["replay"], true);
+
+    // 3. Mutating dev operations fail closed while read_only_guard = true.
+    let clean_path = "C:\\Users\\demo\\Projects\\web\\node_modules";
+    let clean_err = core
+        .clean_dev_artifact(
+            &ssd.id,
+            clean_path,
+            &dev_workspace::clean_token(&ssd.id, clean_path),
+        )
+        .unwrap_err();
+    assert!(
+        clean_err.contains("Salt-okunur koruma etkin"),
+        "{clean_err}"
+    );
+
+    for (action, target, value) in [
+        ("long_paths", "system", "enable"),
+        ("ntfs_8dot3", "system", "disable"),
+        (
+            "compact_wsl_vhdx",
+            "C:\\Users\\demo\\AppData\\Local\\wsl\\ext4.vhdx",
+            "compact",
+        ),
+    ] {
+        let err = core
+            .optimize_action(OptimizeRequest {
+                action: action.into(),
+                target: target.into(),
+                value: value.into(),
+                confirmation: format!("optimize:{action}:{target}"),
+            })
+            .unwrap_err();
+        assert!(
+            err.contains("Salt-okunur koruma etkin"),
+            "{action} should be blocked by read_only_guard: {err}"
+        );
+    }
+
+    let archive_err = core
+        .relocate_tier_item(
+            &ssd.id,
+            "C:\\Users\\demo\\.ollama\\models",
+            "D",
+            "to_archive",
+            &format!("tier_relocate:{}:D", ssd.id),
+        )
+        .unwrap_err();
+    assert!(archive_err.contains("Salt-okunur koruma etkin"));
+
+    // 4. to_archive relocation & SHA-256 junction rollback roundtrip in sandbox.
+    let src_root = tempfile::tempdir().unwrap();
+    let dst_root = tempfile::tempdir().unwrap();
+    let models = src_root.path().join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    let blob = models.join("weights.bin");
+    let data: Vec<u8> = (0..(512 * 1024 + 99)).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&blob, &data).unwrap();
+    let digest = sha256_bytes(&data);
+
+    let rec =
+        tiering::relocate_item_into_dir(&models, dst_root.path(), "to_archive", true, 0).unwrap();
+    assert_eq!(rec["direction"], "to_archive");
+    assert_eq!(rec["junction_created"], true);
+    assert!(is_reparse_point(&models));
+    assert_eq!(sha256_file(&blob), digest);
+
+    let rb = tiering::rollback_move(&rec).unwrap();
+    assert_eq!(rb["rolled_back"], true);
+    assert!(!is_reparse_point(&models));
+    assert_eq!(sha256_file(&blob), digest);
 }

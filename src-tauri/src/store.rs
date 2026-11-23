@@ -342,7 +342,7 @@ impl Store {
         let file_count = rec["file_count"].as_u64().unwrap_or(0).min(i64::MAX as u64) as i64;
         let direction = rec["direction"]
             .as_str()
-            .filter(|s| matches!(*s, "to_hdd" | "to_ssd"))
+            .filter(|s| matches!(*s, "to_hdd" | "to_ssd" | "to_archive"))
             .ok_or("Geçersiz katmanlama yönü.")?;
         let moved_at = rec["moved_at"]
             .as_str()

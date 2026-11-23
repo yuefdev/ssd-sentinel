@@ -157,6 +157,49 @@ fn set_autostart_registry(enable: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn set_long_paths_registry(enable: bool) -> Result<bool, String> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, RegSetKeyValueW, HKEY_LOCAL_MACHINE, REG_DWORD, RRF_RT_REG_DWORD,
+    };
+
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
+    let sub_w = wide("SYSTEM\\CurrentControlSet\\Control\\FileSystem");
+    let name_w = wide("LongPathsEnabled");
+    let mut prev_raw: u32 = 0;
+    let mut size: u32 = std::mem::size_of::<u32>() as u32;
+    let prev_rc = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            sub_w.as_ptr(),
+            name_w.as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&mut prev_raw as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    let prev_enabled = prev_rc == 0 && prev_raw != 0;
+    let new_val: u32 = u32::from(enable);
+    let rc = unsafe {
+        RegSetKeyValueW(
+            HKEY_LOCAL_MACHINE,
+            sub_w.as_ptr(),
+            name_w.as_ptr(),
+            REG_DWORD,
+            (&new_val as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "LongPathsEnabled kayıt defteri yazılamadı (hata kodu {rc})."
+        ));
+    }
+    Ok(prev_enabled)
+}
+
 fn run_ps(core: &Core, script: &str, timeout_secs: u64) -> Result<String, String> {
     let args = vec![
         "-NoLogo".into(),
@@ -216,6 +259,9 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             | "expand_tail"
             | "release_quarantine"
             | "autostart"
+            | "long_paths"
+            | "ntfs_8dot3"
+            | "compact_wsl_vhdx"
     ) {
         return Err("Desteklenmeyen optimizasyon işlemi.".into());
     }
@@ -721,6 +767,202 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "removed_files": removed,
                 "message": format!("{letter}: üzerindeki karantina kalkanı kaldırıldı ({removed} bölge dosyası temizlendi).")
             }))
+        }
+        "long_paths" => {
+            if req.target != "system" {
+                return Err("Geçersiz uzun yol hedefi.".into());
+            }
+            if !matches!(req.value.as_str(), "enable" | "disable" | "rollback") {
+                return Err("Geçersiz uzun yol değeri.".into());
+            }
+            let key = "long_paths:system";
+            let target_enable = if req.value == "rollback" {
+                let saved = lock(&core.store)
+                    .get_optimization(key)?
+                    .ok_or("Geri alınacak uzun yol kaydı bulunamadı.")?;
+                saved["previous_value"].as_str() == Some("enable")
+            } else {
+                req.value == "enable"
+            };
+            #[cfg(windows)]
+            let prev = {
+                if set_long_paths_registry(target_enable)? {
+                    "enable"
+                } else {
+                    "disable"
+                }
+            };
+            #[cfg(not(windows))]
+            let prev = {
+                let _ = target_enable;
+                return Err("Yalnız Windows desteklenmektedir.".into());
+            };
+            if req.value == "rollback" {
+                lock(&core.store).remove_optimization(key)?;
+            } else {
+                lock(&core.store).record_optimization(
+                    key,
+                    "system",
+                    "Windows Uzun Yol Desteği (LongPathsEnabled > 260 karakter)",
+                    prev,
+                    &req.value,
+                )?;
+            }
+            Ok(json!({
+                "status": "completed",
+                "action": "long_paths",
+                "enabled": target_enable,
+                "message": if target_enable {
+                    "Windows uzun dosya yolu desteği (LongPathsEnabled) etkinleştirildi."
+                } else {
+                    "Windows uzun dosya yolu desteği kapatıldı."
+                }
+            }))
+        }
+        "ntfs_8dot3" => {
+            if req.target != "system" {
+                return Err("Geçersiz NTFS 8.3 hedefi.".into());
+            }
+            if !matches!(req.value.as_str(), "disable" | "default" | "rollback") {
+                return Err("Geçersiz NTFS 8.3 ayarı.".into());
+            }
+            let key = "ntfs_8dot3:system";
+            let prev_idx = lock(&core.data)["windows"]["system_tuning"]["ntfs_8dot3_creation"]
+                .as_u64()
+                .filter(|v| *v <= 3)
+                .unwrap_or(2)
+                .to_string();
+            let target_idx = if req.value == "rollback" {
+                let saved = lock(&core.store)
+                    .get_optimization(key)?
+                    .ok_or("Geri alınacak NTFS 8.3 kaydı bulunamadı.")?;
+                let val = saved["previous_value"].as_str().unwrap_or("2").to_owned();
+                if !matches!(val.as_str(), "0" | "1" | "2" | "3") {
+                    return Err("Kayıtlı NTFS 8.3 değeri geçersiz.".into());
+                }
+                val
+            } else if req.value == "disable" {
+                "1".into()
+            } else {
+                "2".into()
+            };
+            let out = process::run(
+                &platform::system_executable("fsutil.exe"),
+                &[
+                    "behavior".into(),
+                    "set".into(),
+                    "disable8dot3".into(),
+                    target_idx.clone(),
+                ],
+                Duration::from_secs(20),
+                &core.stop,
+            )?;
+            if out.code != 0 {
+                return Err(format!(
+                    "fsutil disable8dot3 başarısız (kod {}): {}",
+                    out.code, out.stderr
+                ));
+            }
+            if req.value == "rollback" {
+                lock(&core.store).remove_optimization(key)?;
+            } else {
+                lock(&core.store).record_optimization(
+                    key,
+                    "system",
+                    "NTFS 8.3 Kısa Dosya Adı Oluşturma (disable8dot3)",
+                    &prev_idx,
+                    &target_idx,
+                )?;
+            }
+            Ok(json!({
+                "status": "completed",
+                "action": "ntfs_8dot3",
+                "value": target_idx,
+                "message": if target_idx == "1" {
+                    "NTFS 8.3 kısa dosya adı üretimi tüm birimlerde kapatıldı (node_modules / target hızlandırması)."
+                } else {
+                    "NTFS 8.3 kısa dosya adı ayarı güncellendi."
+                }
+            }))
+        }
+        "compact_wsl_vhdx" => {
+            if req.value != "compact" {
+                return Err("Geçersiz VHDX sıkıştırma komutu.".into());
+            }
+            let valid_path = crate::dev_workspace::validate_wsl_vhdx_path(&req.target)?;
+            #[cfg(windows)]
+            {
+                use std::io::Write;
+                let size_before = std::fs::metadata(&valid_path)
+                    .map(|m| m.len())
+                    .map_err(|_| "VHDX dosyası boyutu okunamadı.")?;
+                let _ = process::run(
+                    &platform::system_executable("wsl.exe"),
+                    &["--shutdown".into()],
+                    Duration::from_secs(30),
+                    &core.stop,
+                );
+                for _ in 0..15 {
+                    if core.stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(process::CANCELLED.into());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                let mut script = tempfile::Builder::new()
+                    .suffix(".txt")
+                    .tempfile()
+                    .map_err(|e| format!("diskpart geçici betiği oluşturulamadı: {e}"))?;
+                let body = format!(
+                    "select vdisk file=\"{}\"\r\nattach vdisk readonly\r\ncompact vdisk\r\ndetach vdisk\r\nexit\r\n",
+                    valid_path.display()
+                );
+                script
+                    .write_all(body.as_bytes())
+                    .and_then(|()| script.flush())
+                    .map_err(|e| format!("diskpart betiği yazılamadı: {e}"))?;
+                let out = process::run(
+                    &platform::system_executable("diskpart.exe"),
+                    &["/s".into(), script.path().to_string_lossy().into_owned()],
+                    Duration::from_secs(600),
+                    &core.stop,
+                )?;
+                if out.code != 0 {
+                    let detail = if out.stderr.trim().is_empty() {
+                        &out.stdout
+                    } else {
+                        &out.stderr
+                    };
+                    return Err(format!(
+                        "diskpart compact başarısız (kod {}): {}",
+                        out.code,
+                        detail.chars().take(600).collect::<String>()
+                    ));
+                }
+                let size_after = std::fs::metadata(&valid_path)
+                    .map(|m| m.len())
+                    .unwrap_or(size_before);
+                let freed_bytes = size_before.saturating_sub(size_after);
+                Ok(json!({
+                    "status": "completed",
+                    "action": "compact_wsl_vhdx",
+                    "path": valid_path.to_string_lossy(),
+                    "size_before": size_before,
+                    "size_after": size_after,
+                    "freed_bytes": freed_bytes,
+                    "message": format!(
+                        "{} sıkıştırıldı ({:.2} GiB → {:.2} GiB · {:.2} GiB geri kazanıldı).",
+                        valid_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                        size_before as f64 / (1024.0 * 1024.0 * 1024.0),
+                        size_after as f64 / (1024.0 * 1024.0 * 1024.0),
+                        freed_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+                    )
+                }))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = valid_path;
+                Err("Yalnız Windows desteklenmektedir.".into())
+            }
         }
         _ => Err("Desteklenmeyen optimizasyon işlemi.".into()),
     }
