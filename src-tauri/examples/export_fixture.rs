@@ -14,6 +14,7 @@ fn main() {
     core.refresh_now().unwrap();
     let mut state = core.state();
     state["admin"] = json!(false);
+    state["language"] = json!("tr");
     let mut histories = json!({});
     for disk in state["disks"].as_array().unwrap() {
         let id = disk["id"].as_str().unwrap();

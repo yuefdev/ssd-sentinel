@@ -2309,8 +2309,8 @@ function toolsView(d: Disk): string {
   const updateMsg = updateStatus
     ? translateUpdateMessage(updateStatus, lang)
     : L(
-        `Yüklü sürüm v${state?.version ?? "1.10.0"} · arka planda otomatik ağ bağlantısı yapılmaz.`,
-        `Installed v${state?.version ?? "1.10.0"} · no background network traffic is sent.`,
+        `Yüklü sürüm v${state?.version ?? "1.10.1"} · arka planda otomatik ağ bağlantısı yapılmaz.`,
+        `Installed v${state?.version ?? "1.10.1"} · no background network traffic is sent.`,
         lang,
       );
   return `${heading(d, L("BAKIM & AYARLAR", "TOOLS & SETTINGS", lang), L("Bakım araçları ve uygulama ayarları", "Maintenance tools &amp; preferences", lang), L("Her işlem başlamadan önce onay ister.", "Every write or firmware command prompts for confirmation before running.", lang))}
@@ -2412,7 +2412,7 @@ function render() {
   const partialBanner = partialWarnings.length
     ? `<div class="warning-banner" role="status"><div class="warning-banner-main">${icon("alert")}<div class="warning-banner-text"><strong>${L("Kısmi SMART okuma uyarısı", "Partial SMART read warning", lang)}</strong><ul>${partialWarnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></div></div>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact primary warning-elevate", pending) : ""}</div>`
     : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.1")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;
@@ -2508,9 +2508,17 @@ async function poll() {
       state.language === "en" ? "en" : state.language === "tr" ? "tr" : "";
     if (backendLang) {
       if (!lastSyncedBackendLang) {
-        if (!hadStoredLang && backendLang === "en" && getLang() !== "en") {
-          setLang("en");
+        if (!hadStoredLang && backendLang !== getLang()) {
+          setLang(backendLang);
           syncSkipLink();
+        } else if (hadStoredLang && backendLang !== getLang()) {
+          void invoke("set_preferences", {
+            minimiseToTray: state.minimise_to_tray,
+            theme: document.documentElement.dataset.theme,
+            healthMode: state.health_mode,
+            language: getLang(),
+            readOnlyGuard: state.read_only_guard ?? true,
+          }).catch(() => {});
         }
       } else if (backendLang !== lastSyncedBackendLang && backendLang !== getLang()) {
         setLang(backendLang);

@@ -1062,6 +1062,11 @@ async fn save_report(
     } else {
         return Err("Geçersiz rapor türü.".into());
     };
+    let html_filter = if crate::core::lock(&core.language).as_str() == "en" {
+        "HTML Report"
+    } else {
+        "HTML Raporu"
+    };
     let prefer_html = fmt.eq_ignore_ascii_case("html");
     tauri::async_runtime::spawn_blocking(move || {
         let mut dialog = app.dialog().file().set_file_name(format!(
@@ -1070,12 +1075,12 @@ async fn save_report(
         ));
         dialog = if prefer_html {
             dialog
-                .add_filter("HTML Raporu", &["html"])
+                .add_filter(html_filter, &["html"])
                 .add_filter("JSON", &["json"])
         } else {
             dialog
                 .add_filter("JSON", &["json"])
-                .add_filter("HTML Raporu", &["html"])
+                .add_filter(html_filter, &["html"])
         };
         let selected = dialog.blocking_save_file();
         let Some(selected) = selected else {
@@ -1281,14 +1286,17 @@ pub fn run() {
                 minimise,
                 quit,
             };
-            {
-                let lang = crate::core::lock(&core.language).clone();
-                apply_tray_language(&tray_menus, &lang);
-            }
+            let initial_lang = crate::core::lock(&core.language).clone();
+            apply_tray_language(&tray_menus, &initial_lang);
+            let initial_tooltip = if initial_lang == "en" {
+                "SSD Sentinel · Starting"
+            } else {
+                "SSD Sentinel · Başlatılıyor"
+            };
             app.manage(tray_menus);
             TrayIconBuilder::with_id("sentinel")
                 .icon(tray_image(None, false, false))
-                .tooltip("SSD Sentinel · Başlatılıyor")
+                .tooltip(initial_tooltip)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
@@ -1353,7 +1361,7 @@ pub fn run() {
                         || disks.iter().any(|d| {
                             d["health"]["status"] == "warning" || d["health"]["percent"].is_null()
                         });
-                    let lang = state["language"].as_str().unwrap_or("tr");
+                    let lang = state["language"].as_str().unwrap_or("en");
                     let tooltip = format_tray_tooltip(&disks, state["source"] == "replay", lang);
                     if let Some(tray) = handle.tray_by_id("sentinel") {
                         let _ = tray.set_icon(Some(tray_image(

@@ -88,8 +88,8 @@ try {
   );
   if (state.backend !== "Rust · Tauri 2" || state.source !== "replay")
     throw new Error("Native Rust IPC state mismatch");
-  if (state.version !== "1.10.0")
-    throw new Error(`Expected native version 1.10.0, got ${state.version}`);
+  if (state.version !== "1.10.1")
+    throw new Error(`Expected native version 1.10.1, got ${state.version}`);
   if (state.read_only_guard !== true)
     throw new Error(`Expected default read_only_guard=true, got ${JSON.stringify(state.read_only_guard)}`);
   if (state.disks[1].interface !== "NVMe 1.3")
@@ -133,7 +133,7 @@ try {
     );
   }
   checks.push(
-    "Release exe v1.10.0 starts native WebView2; real Rust IPC returns three recorded drives, NVMe 1.3, honest forecast, null checkpoint, empty tier moves, and replay-safe tier analysis",
+    "Release exe v1.10.1 starts native WebView2; real Rust IPC returns three recorded drives, NVMe 1.3, honest forecast, null checkpoint, empty tier moves, and replay-safe tier analysis",
   );
   for (const [i, percent] of [100, 73, 98].entries()) {
     await page.locator(".disk-tile").nth(i).click();
@@ -319,14 +319,14 @@ try {
   );
   if (
     !upd ||
-    upd.current !== "1.10.0" ||
+    upd.current !== "1.10.1" ||
     upd.repo !== "yuefdev/ssd-sentinel" ||
     !["up_to_date", "no_release", "update_available", "unreachable"].includes(
       upd.status,
     )
   ) {
     throw new Error(
-      `Expected configured yuefdev/ssd-sentinel v1.10.0 update response, got ${JSON.stringify(upd)}`,
+      `Expected configured yuefdev/ssd-sentinel v1.10.1 update response, got ${JSON.stringify(upd)}`,
     );
   }
   await page.evaluate(() =>

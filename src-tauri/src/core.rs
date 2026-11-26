@@ -96,7 +96,8 @@ impl Core {
         let read_only_guard = prefs["read_only_guard"].as_bool().unwrap_or(true);
         let lang = match prefs["language"].as_str() {
             Some("en") => "en".to_owned(),
-            _ => "tr".to_owned(),
+            Some("tr") => "tr".to_owned(),
+            _ => platform::detect_system_language().to_owned(),
         };
         let data = json!({"source":source,"admin":platform::is_admin(),"updating":false,"stale":true,"updated_at":null,"error":null,"partial_warnings":[],"disks":[],"windows":{},"performance":{"disks":[],"error":null},"refresh_seconds":60});
         Ok(Arc::new(Self {

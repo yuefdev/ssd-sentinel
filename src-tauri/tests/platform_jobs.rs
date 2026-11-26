@@ -1133,7 +1133,10 @@ fn v19_preferences_persist_language_and_update_check_handles_unconfigured() {
         snapshot_dir: None,
     })
     .unwrap();
-    assert_eq!(core.state()["language"], "tr");
+    assert_eq!(
+        core.state()["language"],
+        ssd_sentinel_core::platform::detect_system_language()
+    );
 
     core.set_preferences(true, Some("strict"), Some("en"), None)
         .unwrap();

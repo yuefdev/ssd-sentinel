@@ -1,6 +1,6 @@
 [package]
 name = "ssd-sentinel"
-version = "1.10.0"
+version = "1.10.1"
 edition = "2021"
 description = "Windows disk health and diagnostics desktop application"
 license = "MIT"
@@ -52,6 +52,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Services",
   "Win32_Devices_DeviceAndDriverInstallation",
   "Win32_Devices_Properties",
+  "Win32_Globalization",
   "Win32_Networking_WinHttp",
 ] }
 

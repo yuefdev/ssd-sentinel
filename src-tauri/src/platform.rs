@@ -1280,3 +1280,56 @@ pub fn file_within(file: &std::fs::File, root: &Path) -> Result<(), String> {
         Err("Açılan dosya doğrulanan bölümün dışında.".into())
     }
 }
+
+/// Maps a Win32 `LANGID` (`GetUserDefaultUILanguage`) to `"tr"` or `"en"`.
+///
+/// Only Turkish primary language (`0x1f`) maps to `"tr"`; every other language
+/// defaults to `"en"` so international Windows systems fall back to English.
+pub fn language_from_win32_lang_id(lang_id: u16) -> &'static str {
+    const LANG_TURKISH: u16 = 0x1f;
+    if (lang_id & 0x03ff) == LANG_TURKISH {
+        "tr"
+    } else {
+        "en"
+    }
+}
+
+/// Detects the operating system UI language (`"tr"` or `"en"`).
+pub fn detect_system_language() -> &'static str {
+    #[cfg(windows)]
+    {
+        let lang_id = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+        language_from_win32_lang_id(lang_id)
+    }
+    #[cfg(not(windows))]
+    {
+        for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+            if let Ok(val) = std::env::var(var) {
+                let norm = val.trim().to_ascii_lowercase();
+                if norm.is_empty() {
+                    continue;
+                }
+                return if norm == "tr" || norm.starts_with("tr_") || norm.starts_with("tr-") {
+                    "tr"
+                } else {
+                    "en"
+                };
+            }
+        }
+        "en"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::language_from_win32_lang_id;
+
+    #[test]
+    fn win32_lang_id_maps_turkish_to_tr_and_others_to_en() {
+        assert_eq!(language_from_win32_lang_id(0x041F), "tr");
+        assert_eq!(language_from_win32_lang_id(0x0409), "en");
+        assert_eq!(language_from_win32_lang_id(0x0809), "en");
+        assert_eq!(language_from_win32_lang_id(0x0407), "en");
+        assert_eq!(language_from_win32_lang_id(0), "en");
+    }
+}

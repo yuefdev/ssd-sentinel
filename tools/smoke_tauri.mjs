@@ -41,6 +41,7 @@ const seqMeasurement = {
   write_bytes: "0",
 };
 fixture.state.admin = false;
+fixture.state.language = "tr";
 fixture.forecasts = {};
 fixture.checkpoints = {};
 fixture.tierMoves = [];
@@ -178,10 +179,10 @@ try {
           return structuredClone(
             window.__fixture.mockUpdate || {
               repo: "yuefdev/ssd-sentinel",
-              current: "1.10.0",
+              current: "1.10.1",
               status: "up_to_date",
-              latest: "v1.10.0",
-              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.0",
+              latest: "v1.10.1",
+              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.1",
               download_url: null,
               asset_name: null,
               asset_size: null,
@@ -1926,7 +1927,7 @@ try {
   await page.evaluate(() => {
     window.__fixture.mockUpdate = {
       repo: "yuefdev/ssd-sentinel",
-      current: "1.10.0",
+      current: "1.10.1",
       status: "update_available",
       latest: "v2.0.0",
       url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v2.0.0",
@@ -2064,6 +2065,57 @@ try {
   checks.push(
     "Clean branding (0 nav-badge, no HDS Uyumlu / AI labels), GitHub updater UI + SHA-256 confirm dialog, full TR/EN localization across all views, 0 EN 390px overflow, and EN reload persistence verified",
   );
+  const enFixture = structuredClone(fixture);
+  enFixture.state.language = "en";
+  const intlContext = await browser.newContext({
+    viewport: { width: 1400, height: 1000 },
+    deviceScaleFactor: 1,
+    reducedMotion: "reduce",
+    locale: "de-DE",
+  });
+  try {
+    await intlContext.addInitScript((data) => {
+      window.__fixture = data;
+      window.__TAURI_INTERNALS__ = {
+        invoke: async (cmd, args = {}) => {
+          if (cmd === "get_state") return structuredClone(window.__fixture.state);
+          if (cmd === "get_history")
+            return structuredClone(window.__fixture.histories[args.diskId] || []);
+          if (cmd === "get_events") return [];
+          if (cmd === "get_jobs")
+            return structuredClone(
+              window.__fixture.jobs.filter(
+                (j) => j.kind === args.kind && j.disk_id === args.diskId,
+              ),
+            );
+          if (cmd === "get_health_forecast")
+            return { ready: false, sample_count: 1, span_hours: 0 };
+          if (cmd === "get_surface_checkpoint") return null;
+          if (cmd === "list_tier_moves") return [];
+          if (cmd === "refresh" || cmd === "set_preferences") return null;
+          throw new Error(`Unexpected command ${cmd}`);
+        },
+      };
+    }, enFixture);
+    const intlPage = await intlContext.newPage();
+    intlPage.on("pageerror", (e) => errors.push(e.message));
+    intlPage.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    intlPage.on("response", (response) => {
+      if (response.status() >= 400)
+        errors.push(`HTTP ${response.status()} ${response.url()}`);
+    });
+    await intlPage.goto(previewUrl);
+    await expect(intlPage.locator(".disk-tile")).toHaveCount(3);
+    await expect(intlPage.locator("html")).toHaveAttribute("lang", "en");
+    await expect(intlPage.locator("main")).toContainText("Health & endurance");
+    checks.push(
+      "Fresh non-Turkish (de-DE) context auto-boots directly into English without manual toggle",
+    );
+  } finally {
+    await intlContext.close();
+  }
   if (errors.length) throw new Error(errors.join("\n"));
   await writeFile(
     path.join(output, "verification.json"),

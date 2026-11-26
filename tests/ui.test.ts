@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { resolveLangFromLocale } from "../src/i18n.ts";
 import {
   aiNaturalFilter,
   alignmentDescription,
@@ -692,4 +693,17 @@ test("dev workspace helpers format stacks, cache kinds, 8.3 status, env snippet,
     aiNaturalFilter(devRows, "tsx").map((r) => r.name),
     ["App.tsx"],
   );
+});
+
+test("resolveLangFromLocale maps Turkish locales to tr and all other locales to en", () => {
+  assert.equal(resolveLangFromLocale("tr-TR"), "tr");
+  assert.equal(resolveLangFromLocale("tr"), "tr");
+  assert.equal(resolveLangFromLocale("tr_TR"), "tr");
+  assert.equal(resolveLangFromLocale("en-US"), "en");
+  assert.equal(resolveLangFromLocale("en-GB"), "en");
+  assert.equal(resolveLangFromLocale("de-DE"), "en");
+  assert.equal(resolveLangFromLocale("fr-FR"), "en");
+  assert.equal(resolveLangFromLocale(""), "en");
+  assert.equal(resolveLangFromLocale(null), "en");
+  assert.equal(resolveLangFromLocale(undefined), "en");
 });

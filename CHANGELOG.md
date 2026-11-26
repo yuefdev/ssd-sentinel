@@ -2,6 +2,13 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## [v1.10.1] — 2026-11-26
+
+### Fixed
+- **NSIS installer language auto-detection:** Reordered `bundle.windows.nsis.languages` to `["English", "Turkish"]` (with `displayLanguageSelector: false`) so Turkish Windows auto-selects Turkish while English and all other Windows locales automatically use English installer buttons and dialogs instead of falling back to Turkish.
+- **OS UI language auto-detection in Rust & Tray:** Added Win32 `GetUserDefaultUILanguage()` detection (`platform::detect_system_language`) so fresh installs without `preferences.json` match the Windows UI language across backend state, system tray menus, startup tooltip, tray notifications, and HTML report save dialogs.
+- **Frontend locale detection & sync:** Defaulted `<html lang="en">` and `detectInitialLang()` fallback to English, extracted `resolveLangFromLocale`, made initial backend/frontend language sync symmetric, and added unit + Playwright `de-DE` auto-boot-to-English verification.
+
 ## [v1.10.0] — 2026-11-23
 
 ### Added

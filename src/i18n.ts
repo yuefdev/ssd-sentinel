@@ -1,5 +1,14 @@
 export type Lang = "tr" | "en";
 
+export function resolveLangFromLocale(
+  locale: string | null | undefined,
+): Lang {
+  const norm = (locale ?? "").trim().toLowerCase();
+  return norm === "tr" || norm.startsWith("tr-") || norm.startsWith("tr_")
+    ? "tr"
+    : "en";
+}
+
 export function detectInitialLang(): Lang {
   try {
     const saved =
@@ -10,12 +19,14 @@ export function detectInitialLang(): Lang {
   } catch {}
   try {
     const nav =
-      typeof navigator !== "undefined" ? navigator.language || "" : "";
+      typeof navigator !== "undefined"
+        ? navigator.language || navigator.languages?.[0] || ""
+        : "";
     if (nav) {
-      return nav.toLowerCase().startsWith("tr") ? "tr" : "en";
+      return resolveLangFromLocale(nav);
     }
   } catch {}
-  return "tr";
+  return "en";
 }
 
 let currentLang: Lang = detectInitialLang();
