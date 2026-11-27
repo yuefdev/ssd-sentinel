@@ -2,6 +2,12 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## [v1.10.3] — 2026-11-27
+
+### Fixed
+- **Administrator-mode drive detection ("No drives detected"):** Added `parse_scan_devices` to safely skip elevated controller `open_error` entries and missing `type` hints, built a `--scan-open` → `--scan` → Win32 `/dev/pd{N}` fallback chain with `-d`-less auto-detect retry in `probe_smart_target`, and introduced live-only `deduplicate_live_aliases` (`core.rs`) to merge Windows `/dev/csmi*`, `/dev/nvme*`, `/dev/pd*`, and `/dev/sd*` aliases of the same physical drive (preferring complete non-CSMI reads) while keeping strict replay and real identity-conflict rejections intact.
+- **Admin/UAC `smartctl.exe` path normalization:** Added `strip_verbatim_prefix` (`\\?\` stripping) and an executable-sibling `smartmontools/bin/smartctl.exe` fallback in `desktop.rs`.
+
 ## [v1.10.2] — 2026-11-27
 
 ### Fixed

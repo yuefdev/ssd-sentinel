@@ -2324,13 +2324,13 @@ function toolsView(d: Disk): string {
     ? translateUpdateMessage(updateStatus, lang)
     : autoUpdateOn
       ? L(
-          `Yüklü sürüm v${state?.version ?? "1.10.2"} · canlı modda açılışta yeni sürümler kontrol edilir.`,
-          `Installed v${state?.version ?? "1.10.2"} · checks for new releases once on launch in live mode.`,
+          `Yüklü sürüm v${state?.version ?? "1.10.3"} · canlı modda açılışta yeni sürümler kontrol edilir.`,
+          `Installed v${state?.version ?? "1.10.3"} · checks for new releases once on launch in live mode.`,
           lang,
         )
       : L(
-          `Yüklü sürüm v${state?.version ?? "1.10.2"} · otomatik denetim kapalı (yalnız elle kontrol).`,
-          `Installed v${state?.version ?? "1.10.2"} · automatic checks off (manual check only).`,
+          `Yüklü sürüm v${state?.version ?? "1.10.3"} · otomatik denetim kapalı (yalnız elle kontrol).`,
+          `Installed v${state?.version ?? "1.10.3"} · automatic checks off (manual check only).`,
           lang,
         );
   return `${heading(d, L("BAKIM & AYARLAR", "TOOLS & SETTINGS", lang), L("Bakım araçları ve uygulama ayarları", "Maintenance tools &amp; preferences", lang), L("Her işlem başlamadan önce onay ister.", "Every write or firmware command prompts for confirmation before running.", lang))}
@@ -2439,7 +2439,7 @@ function render() {
     page !== "tools"
       ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang)}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
       : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.2")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.3")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;

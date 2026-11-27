@@ -40,6 +40,190 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub fn parse_scan_devices(scan: &Value) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    let mut targets: Vec<(String, Option<String>)> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let Some(devices) = scan["devices"].as_array() else {
+        return (targets, notes);
+    };
+    for device in devices.iter().take(256) {
+        if let Some(err) = device["open_error"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let dev_name = device["name"].as_str().unwrap_or("?");
+            notes.push(format!("{dev_name}: {err}"));
+            continue;
+        }
+        let Some(name) = device["name"].as_str() else {
+            continue;
+        };
+        if !name.starts_with("/dev/")
+            || name.len() > 200
+            || name
+                .chars()
+                .any(|c| c.is_ascii_whitespace() || c.is_control())
+        {
+            continue;
+        }
+        let kind = match device.get("type") {
+            Some(v) if !v.is_null() => {
+                let Some(k) = v.as_str() else {
+                    continue;
+                };
+                if k.is_empty()
+                    || k.starts_with('-')
+                    || k.len() > 80
+                    || k.chars().any(|c| c.is_ascii_whitespace() || c.is_control())
+                {
+                    continue;
+                }
+                Some(k.to_owned())
+            }
+            _ => None,
+        };
+        let pair = (name.to_owned(), kind);
+        if !targets.iter().any(|existing| existing == &pair) {
+            targets.push(pair);
+        }
+    }
+    (targets, notes)
+}
+
+fn metric_u64_val(v: &Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+}
+
+fn device_namespace(dev: &str) -> &'static str {
+    if dev.starts_with("/dev/csmi") {
+        "csmi"
+    } else if dev.starts_with("/dev/nvme") {
+        "nvme"
+    } else if dev.starts_with("/dev/pd") {
+        "pd"
+    } else if dev.starts_with("/dev/sd") {
+        "sd"
+    } else {
+        "other"
+    }
+}
+
+fn is_same_physical_alias(a: &Disk, b: &Disk) -> bool {
+    if a.id != b.id || !a.stable_identity || !b.stable_identity || a.device == b.device {
+        return false;
+    }
+    if let (Some(af), Some(bf)) = (
+        a.firmware
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        b.firmware
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    ) {
+        if !af.eq_ignore_ascii_case(bf) {
+            return false;
+        }
+    }
+    if let (Some(ca), Some(cb)) = (
+        metric_u64_val(&a.metrics["capacity_bytes"]).filter(|&c| c > 0),
+        metric_u64_val(&b.metrics["capacity_bytes"]).filter(|&c| c > 0),
+    ) {
+        if ca != cb {
+            return false;
+        }
+    }
+    if !a.nvme_eui64.is_empty()
+        && !b.nvme_eui64.is_empty()
+        && !a.nvme_eui64.iter().any(|e| b.nvme_eui64.contains(e))
+    {
+        return false;
+    }
+    if !a.nvme_nguid.is_empty()
+        && !b.nvme_nguid.is_empty()
+        && !a.nvme_nguid.iter().any(|n| b.nvme_nguid.contains(n))
+    {
+        return false;
+    }
+    if let (Some(wa), Some(wb)) = (a.wwn.as_deref(), b.wwn.as_deref()) {
+        if wa != wb {
+            return false;
+        }
+    }
+    if device_namespace(&a.device) != device_namespace(&b.device) {
+        return true;
+    }
+    if (!a.nvme_eui64.is_empty() && a.nvme_eui64.iter().any(|e| b.nvme_eui64.contains(e)))
+        || (!a.nvme_nguid.is_empty() && a.nvme_nguid.iter().any(|n| b.nvme_nguid.contains(n)))
+        || (a.wwn.is_some() && a.wwn == b.wwn)
+    {
+        return true;
+    }
+    match (
+        metric_u64_val(&a.metrics["power_on_hours"]),
+        metric_u64_val(&b.metrics["power_on_hours"]),
+        metric_u64_val(&a.metrics["power_cycles"]),
+        metric_u64_val(&b.metrics["power_cycles"]),
+    ) {
+        (Some(ha), Some(hb), Some(ca), Some(cb)) if ha == hb && ca == cb => {
+            match (
+                metric_u64_val(&a.metrics["written_bytes"]),
+                metric_u64_val(&b.metrics["written_bytes"]),
+            ) {
+                (Some(wa), Some(wb)) => wa == wb,
+                _ => true,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn alias_rank(d: &Disk) -> (u8, u8, usize, u8) {
+    (
+        u8::from(!d.read_incomplete),
+        u8::from(d.health.percent.is_some()),
+        d.smart.len(),
+        u8::from(!d.device.starts_with("/dev/csmi")),
+    )
+}
+
+pub fn deduplicate_live_aliases(pairs: Vec<(Disk, Value)>) -> Result<Vec<(Disk, Value)>, String> {
+    let mut kept: Vec<(Disk, Value)> = Vec::new();
+    for (disk, snapshot) in pairs {
+        if let Some(idx) = kept.iter().position(|(existing, _)| existing.id == disk.id) {
+            if is_same_physical_alias(&kept[idx].0, &disk) {
+                if alias_rank(&disk) > alias_rank(&kept[idx].0) {
+                    kept[idx] = (disk, snapshot);
+                }
+            } else {
+                return Err(
+                    "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı."
+                        .into(),
+                );
+            }
+        } else {
+            kept.push((disk, snapshot));
+        }
+    }
+    Ok(kept)
+}
+
+fn inventory_pd_targets(inventory: &Value) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    for disk in inventory["disks"].as_array().into_iter().flatten() {
+        if let Some(num) = disk["number"].as_u64() {
+            let name = format!("/dev/pd{num}");
+            if !out.iter().any(|(existing, _)| existing == &name) {
+                out.push((name, None));
+            }
+        }
+    }
+    out
+}
+
 pub struct Permit(Arc<(Mutex<bool>, Condvar)>);
 impl Drop for Permit {
     fn drop(&mut self) {
@@ -177,6 +361,76 @@ impl Core {
         result
     }
 
+    fn probe_smart_target(&self, name: &str, kind: Option<&str>) -> Result<Value, String> {
+        let mut args = vec!["-i".into(), "-H".into(), "-A".into()];
+        if let Some(k) = kind {
+            args.push("-d".into());
+            args.push(k.into());
+        }
+        args.push(name.into());
+        let first = platform::smart(&self.config.smartctl, &args, &self.stop);
+        if self.stop.load(Ordering::SeqCst)
+            || first
+                .as_ref()
+                .is_err_and(|e| e == crate::process::CANCELLED)
+        {
+            return Err(crate::process::CANCELLED.into());
+        }
+        let mut chosen = if let Some(_k) = kind {
+            let need_retry = match &first {
+                Err(_) => true,
+                Ok(snap) => {
+                    snap["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 != 0
+                        && snap["model_name"].as_str().unwrap_or("").trim().is_empty()
+                }
+            };
+            if need_retry {
+                let retry = platform::smart(
+                    &self.config.smartctl,
+                    &["-i".into(), "-H".into(), "-A".into(), name.into()],
+                    &self.stop,
+                );
+                if self.stop.load(Ordering::SeqCst)
+                    || retry
+                        .as_ref()
+                        .is_err_and(|e| e == crate::process::CANCELLED)
+                {
+                    return Err(crate::process::CANCELLED.into());
+                }
+                match retry {
+                    Ok(retry_snap)
+                        if retry_snap["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 == 0
+                            || !retry_snap["model_name"]
+                                .as_str()
+                                .unwrap_or("")
+                                .trim()
+                                .is_empty() =>
+                    {
+                        Ok(retry_snap)
+                    }
+                    _ => first,
+                }
+            } else {
+                first
+            }
+        } else {
+            first
+        }?;
+        if !chosen["device"].is_object() {
+            chosen["device"] = json!({});
+        }
+        chosen["device"]["name"] = json!(name);
+        if chosen["device"]["type"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            chosen["device"]["type"] = json!(kind.unwrap_or("auto"));
+        }
+        Ok(chosen)
+    }
+
     fn collect(&self) -> Result<(), String> {
         let mut snapshots = Vec::new();
         let mut skipped_warnings: Vec<String> = Vec::new();
@@ -210,48 +464,66 @@ impl Core {
             }
             inventory = json!({"disks":[],"trim_enabled":null,"system_tuning":{},"error":"Kaydedilmiş ölçüm. Canlı Windows ve disk işlemleri kapalı."});
         } else {
-            let scan = platform::smart(&self.config.smartctl, &["--scan-open".into()], &self.stop)?;
-            if scan["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 != 0 {
-                return Err("Disk keşfi başarısız. Yönetici erişimini kontrol edin.".into());
+            let inv_val = platform::inventory(&self.stop).unwrap_or_else(
+                |e| json!({"disks":[],"error":e,"trim_enabled":null,"system_tuning":{}}),
+            );
+            let scan_open =
+                platform::smart(&self.config.smartctl, &["--scan-open".into()], &self.stop);
+            if self.stop.load(Ordering::SeqCst)
+                || scan_open
+                    .as_ref()
+                    .is_err_and(|e| e == crate::process::CANCELLED)
+            {
+                return Err(crate::process::CANCELLED.into());
             }
-            let devices = scan["devices"]
-                .as_array()
-                .filter(|v| !v.is_empty() && v.len() <= 256)
-                .ok_or("Okunabilir SMART aygıtı bulunamadı.")?;
-            for device in devices {
+            let mut targets = Vec::new();
+            let mut scan_notes = Vec::new();
+            match scan_open {
+                Ok(scan) if scan["smartctl"]["exit_status"].as_u64().unwrap_or(0) & 1 == 0 => {
+                    (targets, scan_notes) = parse_scan_devices(&scan);
+                }
+                Ok(scan) => {
+                    scan_notes.push(format!(
+                        "--scan-open çıkış kodu {}",
+                        scan["smartctl"]["exit_status"]
+                    ));
+                }
+                Err(e) => scan_notes.push(e),
+            }
+            if targets.is_empty() {
+                let scan_plain =
+                    platform::smart(&self.config.smartctl, &["--scan".into()], &self.stop);
+                if self.stop.load(Ordering::SeqCst)
+                    || scan_plain
+                        .as_ref()
+                        .is_err_and(|e| e == crate::process::CANCELLED)
+                {
+                    return Err(crate::process::CANCELLED.into());
+                }
+                match scan_plain {
+                    Ok(scan) if scan["smartctl"]["exit_status"].as_u64().unwrap_or(0) & 1 == 0 => {
+                        let (t2, n2) = parse_scan_devices(&scan);
+                        targets = t2;
+                        scan_notes.extend(n2);
+                    }
+                    Ok(scan) => scan_notes.push(format!(
+                        "--scan çıkış kodu {}",
+                        scan["smartctl"]["exit_status"]
+                    )),
+                    Err(e) => scan_notes.push(e),
+                }
+            }
+            let mut used_pd_fallback = false;
+            if targets.is_empty() {
+                targets = inventory_pd_targets(&inv_val);
+                used_pd_fallback = true;
+            }
+            for (name, kind) in targets {
                 if self.stop.load(Ordering::SeqCst) {
                     return Err(crate::process::CANCELLED.into());
                 }
-                let name = device["name"].as_str().ok_or("Aygıt yolu yok.")?;
-                let kind = device["type"].as_str().ok_or("Aygıt türü yok.")?;
-                if !name.starts_with("/dev/")
-                    || name.len() > 200
-                    || kind.is_empty()
-                    || kind.starts_with('-')
-                    || kind.len() > 80
-                {
-                    return Err("Geçersiz aygıt keşif bilgisi.".into());
-                }
-                match platform::smart(
-                    &self.config.smartctl,
-                    &[
-                        "-i".into(),
-                        "-H".into(),
-                        "-A".into(),
-                        "-d".into(),
-                        kind.into(),
-                        name.into(),
-                    ],
-                    &self.stop,
-                ) {
-                    Ok(mut snapshot) => {
-                        if !snapshot["device"].is_object() {
-                            snapshot["device"] = json!({});
-                        }
-                        snapshot["device"]["name"] = json!(name);
-                        snapshot["device"]["type"] = json!(kind);
-                        snapshots.push(snapshot);
-                    }
+                match self.probe_smart_target(&name, kind.as_deref()) {
+                    Ok(snapshot) => snapshots.push(snapshot),
                     Err(e) => {
                         if self.stop.load(Ordering::SeqCst) || e == crate::process::CANCELLED {
                             return Err(crate::process::CANCELLED.into());
@@ -260,32 +532,57 @@ impl Core {
                     }
                 }
             }
+            if snapshots.is_empty() && !used_pd_fallback {
+                for (name, kind) in inventory_pd_targets(&inv_val) {
+                    if self.stop.load(Ordering::SeqCst) {
+                        return Err(crate::process::CANCELLED.into());
+                    }
+                    match self.probe_smart_target(&name, kind.as_deref()) {
+                        Ok(snapshot) => snapshots.push(snapshot),
+                        Err(e) => {
+                            if self.stop.load(Ordering::SeqCst) || e == crate::process::CANCELLED {
+                                return Err(crate::process::CANCELLED.into());
+                            }
+                            skipped_warnings.push(format!("{name}: {e}"));
+                        }
+                    }
+                }
+            }
             if snapshots.is_empty() {
-                return Err(if skipped_warnings.is_empty() {
+                let mut combined = skipped_warnings;
+                combined.extend(scan_notes);
+                return Err(if combined.is_empty() {
                     "Okunabilir SMART aygıtı bulunamadı.".into()
                 } else {
-                    skipped_warnings.join(" ")
+                    combined.join(" ")
                 });
             }
-            inventory = platform::inventory(&self.stop).unwrap_or_else(
-                |e| json!({"disks":[],"error":e,"trim_enabled":null,"system_tuning":{}}),
-            );
+            inventory = inv_val;
         }
         if self.stop.load(Ordering::SeqCst) {
             return Err(crate::process::CANCELLED.into());
         }
         let strict = self.strict_health.load(Ordering::SeqCst);
-        let mut disks: Vec<Disk> = snapshots
-            .iter()
-            .map(|s| model::normalise_with_mode(s, strict))
+        let pairs: Vec<(Disk, Value)> = snapshots
+            .into_iter()
+            .map(|s| {
+                let d = model::normalise_with_mode(&s, strict);
+                (d, s)
+            })
             .collect();
-        let mut identities = HashSet::new();
-        if disks.iter().any(|disk| !identities.insert(&disk.id)) {
-            return Err(
-                "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı."
-                    .into(),
-            );
-        }
+        let final_pairs = if self.config.snapshot_dir.is_some() {
+            let mut identities = HashSet::new();
+            if pairs.iter().any(|(disk, _)| !identities.insert(&disk.id)) {
+                return Err(
+                    "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı."
+                        .into(),
+                );
+            }
+            pairs
+        } else {
+            deduplicate_live_aliases(pairs)?
+        };
+        let (mut disks, snapshots): (Vec<Disk>, Vec<Value>) = final_pairs.into_iter().unzip();
         platform::attach_volumes(&mut disks, &inventory);
         let healthy_reads: Vec<Disk> = disks
             .iter()
@@ -628,7 +925,12 @@ impl Core {
         }
         let _permit = self.reserve()?;
         self.job_cancel.store(false, Ordering::SeqCst);
-        let target = vec!["-d".into(), disk.device_type.clone(), disk.device.clone()];
+        let mut target = Vec::new();
+        if !disk.device_type.is_empty() && disk.device_type != "auto" {
+            target.push("-d".into());
+            target.push(disk.device_type.clone());
+        }
+        target.push(disk.device.clone());
         let mut args = vec!["-i".into()];
         args.extend(target.clone());
         let current = platform::smart(&self.config.smartctl, &args, &self.stop)?;

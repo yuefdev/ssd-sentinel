@@ -1181,6 +1181,22 @@ fn tray_image(temp: Option<u32>, critical: bool, warning: bool) -> Image<'static
     Image::new_owned(rgba, 32, 32)
 }
 
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix("\\\\?\\") {
+        if !rest.starts_with("UNC\\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
+}
+
 pub fn run() {
     let elevated_relaunch = std::env::args().any(|a| a == "--elevated-relaunch");
     let start_minimized = std::env::args().any(|a| a == "--minimized");
@@ -1237,12 +1253,19 @@ pub fn run() {
         ])
         .setup(move |app| {
             let mut data_dir = app.path().app_local_data_dir()?;
-            let resource = app
-                .path()
-                .resource_dir()?
-                .join("smartmontools/bin/smartctl.exe");
+            let resource = strip_verbatim_prefix(
+                app.path()
+                    .resource_dir()?
+                    .join("smartmontools/bin/smartctl.exe"),
+            );
+            let exe_sibling = std::env::current_exe().ok().and_then(|exe| {
+                exe.parent()
+                    .map(|dir| strip_verbatim_prefix(dir.join("smartmontools/bin/smartctl.exe")))
+            });
             let mut smartctl = if resource.is_file() {
                 resource
+            } else if let Some(sibling) = exe_sibling.filter(|p| p.is_file()) {
+                sibling
             } else {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../tools/smartmontools/bin/smartctl.exe")

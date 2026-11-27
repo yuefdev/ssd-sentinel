@@ -1496,3 +1496,120 @@ fn tier3_unique_capacity_fallback_handles_unexposed_nguid_and_blocks_duplicates_
     platform::attach_volumes(&mut bad_bus, &inv_wrong_bus);
     assert_eq!(bad_bus[0].os_disk_number, None);
 }
+
+#[test]
+fn admin_scan_open_errors_and_missing_types_do_not_drop_healthy_drives() {
+    let scan = json!({
+        "smartctl": { "exit_status": 2 },
+        "devices": [
+            { "name": "/dev/csmi0,1", "open_error": "Input/output error" },
+            { "name": "invalid_relative_path", "type": "ata" },
+            { "name": "/dev/sda", "info_name": "/dev/sda", "type": "nvme", "protocol": "NVMe" },
+            { "name": "/dev/sdb", "info_name": "/dev/sdb", "type": "nvme", "protocol": "NVMe" },
+            { "name": "/dev/pd2" },
+            { "name": "/dev/sda", "type": "nvme" }
+        ]
+    });
+    let (targets, notes) = ssd_sentinel_core::core::parse_scan_devices(&scan);
+    assert_eq!(
+        targets,
+        vec![
+            ("/dev/sda".to_owned(), Some("nvme".to_owned())),
+            ("/dev/sdb".to_owned(), Some("nvme".to_owned())),
+            ("/dev/pd2".to_owned(), None),
+        ]
+    );
+    assert_eq!(notes, vec!["/dev/csmi0,1: Input/output error".to_owned()]);
+}
+
+#[test]
+fn admin_live_duplicate_csmi_and_nvme_aliases_deduplicate_safely_while_rejecting_real_conflicts() {
+    let raw_corsair = json!({
+        "model_name": "Corsair Force MP600",
+        "serial_number": "CORS-987654",
+        "firmware_version": "EGFM11.3",
+        "device": { "name": "/dev/sda", "type": "nvme", "protocol": "NVMe" },
+        "smartctl": { "exit_status": 0 },
+        "smart_status": { "passed": true },
+        "user_capacity": { "bytes": 1_000_204_886_016u64 },
+        "nvme_smart_health_information_log": {
+            "critical_warning": 0,
+            "temperature": 40,
+            "available_spare": 100,
+            "available_spare_threshold": 10,
+            "percentage_used": 2,
+            "data_units_written": 1000,
+            "data_units_read": 2000,
+            "media_errors": 0,
+            "num_err_log_entries": 0,
+            "power_on_hours": 120,
+            "power_cycles": 30
+        }
+    });
+    let mut raw_corsair_csmi = raw_corsair.clone();
+    raw_corsair_csmi["device"] =
+        json!({ "name": "/dev/csmi0,0", "type": "ata", "protocol": "ATA" });
+    raw_corsair_csmi["smartctl"] = json!({ "exit_status": 4 });
+    raw_corsair_csmi
+        .as_object_mut()
+        .unwrap()
+        .remove("nvme_smart_health_information_log");
+
+    let raw_samsung = json!({
+        "model_name": "Samsung SSD 970 EVO Plus 1TB",
+        "serial_number": "S4EWNF0N123456",
+        "firmware_version": "2B2QEXM7",
+        "device": { "name": "/dev/sdb", "type": "nvme", "protocol": "NVMe" },
+        "smartctl": { "exit_status": 0 },
+        "smart_status": { "passed": true },
+        "user_capacity": { "bytes": 1_000_204_886_016u64 },
+        "nvme_smart_health_information_log": {
+            "critical_warning": 0,
+            "temperature": 44,
+            "available_spare": 100,
+            "available_spare_threshold": 10,
+            "percentage_used": 5,
+            "data_units_written": 5000,
+            "data_units_read": 6000,
+            "media_errors": 0,
+            "num_err_log_entries": 0,
+            "power_on_hours": 450,
+            "power_cycles": 90
+        }
+    });
+    let mut raw_samsung_nvme0 = raw_samsung.clone();
+    raw_samsung_nvme0["device"] =
+        json!({ "name": "/dev/nvme0", "type": "nvme", "protocol": "NVMe" });
+
+    let deduped = ssd_sentinel_core::core::deduplicate_live_aliases(vec![
+        (
+            model::normalise(&raw_corsair_csmi),
+            raw_corsair_csmi.clone(),
+        ),
+        (model::normalise(&raw_corsair), raw_corsair.clone()),
+        (model::normalise(&raw_samsung_nvme0), raw_samsung_nvme0),
+        (model::normalise(&raw_samsung), raw_samsung.clone()),
+    ])
+    .unwrap();
+    assert_eq!(deduped.len(), 2);
+    assert_eq!(deduped[0].0.model, "Corsair Force MP600");
+    assert_eq!(deduped[0].0.device, "/dev/sda");
+    assert!(!deduped[0].0.read_incomplete);
+    assert_eq!(deduped[1].0.model, "Samsung SSD 970 EVO Plus 1TB");
+    assert_eq!(deduped[1].0.device, "/dev/nvme0");
+
+    assert!(ssd_sentinel_core::core::deduplicate_live_aliases(vec![
+        (model::normalise(&raw_corsair), raw_corsair.clone()),
+        (model::normalise(&raw_corsair), raw_corsair.clone()),
+    ])
+    .is_err());
+
+    let mut conflict_fw = raw_corsair.clone();
+    conflict_fw["device"]["name"] = json!("/dev/pd0");
+    conflict_fw["firmware_version"] = json!("DIFFERENT-FW");
+    assert!(ssd_sentinel_core::core::deduplicate_live_aliases(vec![
+        (model::normalise(&raw_corsair), raw_corsair),
+        (model::normalise(&conflict_fw), conflict_fw),
+    ])
+    .is_err());
+}
