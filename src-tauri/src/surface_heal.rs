@@ -1,6 +1,6 @@
 use crate::{
     core::{lock, Core, JobRequest},
-    jobs::{add_block, cancelled, classify, phase, OwnedArea, BLOCKS},
+    jobs::{add_block, cancelled, classify, phase_bi, OwnedArea, BLOCKS},
     model::{normalise, Disk},
     platform, process,
     surface_triage::{self, Action, Target, TargetKind},
@@ -28,6 +28,22 @@ pub fn fmt_eta(secs: f64) -> String {
         format!("~{mins} dk")
     } else {
         format!("~{} sa {:02} dk", mins / 60, mins % 60)
+    }
+}
+
+/// English twin of [`fmt_eta`] ("<1 min", "~4 min", "~2 h 05 min").
+pub fn fmt_eta_lang(secs: f64, en: bool) -> String {
+    if !en {
+        return fmt_eta(secs);
+    }
+    if !secs.is_finite() || secs < 60.0 {
+        return "<1 min".into();
+    }
+    let mins = (secs / 60.0).round() as u64;
+    if mins < 60 {
+        format!("~{mins} min")
+    } else {
+        format!("~{} h {:02} min", mins / 60, mins % 60)
     }
 }
 
@@ -309,14 +325,23 @@ fn check_thermal_and_cascade(
     base.reallocated_5 = base.reallocated_5.saturating_add(expected_remaps);
     match evaluate_watchdog(&base, &current) {
         WatchdogDecision::Continue => Ok(()),
-        WatchdogDecision::AbortCascade { delta_reallocated } => Err(format!(
-            "Akıllı SMART koruması tetiklendi: yeniden eşlenen sektör sayısı (+{delta_reallocated}) arttı; veri güvenliği için tarama durduruldu."
-        )),
+        WatchdogDecision::AbortCascade { delta_reallocated } => Err(if core.is_en() {
+            format!(
+                "Smart SMART protection triggered: the reallocated sector count grew (+{delta_reallocated}); the scan was stopped to keep your data safe."
+            )
+        } else {
+            format!(
+                "Akıllı SMART koruması tetiklendi: yeniden eşlenen sektör sayısı (+{delta_reallocated}) arttı; veri güvenliği için tarama durduruldu."
+            )
+        }),
         WatchdogDecision::CoolDown { temp_c } => {
             *thermal_pauses += 1;
-            phase(
+            phase_bi(
                 core,
                 &format!("Termal koruma · disk sıcaklığı {temp_c:.0} °C · soğuma bekleniyor"),
+                &format!(
+                    "Thermal protection · drive temperature {temp_c:.0} °C · waiting to cool down"
+                ),
             );
             for _ in 0..250 {
                 cancelled(core)?;
@@ -336,9 +361,12 @@ pub(crate) fn run(
 ) -> Result<(), String> {
     let mode = request.options["mode"].as_str().unwrap_or("physical_scan");
     if !platform::is_admin() {
-        return Err(
-            "Fiziksel yüzey tarama ve kurtarma işlemleri yönetici yetkisi gerektirir.".into(),
-        );
+        return Err(core
+            .t(
+                "Fiziksel yüzey tarama ve kurtarma işlemleri yönetici yetkisi gerektirir.",
+                "Physical surface scan and recovery operations require administrator rights.",
+            )
+            .into());
     }
     match mode {
         "physical_scan" => {
@@ -1164,7 +1192,7 @@ mod win {
                     } else {
                         0.0
                     };
-                    phase(
+                    phase_bi(
                         core,
                         &format!(
                             "Tam yüzey taraması · Bölge {}/{BLOCKS} · {:.1} / {:.1} GB · {:.0} MB/sn · kalan {}",
@@ -1173,6 +1201,14 @@ mod win {
                             disk_bytes as f64 / 1e9,
                             mb_s,
                             fmt_eta(remaining)
+                        ),
+                        &format!(
+                            "Full surface scan · Zone {}/{BLOCKS} · {:.1} / {:.1} GB · {:.0} MB/s · remaining {}",
+                            i + 1,
+                            done_bytes as f64 / 1e9,
+                            disk_bytes as f64 / 1e9,
+                            mb_s,
+                            fmt_eta_lang(remaining, true)
                         ),
                     );
                     let mut job = lock(&core.job);
@@ -1281,13 +1317,23 @@ mod win {
                 "thermal_pauses": thermal_pauses,
                 "smart_before": baseline,
                 "smart_after": smart_after,
-                "scope": format!(
-                    "Tam yüzey: {:.1} GB baştan sona okundu · {} · {} yavaş, {} okunamayan parça.",
-                    done_bytes as f64 / 1e9,
-                    fmt_eta(elapsed),
-                    slow_chunks_total,
-                    error_chunks
-                )
+                "scope": if core.is_en() {
+                    format!(
+                        "Full surface: {:.1} GB read end-to-end · {} · {} slow, {} unreadable chunks.",
+                        done_bytes as f64 / 1e9,
+                        fmt_eta_lang(elapsed, true),
+                        slow_chunks_total,
+                        error_chunks
+                    )
+                } else {
+                    format!(
+                        "Tam yüzey: {:.1} GB baştan sona okundu · {} · {} yavaş, {} okunamayan parça.",
+                        done_bytes as f64 / 1e9,
+                        fmt_eta_lang(elapsed, false),
+                        slow_chunks_total,
+                        error_chunks
+                    )
+                }
             });
         }
         let _ = lock(&core.store).clear_surface_checkpoint(&mapped.id);
@@ -1824,11 +1870,14 @@ mod win {
         Err("Önce “Tam yüzey taraması” yapın. Onarım, taramanın bulduğu bozuk ve yavaş sektörleri nokta atışı hedefler.".into())
     }
 
-    fn action_label(a: Action) -> &'static str {
-        match a {
-            Action::Heal => "onarılıyor",
-            Action::Isolate => "kapatılıyor",
-            Action::Relocate => "tazeleniyor",
+    fn action_label(a: Action, en: bool) -> &'static str {
+        match (a, en) {
+            (Action::Heal, false) => "onarılıyor",
+            (Action::Isolate, false) => "kapatılıyor",
+            (Action::Relocate, false) => "tazeleniyor",
+            (Action::Heal, true) => "healing",
+            (Action::Isolate, true) => "isolating",
+            (Action::Relocate, true) => "refreshing",
         }
     }
 
@@ -1850,6 +1899,7 @@ mod win {
             disk,
             &platform::inventory(&core.job_cancel)?,
         )?;
+        let en = core.is_en();
         let is_hdd = mapped.kind == "HDD";
         if isolate_mode && !is_hdd {
             return Err("Ölü bölge kapatma yalnız mekanik HDD'lerde anlamlıdır.".into());
@@ -1858,9 +1908,10 @@ mod win {
             .os_disk_number
             .ok_or("Fiziksel sürücü numarası doğrulanamadı.")?;
         let baseline = SmartSnapshot::from_disk(&mapped);
-        phase(
+        phase_bi(
             core,
             "1/4 · Son tam yüzey taramasının hedef haritası yükleniyor",
+            "1/4 · Loading the target map from the latest full surface scan",
         );
         let (targets, scan_at, scan_zbr, scan_slow) = latest_full_scan(core, &mapped.id)?;
         let (v_disk, vol_start, vol_len, cluster) = volume_geometry(&request.letter)?;
@@ -1871,9 +1922,10 @@ mod win {
             surface_triage::plan_regions(&targets, vol_start, vol_len, cluster);
 
         let chkdsk = if isolate_mode {
-            phase(
+            phase_bi(
                 core,
                 "1/4 · NTFS çevrimiçi bütünlük kontrolü (chkdsk /scan)",
+                "1/4 · Online NTFS integrity check (chkdsk /scan)",
             );
             Some(process::run(
                 &platform::system_executable("chkdsk.exe"),
@@ -1939,14 +1991,21 @@ mod win {
                 last_smart = Instant::now();
             }
             let action = surface_triage::decide(r, is_hdd, isolate_mode);
-            phase(
+            phase_bi(
                 core,
                 &format!(
                     "2/4 · Hedef {}/{total} · LBA {} · {} {}",
                     i + 1,
                     r.phys_offset / 512,
-                    r.kind.label(),
-                    action_label(action)
+                    r.kind.label_for(false),
+                    action_label(action, false)
+                ),
+                &format!(
+                    "2/4 · Target {}/{total} · LBA {} · {} {}",
+                    i + 1,
+                    r.phys_offset / 512,
+                    r.kind.label_for(true),
+                    action_label(action, true)
                 ),
             );
             let span = r.clusters * cluster;
@@ -2040,25 +2099,54 @@ mod win {
                 }
             }
 
-            let (result, status) = if !lost.is_empty() {
-                ("Veri kaybı · dosya kısmen okunamıyor", "bad")
+            let (result_tr, result_en, status) = if !lost.is_empty() {
+                (
+                    "Veri kaybı · dosya kısmen okunamıyor",
+                    "Data loss · file partly unreadable",
+                    "bad",
+                )
             } else if !region_dead.is_empty() {
-                ("Kalıcı ölü sektör · chkdsk /r gerekli", "bad")
+                (
+                    "Kalıcı ölü sektör · chkdsk /r gerekli",
+                    "Permanent dead sector · chkdsk /r required",
+                    "bad",
+                )
             } else if region_fenced > 0 && action == Action::Isolate {
-                ("Kalıcı olarak kapatıldı", "warning")
+                ("Kalıcı olarak kapatıldı", "Permanently isolated", "warning")
             } else if region_fenced > 0 {
-                ("Onarılamadı · kapatıldı", "warning")
+                (
+                    "Onarılamadı · kapatıldı",
+                    "Unrecoverable · isolated",
+                    "warning",
+                )
             } else if !system.is_empty() && moved.is_empty() && region_healed == 0 {
-                ("Sistem alanı · chkdsk /r önerilir", "warning")
+                (
+                    "Sistem alanı · chkdsk /r önerilir",
+                    "System area · chkdsk /r recommended",
+                    "warning",
+                )
             } else if !blocked.is_empty() && moved.is_empty() && region_healed == 0 {
-                ("Dosya kilitli · yeniden deneyin", "warning")
+                (
+                    "Dosya kilitli · yeniden deneyin",
+                    "File locked · try again",
+                    "warning",
+                )
             } else if !is_hdd && !moved.is_empty() {
-                ("Tazelendi · veri yeni hücrelere yazıldı", "ok")
+                (
+                    "Tazelendi · veri yeni hücrelere yazıldı",
+                    "Refreshed · data rewritten to fresh cells",
+                    "ok",
+                )
             } else if !is_hdd {
-                ("Boş alan · işlem gerekmez", "ok")
+                (
+                    "Boş alan · işlem gerekmez",
+                    "Free space · no action needed",
+                    "ok",
+                )
             } else {
-                ("Onarıldı", "ok")
+                ("Onarıldı", "Healed", "ok")
             };
+            let result = if en { result_en } else { result_tr };
             let probe_at = if is_hdd {
                 Some(r.phys_offset)
             } else {
@@ -2072,7 +2160,7 @@ mod win {
                 "offset_bytes": r.phys_offset,
                 "bytes": span,
                 "kind": r.kind,
-                "kind_label": r.kind.label(),
+                "kind_label": r.kind.label_for(en),
                 "dead_zone": r.dead_zone,
                 "action": action,
                 "result": result,
@@ -2094,7 +2182,7 @@ mod win {
                 "mb_s": null,
                 "offset_bytes": r.phys_offset,
                 "bytes": span,
-                "file": format!("LBA {} · {} · {result}", r.phys_offset / 512, r.kind.label()),
+                "file": format!("LBA {} · {} · {result}", r.phys_offset / 512, r.kind.label_for(en)),
                 "error": if status == "bad" { json!(result) } else { Value::Null }
             });
             if i < BLOCKS {
@@ -2108,7 +2196,11 @@ mod win {
         }
 
         // 3) Measure every repaired spot again, after other I/O has flushed drive caches.
-        phase(core, "3/4 · Onarım sonrası hız doğrulaması");
+        phase_bi(
+            core,
+            "3/4 · Onarım sonrası hız doğrulaması",
+            "3/4 · Post-repair speed verification",
+        );
         let (mut before_sum, mut after_sum, mut paired) = (0.0f64, 0.0f64, 0u64);
         for (idx, at, span) in &after_probe {
             cancelled(core)?;
@@ -2123,13 +2215,21 @@ mod win {
         drop(phys);
         drop(vol_rw);
 
-        phase(core, "4/4 · SMART değişimi ve sonuç raporu hazırlanıyor");
+        phase_bi(
+            core,
+            "4/4 · SMART değişimi ve sonuç raporu hazırlanıyor",
+            "4/4 · Preparing SMART delta and result report",
+        );
         if quarantine_bytes > 0 {
             let key = format!("quarantine:{}:{}", mapped.id, request.letter);
             let _ = lock(&core.store).record_optimization(
                 &key,
                 &format!("{}:{}", mapped.id, request.letter),
-                &format!("HDD Ölü Bölge Karantinası · {}:", request.letter),
+                &if en {
+                    format!("HDD dead-zone quarantine · {}:", request.letter)
+                } else {
+                    format!("HDD Ölü Bölge Karantinası · {}:", request.letter)
+                },
                 "0",
                 &format!("{quarantine_bytes}"),
             );
@@ -2140,32 +2240,61 @@ mod win {
         let recovered_pending = baseline.pending_197.saturating_sub(smart_after.pending_197);
         let mut advice: Vec<String> = Vec::new();
         if unplaceable > 0 {
-            advice.push(format!("{unplaceable} bölgeye hiç yazılamadı: disk yedek sektörü kalmamış olabilir. Windows'ta “chkdsk {}: /r” çalıştırıp bu alanları kalıcı bozuk küme olarak işaretleyin ve diski değiştirmeyi planlayın.", request.letter));
+            advice.push(if en { format!("{unplaceable} regions could not be written at all: the drive may have run out of spare sectors. Run “chkdsk {}: /r” in Windows to mark these areas as permanent bad clusters and plan to replace the drive.", request.letter) } else { format!("{unplaceable} bölgeye hiç yazılamadı: disk yedek sektörü kalmamış olabilir. Windows'ta “chkdsk {}: /r” çalıştırıp bu alanları kalıcı bozuk küme olarak işaretleyin ve diski değiştirmeyi planlayın.", request.letter) });
         }
         if !damaged.is_empty() {
-            advice.push(format!(
-                "{} dosyanın bir kısmı okunamıyor; bu dosyaları yedekten geri yükleyin.",
-                damaged.len()
-            ));
+            advice.push(if en {
+                format!(
+                    "Part of {} file(s) cannot be read; restore these files from a backup.",
+                    damaged.len()
+                )
+            } else {
+                format!(
+                    "{} dosyanın bir kısmı okunamıyor; bu dosyaları yedekten geri yükleyin.",
+                    damaged.len()
+                )
+            });
         }
         if regions.iter().any(|r| r.dead_zone) && !isolate_mode {
-            advice.push("Bazı bozuk sektörler kümelenmiş; bu bölgeler otomatik kapatıldı.".into());
+            advice.push(
+                core.t(
+                    "Bazı bozuk sektörler kümelenmiş; bu bölgeler otomatik kapatıldı.",
+                    "Some bad sectors are clustered; those zones were isolated automatically.",
+                )
+                .into(),
+            );
         }
         if outside > 0 {
-            advice.push(format!(
-                "{outside} hedef başka bir bölümde; o bölümü seçip tekrar çalıştırın."
-            ));
+            advice.push(if en {
+                format!(
+                    "{outside} target(s) are on another volume; select that volume and run again."
+                )
+            } else {
+                format!("{outside} hedef başka bir bölümde; o bölümü seçip tekrar çalıştırın.")
+            });
         }
         if total == 0 {
             advice.push(if targets.is_empty() {
-                "Son tam tarama sorun bulmadı; onarılacak bir şey yok.".into()
+                core.t(
+                    "Son tam tarama sorun bulmadı; onarılacak bir şey yok.",
+                    "The last full scan found no problems; nothing to repair.",
+                )
+                .into()
             } else {
-                "Taramanın bulduğu hedeflerin hiçbiri bu bölümde değil.".into()
+                core.t(
+                    "Taramanın bulduğu hedeflerin hiçbiri bu bölümde değil.",
+                    "None of the targets found by the scan are on this volume.",
+                )
+                .into()
             });
         }
         if !is_hdd && relocated_files > 0 {
             advice.push(
-                "Tazelenen veriler artık yeni hücrelerde; okuma hızları geri gelmiş olmalı.".into(),
+                core.t(
+                    "Tazelenen veriler artık yeni hücrelerde; okuma hızları geri gelmiş olmalı.",
+                    "Refreshed data now lives in fresh cells; read speeds should be restored.",
+                )
+                .into(),
             );
         }
         {
@@ -2207,14 +2336,17 @@ mod win {
                 "smart_before": baseline,
                 "smart_after": smart_after,
                 "recovered_pending": recovered_pending,
-                "scope": format!(
-                    "Nokta atışı {}: {} hedef bölge · {} onarıldı · {} dosya taşındı · {} kapatıldı.",
-                    if isolate_mode { "ölü bölge kapatma" } else if is_hdd { "sektör onarımı" } else { "SSD tazeleme" },
+                "scope": if en { format!("Pinpoint {}: {} target zones · {} healed · {} files moved · {} isolated.",
+                    if isolate_mode { core.t("ölü bölge kapatma", "dead-zone isolation") } else if is_hdd { core.t("sektör onarımı", "sector repair") } else { core.t("SSD tazeleme", "SSD refresh") },
                     total,
                     healed,
                     relocated_files,
-                    quarantined_runs
-                )
+                    quarantined_runs) } else { format!("Nokta atışı {}: {} hedef bölge · {} onarıldı · {} dosya taşındı · {} kapatıldı.",
+                    if isolate_mode { core.t("ölü bölge kapatma", "dead-zone isolation") } else if is_hdd { core.t("sektör onarımı", "sector repair") } else { core.t("SSD tazeleme", "SSD refresh") },
+                    total,
+                    healed,
+                    relocated_files,
+                    quarantined_runs) }
             });
         }
         Ok(())

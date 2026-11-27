@@ -191,6 +191,13 @@ fn alias_rank(d: &Disk) -> (u8, u8, usize, u8) {
 }
 
 pub fn deduplicate_live_aliases(pairs: Vec<(Disk, Value)>) -> Result<Vec<(Disk, Value)>, String> {
+    deduplicate_live_aliases_lang(pairs, false)
+}
+
+pub fn deduplicate_live_aliases_lang(
+    pairs: Vec<(Disk, Value)>,
+    en: bool,
+) -> Result<Vec<(Disk, Value)>, String> {
     let mut kept: Vec<(Disk, Value)> = Vec::new();
     for (disk, snapshot) in pairs {
         if let Some(idx) = kept.iter().position(|(existing, _)| existing.id == disk.id) {
@@ -200,7 +207,7 @@ pub fn deduplicate_live_aliases(pairs: Vec<(Disk, Value)>) -> Result<Vec<(Disk, 
                 }
             } else {
                 return Err(
-                    "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı."
+                    crate::i18n::pick(en, "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı.", "Duplicate SMART drive identity found; ambiguous measurements were not written to history.")
                         .into(),
                 );
             }
@@ -244,6 +251,7 @@ pub struct Core {
     pub strict_health: AtomicBool,
     pub read_only_guard: AtomicBool,
     pub auto_check_updates: AtomicBool,
+    pub portable: AtomicBool,
     pub language: Mutex<String>,
     busy: Arc<(Mutex<bool>, Condvar)>,
     source_key: String,
@@ -298,6 +306,7 @@ impl Core {
             strict_health: AtomicBool::new(strict),
             read_only_guard: AtomicBool::new(read_only_guard),
             auto_check_updates: AtomicBool::new(auto_check_updates),
+            portable: AtomicBool::new(false),
             language: Mutex::new(lang),
             busy: Arc::new((Mutex::new(false), Condvar::new())),
             source_key,
@@ -306,13 +315,37 @@ impl Core {
         }))
     }
 
+    pub fn is_portable(&self) -> bool {
+        self.portable.load(Ordering::SeqCst)
+    }
+
+    pub fn set_portable(&self, enabled: bool) {
+        self.portable.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn is_en(&self) -> bool {
+        lock(&self.language).as_str() == "en"
+    }
+
+    /// Picks the Turkish or English text for the active UI language.
+    pub fn t<'a>(&self, tr: &'a str, en: &'a str) -> &'a str {
+        crate::i18n::pick(self.is_en(), tr, en)
+    }
+
     pub fn reserve(&self) -> Result<Permit, String> {
         let mut busy = lock(&self.busy.0);
         if self.stop.load(Ordering::SeqCst) {
-            return Err("Uygulama kapanıyor.".into());
+            return Err(self
+                .t("Uygulama kapanıyor.", "The application is shutting down.")
+                .into());
         }
         if *busy {
-            return Err("Başka bir disk işlemi / okuması sürüyor.".into());
+            return Err(self
+                .t(
+                    "Başka bir disk işlemi / okuması sürüyor.",
+                    "Another disk operation or read is in progress.",
+                )
+                .into());
         }
         *busy = true;
         Ok(Permit(self.busy.clone()))
@@ -334,6 +367,8 @@ impl Core {
         data["read_only_guard"] = json!(self.read_only_guard.load(Ordering::SeqCst));
         data["auto_check_updates"] = json!(self.auto_check_updates.load(Ordering::SeqCst));
         data["language"] = json!(lock(&self.language).clone());
+        data["portable"] = json!(self.is_portable());
+        data["data_dir"] = json!(self.config.data_dir.to_string_lossy());
         data["optimizations"] = lock(&self.store)
             .list_optimizations()
             .unwrap_or_else(|_| json!([]));
@@ -448,12 +483,22 @@ impl Core {
                 .collect::<Vec<_>>();
             paths.sort();
             if paths.is_empty() || paths.len() > 256 {
-                return Err("Klasörde 1–256 smart-*.json dosyası olmalı.".into());
+                return Err(self
+                    .t(
+                        "Klasörde 1–256 smart-*.json dosyası olmalı.",
+                        "The folder must contain 1–256 smart-*.json files.",
+                    )
+                    .into());
             }
             for path in paths {
                 let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
                 if size > 8 * 1024 * 1024 {
-                    return Err("SMART kayıt dosyası 8 MiB sınırını aşıyor.".into());
+                    return Err(self
+                        .t(
+                            "SMART kayıt dosyası 8 MiB sınırını aşıyor.",
+                            "The SMART snapshot file exceeds the 8 MiB limit.",
+                        )
+                        .into());
                 }
                 snapshots.push(
                     serde_json::from_slice::<Value>(
@@ -462,7 +507,7 @@ impl Core {
                     .map_err(|e| e.to_string())?,
                 );
             }
-            inventory = json!({"disks":[],"trim_enabled":null,"system_tuning":{},"error":"Kaydedilmiş ölçüm. Canlı Windows ve disk işlemleri kapalı."});
+            inventory = json!({"disks":[],"trim_enabled":null,"system_tuning":{},"error":self.t("Kaydedilmiş ölçüm. Canlı Windows ve disk işlemleri kapalı.", "Recorded snapshot. Live Windows and disk operations are disabled.")});
         } else {
             let inv_val = platform::inventory(&self.stop).unwrap_or_else(
                 |e| json!({"disks":[],"error":e,"trim_enabled":null,"system_tuning":{}}),
@@ -484,7 +529,8 @@ impl Core {
                 }
                 Ok(scan) => {
                     scan_notes.push(format!(
-                        "--scan-open çıkış kodu {}",
+                        "{} {}",
+                        self.t("--scan-open çıkış kodu", "--scan-open exit code"),
                         scan["smartctl"]["exit_status"]
                     ));
                 }
@@ -507,7 +553,8 @@ impl Core {
                         scan_notes.extend(n2);
                     }
                     Ok(scan) => scan_notes.push(format!(
-                        "--scan çıkış kodu {}",
+                        "{} {}",
+                        self.t("--scan çıkış kodu", "--scan exit code"),
                         scan["smartctl"]["exit_status"]
                     )),
                     Err(e) => scan_notes.push(e),
@@ -552,7 +599,11 @@ impl Core {
                 let mut combined = skipped_warnings;
                 combined.extend(scan_notes);
                 return Err(if combined.is_empty() {
-                    "Okunabilir SMART aygıtı bulunamadı.".into()
+                    self.t(
+                        "Okunabilir SMART aygıtı bulunamadı.",
+                        "No readable SMART device was found.",
+                    )
+                    .into()
                 } else {
                     combined.join(" ")
                 });
@@ -574,13 +625,13 @@ impl Core {
             let mut identities = HashSet::new();
             if pairs.iter().any(|(disk, _)| !identities.insert(&disk.id)) {
                 return Err(
-                    "Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı."
+                    self.t("Tekrarlanan SMART disk kimliği bulundu; belirsiz ölçümler geçmişe yazılmadı.", "Duplicate SMART drive identity found; ambiguous measurements were not written to history.")
                         .into(),
                 );
             }
             pairs
         } else {
-            deduplicate_live_aliases(pairs)?
+            deduplicate_live_aliases_lang(pairs, self.is_en())?
         };
         let (mut disks, snapshots): (Vec<Disk>, Vec<Value>) = final_pairs.into_iter().unzip();
         platform::attach_volumes(&mut disks, &inventory);
@@ -677,7 +728,7 @@ impl Core {
             .disks()?
             .into_iter()
             .find(|d| d.id == id)
-            .ok_or("Disk bulunamadı.")?;
+            .ok_or(self.t("Disk bulunamadı.", "Drive not found."))?;
         let history = self.history(id)?;
         let rows = history.as_array().map(Vec::as_slice).unwrap_or(&[]);
         Ok(model::compute_health_forecast(&disk, rows))
@@ -695,7 +746,7 @@ impl Core {
         let data = lock(&self.data);
         if self.config.snapshot_dir.is_some() || data["stale"] != false {
             return Err(
-                "İşlem için güncel canlı disk kimliği gerekli; kayıt modunda kapalıdır.".into(),
+                self.t("İşlem için güncel canlı disk kimliği gerekli; kayıt modunda kapalıdır.", "A current live drive identity is required for this operation; it is disabled in replay mode.").into(),
             );
         }
         drop(data);
@@ -705,11 +756,16 @@ impl Core {
             .filter(|d| d.id == id && d.stable_identity)
             .collect();
         if matches.len() != 1 {
-            return Err("Disk kimliği benzersiz değil; yenileyin.".into());
+            return Err(self
+                .t(
+                    "Disk kimliği benzersiz değil; yenileyin.",
+                    "Drive identity is not unique; refresh and try again.",
+                )
+                .into());
         }
         if matches[0].read_incomplete {
             return Err(
-                "Bu diskin SMART okuması eksik; işlem için Yönetici olarak açıp yenileyin.".into(),
+                self.t("Bu diskin SMART okuması eksik; işlem için Yönetici olarak açıp yenileyin.", "SMART read for this drive is incomplete; restart as Administrator and refresh before running this operation.").into(),
             );
         }
         Ok(matches[0].clone())
@@ -730,9 +786,15 @@ impl Core {
 
     pub fn require_write_unlocked(&self, action: &str) -> Result<(), String> {
         if self.read_only_guard.load(Ordering::SeqCst) {
-            return Err(format!(
-                "Salt-okunur koruma etkin ({action} engellendi). Yazma kilidini üst çubuktan veya Ayarlar'dan açın."
-            ));
+            return Err(if self.is_en() {
+                format!("Read-Only Guard is active ({action} blocked). Unlock write protection from the top bar or Settings.")
+            } else {
+                if self.is_en() {
+                    format!("Read-Only Guard is active ({action} blocked). Unlock write protection from the top bar or Settings.")
+                } else {
+                    format!("Salt-okunur koruma etkin ({action} engellendi). Yazma kilidini üst çubuktan veya Ayarlar'dan açın.")
+                }
+            });
         }
         Ok(())
     }
@@ -740,7 +802,9 @@ impl Core {
     pub fn start_job(self: &Arc<Self>, mut request: JobRequest) -> Result<Value, String> {
         jobs::validate_options(&request.kind, &request.options)?;
         if request.letter.len() != 1 || !request.letter.as_bytes()[0].is_ascii_uppercase() {
-            return Err("Geçersiz bölüm harfi.".into());
+            return Err(self
+                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .into());
         }
         let expected = match request.kind.as_str() {
             "benchmark" => format!("benchmark:{}:{}", request.disk_id, request.letter),
@@ -771,7 +835,12 @@ impl Core {
             ),
         };
         if request.confirmation != expected {
-            return Err("Disk işlemi için açık onay gerekli.".into());
+            return Err(self
+                .t(
+                    "Disk işlemi için açık onay gerekli.",
+                    "Explicit confirmation is required for this disk operation.",
+                )
+                .into());
         }
         let disk = self.live_disk(&request.disk_id)?;
         if Self::is_mutating_job(&request.kind, &request.options) {
@@ -779,7 +848,7 @@ impl Core {
         }
         if request.kind == "defrag" && disk.kind != "HDD" {
             return Err(
-                "SSD'lerde disk birleştirme (Defrag) NAND ömrünü kısaltır ve engellenmiştir; ReTrim kullanın."
+                self.t("SSD'lerde disk birleştirme (Defrag) NAND ömrünü kısaltır ve engellenmiştir; ReTrim kullanın.", "Defragmenting SSDs shortens NAND lifespan and is blocked; use ReTrim instead.")
                     .into(),
             );
         }
@@ -787,13 +856,13 @@ impl Core {
             let mode = request.options["mode"].as_str().unwrap_or("");
             if mode == "ssd_extent_optimize" && !crate::tiering::is_ssd_disk(&disk) {
                 return Err(
-                    "SSD Akıllı Parça Temizliği + ReTrim yalnız SSD'lerde desteklenir; HDD için HDD Dış-İz Hızlı Yerleşim kullanın."
+                    self.t("SSD Akıllı Parça Temizliği + ReTrim yalnız SSD'lerde desteklenir; HDD için HDD Dış-İz Hızlı Yerleşim kullanın.", "SSD Smart Extent Consolidation + ReTrim is supported on SSDs only; use HDD Outer-Track Placement for HDDs.")
                         .into(),
                 );
             }
             if mode == "hdd_outer_optimize" && disk.kind != "HDD" {
                 return Err(
-                    "HDD Dış-İz Hızlı Yerleşim yalnız mekanik HDD'lerde desteklenir; SSD için Akıllı Parça Temizliği + ReTrim kullanın."
+                    self.t("HDD Dış-İz Hızlı Yerleşim yalnız mekanik HDD'lerde desteklenir; SSD için Akıllı Parça Temizliği + ReTrim kullanın.", "HDD Outer-Track Placement is supported on mechanical HDDs only; use Smart Extent Consolidation + ReTrim for SSDs.")
                         .into(),
                 );
             }
@@ -803,13 +872,18 @@ impl Core {
             || (request.kind == "recovery" && request.options["mode"] == "deep"))
             && !platform::is_admin()
         {
-            return Err("Bu işlem için Yönetici yetkisi gereklidir.".into());
+            return Err(self
+                .t(
+                    "Bu işlem için Yönetici yetkisi gereklidir.",
+                    "Administrator rights are required for this operation.",
+                )
+                .into());
         }
         if request.kind == "surface" {
             let mode = request.options["mode"].as_str().unwrap_or("read_scan");
             if mode == "bad_zone_isolate" && disk.kind != "HDD" {
                 return Err(
-                    "Ölü bölge kapatma yalnız mekanik HDD'lerde desteklenir; SSD'ler bozuk hücreleri kendisi değiştirir."
+                    self.t("Ölü bölge kapatma yalnız mekanik HDD'lerde desteklenir; SSD'ler bozuk hücreleri kendisi değiştirir.", "Dead-zone isolation is supported on mechanical HDDs only; SSDs retire bad cells internally.")
                         .into(),
                 );
             }
@@ -819,7 +893,7 @@ impl Core {
             ) && !platform::is_admin()
             {
                 return Err(
-                    "Fiziksel LBA tarama ve HDD kurtarma modları için Yönetici yetkisi gereklidir."
+                    self.t("Fiziksel LBA tarama ve HDD kurtarma modları için Yönetici yetkisi gereklidir.", "Administrator rights are required for physical LBA scan and HDD recovery modes.")
                         .into(),
                 );
             }
@@ -829,7 +903,12 @@ impl Core {
             || disk.os_disk_number.is_none()
             || !disk.volumes.iter().any(|v| v["letter"] == request.letter)
         {
-            return Err("Windows bölüm/disk kimliği doğrulanamadı.".into());
+            return Err(self
+                .t(
+                    "Windows bölüm/disk kimliği doğrulanamadı.",
+                    "The Windows volume/drive identity could not be verified.",
+                )
+                .into());
         }
         if request.options.get("size_mib") == Some(&json!("auto")) {
             let free = disk
@@ -850,7 +929,7 @@ impl Core {
         }
         let permit = self.reserve()?;
         self.job_cancel.store(false, Ordering::SeqCst);
-        let job = json!({"id":uuid::Uuid::new_v4().simple().to_string(),"kind":request.kind,"disk_id":disk.id,"model":disk.model,"letter":request.letter,"options":request.options,"status":"preparing","phase":"Disk kimliği doğrulanıyor","progress":0,"completed":0,"total":200,"results":[],"blocks":[],"summary":{},"damaged_files":[],"read_bytes":0,"write_bytes":0,"prepared_bytes":0,"started_at":Utc::now().to_rfc3339(),"finished_at":null,"error":null,"cleanup_error":null});
+        let job = json!({"id":uuid::Uuid::new_v4().simple().to_string(),"kind":request.kind,"disk_id":disk.id,"model":disk.model,"letter":request.letter,"options":request.options,"status":"preparing","phase":self.t("Disk kimliği doğrulanıyor", "Verifying drive identity"),"progress":0,"completed":0,"total":200,"results":[],"blocks":[],"summary":{},"damaged_files":[],"read_bytes":0,"write_bytes":0,"prepared_bytes":0,"started_at":Utc::now().to_rfc3339(),"finished_at":null,"error":null,"cleanup_error":null});
         *lock(&self.job) = job.clone();
         let core = self.clone();
         let worker = std::thread::Builder::new()
@@ -881,7 +960,12 @@ impl Core {
     pub fn cancel_job(&self, id: &str) -> Result<Value, String> {
         let mut job = lock(&self.job);
         if job["id"] != id {
-            return Err("Durdurulacak iş kimliği değişti.".into());
+            return Err(self
+                .t(
+                    "Durdurulacak iş kimliği değişti.",
+                    "The job to stop has changed.",
+                )
+                .into());
         }
         if matches!(
             job["status"].as_str(),
@@ -890,7 +974,10 @@ impl Core {
         {
             self.job_cancel.store(true, Ordering::SeqCst);
             job["status"] = json!("cancelling");
-            job["phase"] = json!("Durduruluyor ve geçici dosya temizleniyor");
+            job["phase"] = json!(self.t(
+                "Durduruluyor ve geçici dosya temizleniyor",
+                "Stopping and cleaning up temporary files"
+            ));
         }
         Ok(job.clone())
     }
@@ -906,21 +993,32 @@ impl Core {
             action,
             "logs" | "short_test" | "long_test" | "abort_test" | "retrim"
         ) {
-            return Err("Desteklenmeyen işlem.".into());
+            return Err(self
+                .t("Desteklenmeyen işlem.", "Unsupported operation.")
+                .into());
         }
         if action == "logs" && self.config.snapshot_dir.is_some() {
             let snapshots = lock(&self.snapshots);
-            let snapshot = snapshots.get(id).ok_or("Disk bulunamadı.")?;
-            return Ok(Self::logs(snapshot));
+            let snapshot = snapshots
+                .get(id)
+                .ok_or(self.t("Disk bulunamadı.", "Drive not found."))?;
+            return Ok(Self::logs(snapshot, self.is_en()));
         }
         let disk = self.live_disk(id)?;
         if action != "logs" {
             if confirmation != Some(&format!("{action}:{id}")) {
-                return Err("İşlem onayı eksik.".into());
+                return Err(self
+                    .t("İşlem onayı eksik.", "Operation confirmation is missing.")
+                    .into());
             }
             self.require_write_unlocked(action)?;
             if !platform::is_admin() {
-                return Err("Bu işlem için yönetici olarak başlatın.".into());
+                return Err(self
+                    .t(
+                        "Bu işlem için yönetici olarak başlatın.",
+                        "Start the app as Administrator for this operation.",
+                    )
+                    .into());
             }
         }
         let _permit = self.reserve()?;
@@ -937,21 +1035,31 @@ impl Core {
         if normalise(&current).id != disk.id
             || current["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 != 0
         {
-            return Err("Aygıt değişti / kimliği okunamıyor. İşlem iptal edildi.".into());
+            return Err(self
+                .t(
+                    "Aygıt değişti / kimliği okunamıyor. İşlem iptal edildi.",
+                    "The device changed or its identity cannot be read. Operation cancelled.",
+                )
+                .into());
         }
         if action == "logs" {
             let mut args = vec!["-a".into()];
             args.extend(target);
             return platform::smart(&self.config.smartctl, &args, &self.stop)
-                .map(|s| Self::logs(&s));
+                .map(|s| Self::logs(&s, self.is_en()));
         }
         let inventory = platform::inventory(&self.stop)?;
         platform::verify_disk_mapping(&self.disks()?, &disk, &inventory)?;
         if action == "retrim" {
             if disk.kind == "HDD" {
-                return Err("ReTrim yalnız SSD için sunulur.".into());
+                return Err(self
+                    .t(
+                        "ReTrim yalnız SSD için sunulur.",
+                        "ReTrim is available for SSDs only.",
+                    )
+                    .into());
             }
-            let letter = letter.ok_or("Bölüm seçin.")?;
+            let letter = letter.ok_or(self.t("Bölüm seçin.", "Select a volume."))?;
             jobs::validate_target(self, &disk, letter, 0, false, false)?;
             let mut args = vec![
                 "-DriveLetter".into(),
@@ -968,7 +1076,12 @@ impl Core {
             return platform::powershell("ReTrim", &args, &self.stop, 180);
         }
         if disk.capabilities["self_test"] != true {
-            return Err("Aygıt dahili test desteği bildirmiyor.".into());
+            return Err(self
+                .t(
+                    "Aygıt dahili test desteği bildirmiyor.",
+                    "The device does not report built-in self-test support.",
+                )
+                .into());
         }
         let mut args = if action == "abort_test" {
             vec!["-X".into()]
@@ -985,14 +1098,19 @@ impl Core {
         args.extend(target);
         let result = platform::smart(&self.config.smartctl, &args, &self.stop)?;
         if result["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 != 0 {
-            return Err("Aygıt komutu kabul etmedi.".into());
+            return Err(self
+                .t(
+                    "Aygıt komutu kabul etmedi.",
+                    "The device did not accept the command.",
+                )
+                .into());
         }
         Ok(
-            json!({"status":"requested","message":"Komut aygıta gönderildi. Tamamlanma durumunu günlükten izleyin.","details":result["smartctl"]["messages"]}),
+            json!({"status":"requested","message":self.t("Komut aygıta gönderildi. Tamamlanma durumunu günlükten izleyin.", "Command sent to the device. Monitor completion in the SMART logs."),"details":result["smartctl"]["messages"]}),
         )
     }
 
-    fn logs(snapshot: &Value) -> Value {
+    fn logs(snapshot: &Value, en: bool) -> Value {
         let mut logs = json!({});
         for key in [
             "nvme_error_information_log",
@@ -1005,7 +1123,7 @@ impl Core {
                 logs[key] = snapshot[key].clone();
             }
         }
-        json!({"status":"read","logs":logs,"note":"Günlük okuması test başlatmaz. Desteklenmeyen komutlar hata günlüğü sayısını artırabilir."})
+        json!({"status":"read","logs":logs,"note":crate::i18n::pick(en, "Günlük okuması test başlatmaz. Desteklenmeyen komutlar hata günlüğü sayısını artırabilir.", "Reading logs does not start a test. Unsupported commands may increment the error log counter.")})
     }
 
     pub fn set_minimise(&self, enabled: bool) -> Result<(), String> {
@@ -1108,7 +1226,12 @@ impl Core {
                 }
             }
         }
-        Err("Kurtarılacak dosya kaydı bulunamadı; taramayı yenileyin.".into())
+        Err(self
+            .t(
+                "Kurtarılacak dosya kaydı bulunamadı; taramayı yenileyin.",
+                "Recovery item record not found; run the scan again.",
+            )
+            .into())
     }
 
     pub fn find_recovery_job(&self, job_id: &str) -> Result<Value, String> {
@@ -1122,7 +1245,12 @@ impl Core {
                 return Ok(job.clone());
             }
         }
-        Err("Kurtarma taraması kaydı bulunamadı; taramayı yenileyin.".into())
+        Err(self
+            .t(
+                "Kurtarma taraması kaydı bulunamadı; taramayı yenileyin.",
+                "Recovery scan record not found; run the scan again.",
+            )
+            .into())
     }
 
     pub fn preview_recovered_item(&self, job_id: &str, item_id: &str) -> Result<Value, String> {
@@ -1137,10 +1265,20 @@ impl Core {
         dest_dir: &std::path::Path,
     ) -> Result<Value, String> {
         if self.config.snapshot_dir.is_some() || lock(&self.data)["source"] == "replay" {
-            return Err("Kayıt modunda toplu dosya kurtarma kapalıdır.".into());
+            return Err(self
+                .t(
+                    "Kayıt modunda toplu dosya kurtarma kapalıdır.",
+                    "Batch file recovery is disabled in replay mode.",
+                )
+                .into());
         }
         if item_ids.is_empty() {
-            return Err("Toplu kurtarma için en az bir dosya seçin.".into());
+            return Err(self
+                .t(
+                    "Toplu kurtarma için en az bir dosya seçin.",
+                    "Select at least one file for batch recovery.",
+                )
+                .into());
         }
         let job = self.find_recovery_job(job_id)?;
         crate::recovery::restore_batch(&job, item_ids, dest_dir)
@@ -1168,7 +1306,7 @@ impl Core {
         let selected = disks
             .iter()
             .find(|d| d.id == disk_id)
-            .ok_or("Disk bulunamadı.")?;
+            .ok_or(self.t("Disk bulunamadı.", "Drive not found."))?;
         let active_moves = lock(&self.store)
             .list_tier_moves()?
             .as_array()
@@ -1189,14 +1327,21 @@ impl Core {
             ));
         }
         if clean_letter.len() != 1 || !clean_letter.as_bytes()[0].is_ascii_uppercase() {
-            return Err("Geçersiz bölüm harfi.".into());
+            return Err(self
+                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .into());
         }
         if !selected.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
                 .is_some_and(|l| l.eq_ignore_ascii_case(&clean_letter))
         }) {
-            return Err("Seçilen bölüm bu diske ait değil.".into());
+            return Err(self
+                .t(
+                    "Seçilen bölüm bu diske ait değil.",
+                    "The selected volume does not belong to this drive.",
+                )
+                .into());
         }
         crate::tiering::analyze_volume(&disks, selected, &clean_letter, &active_moves)
     }
@@ -1214,20 +1359,35 @@ impl Core {
             .trim_end_matches(':')
             .to_ascii_uppercase();
         if clean_target.len() != 1 || !clean_target.as_bytes()[0].is_ascii_uppercase() {
-            return Err("Geçersiz hedef bölüm harfi.".into());
+            return Err(self
+                .t(
+                    "Geçersiz hedef bölüm harfi.",
+                    "Invalid target volume letter.",
+                )
+                .into());
         }
         if !matches!(direction, "to_hdd" | "to_ssd" | "to_archive") {
-            return Err("Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).".into());
+            return Err(self
+                .t(
+                    "Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).",
+                    "Invalid tiering direction (must be to_hdd, to_ssd, or to_archive).",
+                )
+                .into());
         }
         let expected = format!("tier_relocate:{disk_id}:{clean_target}");
         if confirmation != expected {
-            return Err("Katmanlama taşıması için açık onay gerekli.".into());
+            return Err(self
+                .t(
+                    "Katmanlama taşıması için açık onay gerekli.",
+                    "Explicit confirmation is required for tier relocation.",
+                )
+                .into());
         }
         let disk = self.live_disk(disk_id)?;
         self.require_write_unlocked("tier_relocate")?;
         if !platform::is_admin() {
             return Err(
-                "Katmanlama taşıması ve NTFS Junction oluşturma için Yönetici yetkisi gereklidir."
+                self.t("Katmanlama taşıması ve NTFS Junction oluşturma için Yönetici yetkisi gereklidir.", "Administrator rights are required for tier relocation and NTFS Junction creation.")
                     .into(),
             );
         }
@@ -1239,14 +1399,24 @@ impl Core {
         {
             (src_bytes[0] as char).to_ascii_uppercase().to_string()
         } else {
-            return Err("Geçersiz kaynak dosya/klasör yolu.".into());
+            return Err(self
+                .t(
+                    "Geçersiz kaynak dosya/klasör yolu.",
+                    "Invalid source file/folder path.",
+                )
+                .into());
         };
         if !disk.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
                 .is_some_and(|l| l.eq_ignore_ascii_case(&src_letter))
         }) {
-            return Err("Kaynak yol seçilen diske ait değil.".into());
+            return Err(self
+                .t(
+                    "Kaynak yol seçilen diske ait değil.",
+                    "The source path does not belong to the selected drive.",
+                )
+                .into());
         }
         let all_disks = self.disks()?;
         let target_disk = all_disks
@@ -1259,18 +1429,36 @@ impl Core {
                             .is_some_and(|l| l.eq_ignore_ascii_case(&clean_target))
                     })
             })
-            .ok_or("Hedef bölüm başka bir canlı diskte doğrulanamadı.")?;
+            .ok_or(self.t(
+                "Hedef bölüm başka bir canlı diskte doğrulanamadı.",
+                "The target volume could not be verified on another live drive.",
+            ))?;
         if direction == "to_hdd" && target_disk.kind != "HDD" {
-            return Err("Soğuk veri taşıma hedefi bir HDD bölümü olmalıdır.".into());
+            return Err(self
+                .t(
+                    "Soğuk veri taşıma hedefi bir HDD bölümü olmalıdır.",
+                    "The cold-data target must be an HDD volume.",
+                )
+                .into());
         }
         if direction == "to_ssd" && !crate::tiering::is_ssd_disk(target_disk) {
-            return Err("Sıcak veri terfi hedefi bir SSD bölümü olmalıdır.".into());
+            return Err(self
+                .t(
+                    "Sıcak veri terfi hedefi bir SSD bölümü olmalıdır.",
+                    "The hot-data promotion target must be an SSD volume.",
+                )
+                .into());
         }
         if direction == "to_archive"
             && target_disk.kind != "HDD"
             && !crate::tiering::is_ssd_disk(target_disk)
         {
-            return Err("Arşiv hedefi geçerli bir HDD veya SSD bölümü olmalıdır.".into());
+            return Err(self
+                .t(
+                    "Arşiv hedefi geçerli bir HDD veya SSD bölümü olmalıdır.",
+                    "The archive target must be a valid HDD or SSD volume.",
+                )
+                .into());
         }
         let job_id = uuid::Uuid::new_v4().simple().to_string();
         let rec = {
@@ -1284,7 +1472,7 @@ impl Core {
                 "letter": src_letter,
                 "options": { "direction": direction, "target_letter": clean_target },
                 "status": "running",
-                "phase": "Dosyalar kopyalanıyor (SHA-256 doğrulama)",
+                "phase": self.t("Dosyalar kopyalanıyor (SHA-256 doğrulama)", "Copying files (SHA-256 verification)"),
                 "progress": 0,
                 "completed": 0,
                 "total": 100,
@@ -1325,7 +1513,7 @@ impl Core {
                 Ok(rec) => {
                     let mut job = lock(&self.job);
                     job["status"] = json!("completed");
-                    job["phase"] = json!("Tamamlandı");
+                    job["phase"] = json!(self.t("Tamamlandı", "Completed"));
                     job["progress"] = json!(100);
                     job["completed"] = json!(100);
                     job["cleanup_error"] = rec["cleanup_warning"].clone();
@@ -1336,9 +1524,9 @@ impl Core {
                     let mut job = lock(&self.job);
                     job["status"] = json!(if cancelled { "cancelled" } else { "failed" });
                     job["phase"] = json!(if cancelled {
-                        "İptal edildi"
+                        self.t("İptal edildi", "Cancelled")
                     } else {
-                        "Tamamlanamadı"
+                        self.t("Tamamlanamadı", "Failed")
                     });
                     job["error"] = json!(e);
                     job["finished_at"] = json!(Utc::now().to_rfc3339());
@@ -1354,11 +1542,18 @@ impl Core {
 
     pub fn rollback_tier_move(&self, move_id: &str, confirmation: &str) -> Result<Value, String> {
         if move_id.trim().is_empty() {
-            return Err("Taşıma kaydı kimliği eksik.".into());
+            return Err(self
+                .t("Taşıma kaydı kimliği eksik.", "Move record ID is missing.")
+                .into());
         }
         let expected = format!("tier_rollback:{move_id}");
         if confirmation != expected {
-            return Err("Geri alma işlemi için açık onay gerekli.".into());
+            return Err(self
+                .t(
+                    "Geri alma işlemi için açık onay gerekli.",
+                    "Explicit confirmation is required for rollback.",
+                )
+                .into());
         }
         {
             let data = lock(&self.data);
@@ -1367,23 +1562,33 @@ impl Core {
                 || data["stale"] != false
             {
                 return Err(
-                    "İşlem için güncel canlı disk kimliği gerekli; kayıt modunda kapalıdır.".into(),
+                    self.t("İşlem için güncel canlı disk kimliği gerekli; kayıt modunda kapalıdır.", "A current live drive identity is required for this operation; it is disabled in replay mode.").into(),
                 );
             }
         }
         self.require_write_unlocked("tier_rollback")?;
         if !platform::is_admin() {
-            return Err("Taşımayı geri almak için Yönetici yetkisi gereklidir.".into());
+            return Err(self
+                .t(
+                    "Taşımayı geri almak için Yönetici yetkisi gereklidir.",
+                    "Administrator rights are required to roll back a move.",
+                )
+                .into());
         }
-        let rec = lock(&self.store)
-            .get_tier_move(move_id)?
-            .ok_or("Geri alınacak taşıma kaydı bulunamadı.")?;
+        let rec = lock(&self.store).get_tier_move(move_id)?.ok_or(self.t(
+            "Geri alınacak taşıma kaydı bulunamadı.",
+            "The move record to roll back was not found.",
+        ))?;
         let job_id = uuid::Uuid::new_v4().simple().to_string();
         let src_letter = rec["source_letter"].as_str().unwrap_or("").to_owned();
-        let item_label = std::path::Path::new(rec["source_path"].as_str().unwrap_or("Katmanlama"))
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Katmanlama".into());
+        let item_label = std::path::Path::new(
+            rec["source_path"]
+                .as_str()
+                .unwrap_or(self.t("Katmanlama", "Tiering")),
+        )
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| self.t("Katmanlama", "Tiering").into());
         let res = {
             let _permit = self.reserve()?;
             self.job_cancel.store(false, Ordering::SeqCst);
@@ -1395,7 +1600,7 @@ impl Core {
                 "letter": src_letter,
                 "options": { "move_id": move_id },
                 "status": "running",
-                "phase": "Özgün konuma geri kopyalanıyor (SHA-256 doğrulama)",
+                "phase": self.t("Özgün konuma geri kopyalanıyor (SHA-256 doğrulama)", "Copying back to the original location (SHA-256 verification)"),
                 "progress": 0,
                 "completed": 0,
                 "total": 100,
@@ -1434,7 +1639,7 @@ impl Core {
                 Ok(res) => {
                     let mut job = lock(&self.job);
                     job["status"] = json!("completed");
-                    job["phase"] = json!("Tamamlandı");
+                    job["phase"] = json!(self.t("Tamamlandı", "Completed"));
                     job["progress"] = json!(100);
                     job["completed"] = json!(100);
                     job["cleanup_error"] = res["cleanup_warning"].clone();
@@ -1445,9 +1650,9 @@ impl Core {
                     let mut job = lock(&self.job);
                     job["status"] = json!(if cancelled { "cancelled" } else { "failed" });
                     job["phase"] = json!(if cancelled {
-                        "İptal edildi"
+                        self.t("İptal edildi", "Cancelled")
                     } else {
-                        "Tamamlanamadı"
+                        self.t("Tamamlanamadı", "Failed")
                     });
                     job["error"] = json!(e);
                     job["finished_at"] = json!(Utc::now().to_rfc3339());
@@ -1472,7 +1677,7 @@ impl Core {
         let selected = disks
             .iter()
             .find(|d| d.id == disk_id)
-            .ok_or("Disk bulunamadı.")?;
+            .ok_or(self.t("Disk bulunamadı.", "Drive not found."))?;
         if self.config.snapshot_dir.is_some() || lock(&self.data)["source"] == "replay" {
             let replay_letter =
                 if clean_letter.len() == 1 && clean_letter.as_bytes()[0].is_ascii_uppercase() {
@@ -1487,14 +1692,21 @@ impl Core {
             ));
         }
         if clean_letter.len() != 1 || !clean_letter.as_bytes()[0].is_ascii_uppercase() {
-            return Err("Geçersiz bölüm harfi.".into());
+            return Err(self
+                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .into());
         }
         if !selected.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
                 .is_some_and(|l| l.eq_ignore_ascii_case(&clean_letter))
         }) {
-            return Err("Seçilen bölüm bu diske ait değil.".into());
+            return Err(self
+                .t(
+                    "Seçilen bölüm bu diske ait değil.",
+                    "The selected volume does not belong to this drive.",
+                )
+                .into());
         }
         crate::dev_workspace::analyze_dev_workspace(&disks, selected, &clean_letter, custom_root)
     }
@@ -1507,24 +1719,39 @@ impl Core {
     ) -> Result<Value, String> {
         let path_str = artifact_path.trim();
         if path_str.is_empty() {
-            return Err("Temizlenecek klasör yolu eksik.".into());
+            return Err(self
+                .t(
+                    "Temizlenecek klasör yolu eksik.",
+                    "The folder path to clean is missing.",
+                )
+                .into());
         }
         let expected = crate::dev_workspace::clean_token(disk_id, path_str);
         if confirmation != expected {
-            return Err(
-                "Geliştirici yük temizliği için açık onay anahtarı eksik veya hatalı.".into(),
-            );
+            return Err(self
+                .t(
+                    "Geliştirici yük temizliği için açık onay anahtarı eksik veya hatalı.",
+                    "The confirmation key for developer cleanup is missing or invalid.",
+                )
+                .into());
         }
         let disk = self.live_disk(disk_id)?;
         self.require_write_unlocked("dev_clean")?;
-        let src_letter =
-            crate::dev_workspace::drive_letter(path_str).ok_or("Geçersiz temizlik klasör yolu.")?;
+        let src_letter = crate::dev_workspace::drive_letter(path_str).ok_or(self.t(
+            "Geçersiz temizlik klasör yolu.",
+            "Invalid cleanup folder path.",
+        ))?;
         if !disk.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
                 .is_some_and(|l| l.eq_ignore_ascii_case(&src_letter))
         }) {
-            return Err("Temizlenecek klasör seçilen diske ait değil.".into());
+            return Err(self
+                .t(
+                    "Temizlenecek klasör seçilen diske ait değil.",
+                    "The folder to clean does not belong to the selected drive.",
+                )
+                .into());
         }
         let path = std::path::Path::new(path_str);
         crate::dev_workspace::validate_cleanable_dev_path(
@@ -1543,7 +1770,7 @@ impl Core {
                 "letter": src_letter,
                 "options": { "path": path_str },
                 "status": "running",
-                "phase": "Yeniden üretilebilir derleme / önbellek dosyaları temizleniyor",
+                "phase": self.t("Yeniden üretilebilir derleme / önbellek dosyaları temizleniyor", "Cleaning rebuildable build / cache files"),
                 "progress": 10,
                 "completed": 10,
                 "total": 100,
@@ -1562,7 +1789,11 @@ impl Core {
             let outcome = {
                 let mut on_progress = |files: u64, freed: u64| {
                     let mut job = lock(&self.job);
-                    job["phase"] = json!(format!("{files} dosya temizlendi"));
+                    job["phase"] = json!(if self.is_en() {
+                        format!("{files} files cleaned")
+                    } else {
+                        format!("{files} dosya temizlendi")
+                    });
                     job["write_bytes"] = json!(freed);
                     job["progress"] = json!(55);
                     job["completed"] = json!(55);
@@ -1577,7 +1808,7 @@ impl Core {
                 Ok(res) => {
                     let mut job = lock(&self.job);
                     job["status"] = json!("completed");
-                    job["phase"] = json!("Tamamlandı");
+                    job["phase"] = json!(self.t("Tamamlandı", "Completed"));
                     job["progress"] = json!(100);
                     job["completed"] = json!(100);
                     job["write_bytes"] = res["freed_bytes"].clone();
@@ -1588,9 +1819,9 @@ impl Core {
                     let mut job = lock(&self.job);
                     job["status"] = json!(if cancelled { "cancelled" } else { "failed" });
                     job["phase"] = json!(if cancelled {
-                        "İptal edildi"
+                        self.t("İptal edildi", "Cancelled")
                     } else {
-                        "Tamamlanamadı"
+                        self.t("Tamamlanamadı", "Failed")
                     });
                     job["error"] = json!(e);
                     job["finished_at"] = json!(Utc::now().to_rfc3339());

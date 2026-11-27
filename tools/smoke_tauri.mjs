@@ -181,10 +181,10 @@ try {
           return structuredClone(
             window.__fixture.mockUpdate || {
               repo: "yuefdev/ssd-sentinel",
-              current: "1.10.3",
+              current: "1.11.0",
               status: "up_to_date",
-              latest: "v1.10.3",
-              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.3",
+              latest: "v1.11.0",
+              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.11.0",
               download_url: null,
               asset_name: null,
               asset_size: null,
@@ -1929,7 +1929,7 @@ try {
   await page.evaluate(() => {
     window.__fixture.mockUpdate = {
       repo: "yuefdev/ssd-sentinel",
-      current: "1.10.3",
+      current: "1.11.0",
       status: "update_available",
       latest: "v2.0.0",
       url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v2.0.0",
@@ -2117,6 +2117,558 @@ try {
     );
   } finally {
     await intlContext.close();
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // English purity sweep: with backend data that is still Turkish (older saved jobs, forensic
+  // labels, optimizations, events) the English UI must not show a single Turkish word.
+  // ---------------------------------------------------------------------------------------------
+  {
+    const purity = structuredClone(fixture);
+    const ps = purity.state;
+    const nowIso = "2026-11-27T10:00:00Z";
+    ps.language = "en";
+    ps.source = "live";
+    ps.stale = false;
+    ps.busy = false;
+    ps.admin = true;
+    ps.read_only_guard = false;
+    ps.portable = true;
+    ps.data_dir = "D:\\Tools\\SSD-Sentinel\\data";
+    ps.auto_check_updates = true;
+    ps.windows = {
+      trim_enabled: true,
+      system_tuning: {
+        pcie_aspm: 1,
+        hibernate_enabled: true,
+        hiberfil_bytes: 6 * 1024 ** 3,
+        autostart_enabled: false,
+        long_paths_enabled: false,
+        ntfs_8dot3_creation: 2,
+      },
+      error: null,
+    };
+    ps.disks.forEach((d, i) => {
+      d.stable_identity = true;
+      d.read_incomplete = false;
+      d.os_disk_number = i + 1;
+      d.os_serial = "SYN" + i;
+      d.os_model = d.model;
+      d.volumes = [
+        {
+          letter: "CDE"[i],
+          label: null,
+          filesystem: "NTFS",
+          size_bytes: 1_000_000_000_000,
+          free_bytes: 400_000_000_000,
+        },
+      ];
+    });
+    const pn = ps.disks[1];
+    pn.alerts = [
+      ...(pn.alerts || []),
+      {
+        code: "space-D",
+        level: "warning",
+        title: "D: boş alanı %10'un altında",
+        detail: "Büyük dosyaları taşıyın veya Windows depolama ayarlarını inceleyin.",
+      },
+    ];
+    ps.partial_warnings = [pn.device + ": SMART okuması eksik (kod 4)."];
+    ps.optimizations = [
+      {
+        key: "write_cache:" + pn.id,
+        target: pn.id,
+        title: "Yazma önbelleği · " + pn.model,
+        previous_value: "disable",
+        applied_value: "enable",
+        updated_at: nowIso,
+      },
+      {
+        key: "pcie_aspm:system",
+        target: "system",
+        title: "PCIe ASPM Güç Yönetimi (NVMe gecikme profili)",
+        previous_value: "1",
+        applied_value: "0",
+        updated_at: nowIso,
+      },
+      {
+        key: "hibernation:system",
+        target: "system",
+        title: "Hazırda Bekletme (hiberfil.sys)",
+        previous_value: "on",
+        applied_value: "off",
+        updated_at: nowIso,
+      },
+      {
+        key: "op:" + pn.id + ":D",
+        target: pn.id + ":D",
+        title: "SSD Over-Provisioning (%10) · D:",
+        previous_value: "1000000000000",
+        applied_value: "900000000000",
+        updated_at: nowIso,
+      },
+    ];
+    const baseJob = (kind, extra) => ({
+      id: kind + "-1",
+      kind,
+      disk_id: pn.id,
+      model: pn.model,
+      letter: "D",
+      options: {},
+      status: "completed",
+      phase: "Tamamlandı",
+      progress: 100,
+      completed: 100,
+      total: 100,
+      started_at: nowIso,
+      finished_at: nowIso,
+      error: null,
+      cleanup_error: null,
+      read_bytes: 0,
+      write_bytes: 0,
+      prepared_bytes: 0,
+      results: [],
+      blocks: [],
+      summary: {},
+      damaged_files: [],
+      ...extra,
+    });
+    ps.job = baseJob("autopilot", {
+      id: "autopilot-live",
+      status: "running",
+      phase: "2/4 · PCIe ASPM düşük gecikme güç ayarı uygulanıyor",
+      progress: 45,
+      finished_at: null,
+      options: { profile: "auto" },
+    });
+    purity.jobsByKind = {
+      autopilot: [
+        baseJob("autopilot", {
+          options: { profile: "auto" },
+          repair_summary: {
+            steps: [
+              "D: SSD ReTrim (/L) tamamlandı.",
+              "D: NTFS çevrimiçi bütünlük taraması tamamlandı (kod 0).",
+              "Güvenlik uyarısı: HDD birleştirme (defrag /O) atlandı (SMART #197 bekleyen sektör). Arızalı diski zorlamamak için önce Tam Yüzey Taraması ve Nokta Atışı Onarım çalıştırın, ardından önemli verilerinizi yedekleyin.",
+            ],
+            scope: "Otomatik politika profili uygulandı.",
+          },
+        }),
+      ],
+      surface: [
+        baseJob("surface", {
+          id: "surface-1",
+          options: { mode: "magnetic_refresh" },
+          blocks: [
+            {
+              index: 0,
+              status: "warning",
+              latency_ms: 120,
+              mb_s: 3,
+              offset_bytes: 0,
+              bytes: 4096,
+              file: "sample.bin",
+              error: "Okuma hatası: os error 5",
+            },
+          ],
+          damaged_files: [
+            { path: "D:\\data\\a.bin", block: 0, error: "Dosya kimliği değişti." },
+          ],
+          repair_summary: {
+            engine: "pinpoint",
+            mode: "magnetic_refresh",
+            scope:
+              "Nokta atışı sektör onarımı: 3 hedef bölge · 2 onarıldı · 1 dosya taşındı · 0 kapatıldı.",
+            advice: [
+              "Tazelenen veriler artık yeni hücrelerde; okuma hızları geri gelmiş olmalı.",
+              "Son tam tarama sorun bulmadı; onarılacak bir şey yok.",
+            ],
+            healed: 2,
+            relocated_files: 1,
+            relocated_bytes: 4096,
+            thermal_pauses: 0,
+            repairs: [
+              {
+                lba: 100,
+                offset_bytes: 51200,
+                bytes: 4096,
+                kind: "weak_sector",
+                kind_label: "Zayıf sektör",
+                action: "refresh",
+                result: "Tazelendi · veri yeni hücrelere yazıldı",
+                status: "ok",
+                before_ms: 120,
+                after_ms: 4,
+                moved_files: ["a.bin"],
+                moved_count: 1,
+                dead_errors: ["Okunamayan sektörde veri kaybı: os error 23"],
+              },
+              {
+                lba: 900,
+                offset_bytes: 460800,
+                bytes: 4096,
+                kind: "unreadable",
+                kind_label: "Okunamayan sektör",
+                action: "isolate",
+                result: "Kalıcı ölü sektör · chkdsk /r gerekli",
+                status: "bad",
+                before_ms: null,
+                after_ms: null,
+                dead_errors: [],
+              },
+            ],
+          },
+        }),
+      ],
+      recovery: [
+        baseJob("recovery", {
+          id: "rec-1",
+          options: { mode: "quick" },
+          phase: "5/5 · Sonuçlar önem, açılabilirlik ve bütünlüğe göre sıralanıyor",
+          repair_summary: {
+            mft_scanned: 1200,
+            vss_found: 1,
+            exe_found: 2,
+            high_confidence: 2,
+            engine:
+              "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt).",
+          },
+          recovery_items: [
+            {
+              id: "i1",
+              name: "setup.zip",
+              original_path: "D:\\Users\\Demo\\setup.zip",
+              extension: "zip",
+              category: "archive",
+              sub_type: "ZIP Arşivi",
+              size_bytes: 1_234_567,
+              deleted_at: nowIso,
+              source: "recycle_bin",
+              confidence: 100,
+              status_label: "Geri Dönüşüm Kutusu (%100 Sağlam)",
+              entropy: 7.9,
+              trim_zeroed: false,
+              ai_summary:
+                "Geri Dönüşüm Kutusu içinde eksiksiz ($I/$R); %100 bütünlükle geri alınabilir.",
+              source_letter: "D",
+              media_status: null,
+              openable: true,
+              repair_note: null,
+            },
+            {
+              id: "i2",
+              name: "photo.jpg",
+              original_path: "D:\\Users\\Demo\\photo.jpg",
+              extension: "jpg",
+              category: "photo",
+              sub_type: "JPEG Fotoğraf",
+              size_bytes: 2_345_678,
+              deleted_at: nowIso,
+              source: "vss_shadow",
+              confidence: 90,
+              status_label: "Geri Dönüşüm · Otomatik Onarılacak",
+              entropy: 7.7,
+              trim_zeroed: false,
+              ai_summary:
+                "Eksik JPEG sonu (EOI) onarıldı; kurtarılan bölüm açılabilir hale getirildi. Sektör yapısı ve imzası doğrulandı (Entropi: 7.70 bit/B, Bütünlük: %90).",
+              source_letter: "D",
+              media_status: "repaired",
+              openable: true,
+              repair_note:
+                "Eksik JPEG sonu (EOI) onarıldı; kurtarılan bölüm açılabilir hale getirildi.",
+            },
+          ],
+          deleted_apps: [
+            {
+              name: "Rufus",
+              publisher: "Akeo",
+              exe_path: "D:\\Tools\\rufus.exe",
+              installer_found: false,
+              appdata_paths: [],
+              winget_hint: "winget install Rufus.Rufus",
+              confidence: 80,
+              sources: ["Güvenlik Duvarı", "VSS Gölge Kopya", "AppData Kalıntısı"],
+              category: "Araç",
+              drive_letter: "D",
+            },
+            {
+              name: "Steam",
+              publisher: "Valve",
+              exe_path: "D:\\Games\\steam.exe",
+              installer_found: false,
+              appdata_paths: ["D:\\Users\\Demo\\AppData\\Local\\Steam"],
+              winget_hint: "winget install Valve.Steam",
+              confidence: 70,
+              sources: ["Kayıt Defteri", "Kırık Kısayol (.lnk)"],
+              category: "Oyun",
+              drive_letter: "D",
+            },
+          ],
+        }),
+      ],
+    };
+    purity.events = [
+      {
+        id: 1,
+        disk_id: pn.id,
+        time: nowIso,
+        code: "health-drop",
+        level: "warning",
+        message: "Sağlık / dayanım %98 → %91 düştü.",
+      },
+      {
+        id: 2,
+        disk_id: pn.id,
+        time: nowIso,
+        code: "counter:197",
+        level: "warning",
+        message: "197 sayacı 0 → 8 arttı.",
+      },
+    ];
+
+    const purityCtx = await browser.newContext({
+      viewport: { width: 1400, height: 1000 },
+      deviceScaleFactor: 1,
+      reducedMotion: "reduce",
+      locale: "en-US",
+    });
+    const purityIssues = [];
+    try {
+      await purityCtx.addInitScript((data) => {
+        window.__fixture = data;
+        window.__unexpected = [];
+        window.__TAURI_INTERNALS__ = {
+          invoke: async (cmd, args = {}) => {
+            const f = window.__fixture;
+            switch (cmd) {
+              case "get_state":
+                return structuredClone(f.state);
+              case "get_history":
+                return structuredClone(f.histories[args.diskId] || []);
+              case "get_events":
+                return structuredClone(f.events);
+              case "get_jobs":
+                return structuredClone(
+                  (f.jobsByKind[args.kind] || []).map((j) => ({
+                    ...j,
+                    disk_id: args.diskId,
+                  })),
+                );
+              case "get_health_forecast":
+                return { ready: false, sample_count: 1, span_hours: 0 };
+              case "get_surface_checkpoint":
+                return null;
+              case "list_tier_moves":
+                return [];
+              case "get_optimizations":
+                return structuredClone(f.state.optimizations);
+              case "refresh":
+              case "clear_surface_checkpoint":
+                return null;
+              case "set_preferences":
+                return null;
+              case "check_updates":
+                return {
+                  repo: "yuefdev/ssd-sentinel",
+                  current: "1.11.0",
+                  status: "update_available",
+                  portable: true,
+                  asset_kind: "portable_zip",
+                  latest: "v1.12.0",
+                  url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.12.0",
+                  download_url:
+                    "https://github.com/yuefdev/ssd-sentinel/releases/download/v1.12.0/SSD-Sentinel_1.12.0_x64-portable.zip",
+                  asset_name: "SSD-Sentinel_1.12.0_x64-portable.zip",
+                  asset_size: 9_000_000,
+                  sha256_url:
+                    "https://github.com/yuefdev/ssd-sentinel/releases/download/v1.12.0/SHA256SUMS.txt",
+                  notes: null,
+                  message: "Yeni sürüm mevcut: v1.12.0",
+                  message_en: "A new version is available: v1.12.0",
+                };
+              case "analyze_storage_tiering":
+                return {
+                  disk_id: args.diskId,
+                  letter: args.letter || "D",
+                  disk_type: "NVMe SSD",
+                  is_ssd: true,
+                  replay: false,
+                  fill_percent: 60,
+                  free_bytes: 400_000_000_000,
+                  size_bytes: 1_000_000_000_000,
+                  slc_pressure: "moderate",
+                  slc_note_tr: "SSD doluluğu orta düzeyde (%60.0); SLC önbelleği sağlıklı.",
+                  extreme_fragmented_count: 0,
+                  worst_extents: 1,
+                  companion_role: null,
+                  companion: null,
+                  total_reclaimable_bytes: 0,
+                  candidates: [],
+                  active_moves: [],
+                  summary_tr: "D: SSD bölümü dengeli görünüyor; öne çıkan büyük soğuk veri bulunmadı.",
+                };
+              case "analyze_dev_workspace":
+                return {
+                  disk_id: args.diskId,
+                  letter: args.letter || "D",
+                  replay: false,
+                  scanned_roots: [],
+                  scan_ms: 0,
+                  truncated: false,
+                  total_artifact_bytes: 0,
+                  stale_artifact_bytes: 0,
+                  total_cache_bytes: 0,
+                  total_vhdx_bytes: 0,
+                  total_reclaimable_bytes: 0,
+                  offload_target: null,
+                  projects: [],
+                  global_caches: [],
+                  vhdx_files: [],
+                  summary_tr: "Proje bulunamadı.",
+                  summary_en: "No projects found.",
+                };
+              case "preview_recovered_item":
+                if (args.itemId === "i1") {
+                  return {
+                    kind: "binary",
+                    metadata: {
+                      product_name: "Rufus",
+                      publisher: "Akeo",
+                      sub_type: "64-bit Masaüstü Uygulaması",
+                      size_bytes: 1_234_567,
+                      source: "vss_shadow",
+                      status_label: "VSS Gölge Kopya (%100 Sağlam · TRIM Korumalı)",
+                    },
+                  };
+                }
+                return {
+                  kind: "unavailable",
+                  reason: "Video dosyaları satır içi oynatılmaz; kurtardığınızda otomatik onarım uygulanır.",
+                  repaired: true,
+                  repair_note:
+                    "Eksik JPEG sonu (EOI) onarıldı; kurtarılan bölüm açılabilir hale getirildi.",
+                };
+              default:
+                window.__unexpected.push(cmd);
+                return null;
+            }
+          },
+        };
+      }, purity);
+      const pp = await purityCtx.newPage();
+      pp.on("pageerror", (e) => purityIssues.push("pageerror: " + e.message));
+      await pp.goto(previewUrl);
+      await expect(pp.locator(".disk-tile")).toHaveCount(3);
+      await expect(pp.locator("html")).toHaveAttribute("lang", "en");
+      await pp.locator(".disk-tile").nth(1).click();
+
+      const TR_CHARS = /[çğıöşüÇĞİÖŞÜ]/;
+      const TR_WORDS =
+        /\b(Tamamland|Atland|Ba[sş]ar[ıi]s[ıi]z|Y[öo]netici|Klasik|Salt-okunur|[ÖO]nizleme|Kopyalan[ıi]yor|Uygulan[ıi]yor|G[üu]ncel|Ta[sş][ıi]nabilir|Oyun|Uygulama|Hedef|Kurulum|Dosya)\b/;
+      const inspect = async (label, scope) => {
+        const raw = await (scope || pp).evaluate(() => {
+          document.querySelectorAll("details").forEach((d) => (d.open = true));
+          return document.body.innerText;
+        });
+        const text = raw.replace(/T[üu]rk[çc]e \(TR\)/g, "");
+        const bad = text.match(TR_CHARS) || text.match(TR_WORDS);
+        if (bad) {
+          const at = text.indexOf(bad[0]);
+          purityIssues.push(
+            label + ": Turkish text in English UI near " + JSON.stringify(text.slice(Math.max(0, at - 70), at + 70)),
+          );
+        }
+        return text;
+      };
+      const closeDialogs = async () => {
+        for (const sel of ["#confirm-cancel", "#close-result"]) {
+          const b = pp.locator("dialog[open] " + sel);
+          if (await b.count()) await b.first().click();
+        }
+      };
+
+      for (const view of ["overview", "optimize", "surface", "recovery", "performance", "smart", "history", "tools"]) {
+        await pp.locator('[data-page="' + view + '"]').first().click();
+        await pp.waitForTimeout(150);
+        if (view === "recovery") {
+          await inspect("recovery/apps", pp);
+          await pp.locator('[data-rec-tab="files"]').click();
+        }
+        const text = await inspect(view, pp);
+        if (view === "overview") {
+          if (!/free space below 10%/.test(text)) purityIssues.push("overview: missing translated free-space alert");
+          if (!/Verifying|Applying|PCIe ASPM/.test(text)) purityIssues.push("overview: active job phase not shown");
+        }
+        if (view === "optimize") {
+          for (const needle of ["Write cache", "Hibernation", "Over-Provisioning (10%)"]) {
+            if (!text.includes(needle)) purityIssues.push("optimize: missing " + needle);
+          }
+          await pp.locator('[data-action="start-autopilot"]').click();
+          await expect(pp.locator("#confirmation")).toBeVisible();
+          await inspect("autopilot dry-run dialog", pp);
+          await closeDialogs();
+        }
+        if (view === "surface") {
+          for (const needle of ["Full surface", "Pinpoint sector repair", "Weak sector", "Permanent dead sector"]) {
+            if (!text.includes(needle) && needle !== "Full surface") purityIssues.push("surface: missing " + needle);
+          }
+          await pp.locator('.mode-card:has(input[value="read_scan"])').click();
+          await pp.locator('[data-action="start-surface"]').click();
+          await expect(pp.locator("#confirmation")).toBeVisible();
+          const dlg = await inspect("read_scan dry-run dialog", pp);
+          if (!dlg.includes("read-only file sampling")) purityIssues.push("read_scan dialog: ReadFile label not translated");
+          await closeDialogs();
+        }
+        if (view === "recovery") {
+          for (const needle of ["ZIP Archive", "JPEG Photo"]) {
+            if (!text.includes(needle)) purityIssues.push("recovery: missing " + needle);
+          }
+          await pp.locator('[data-preview-id="i1"]').click();
+          await expect(pp.locator("#confirmation .preview-modal")).toBeVisible();
+          await pp.waitForTimeout(150);
+          await inspect("recovery preview (binary)", pp);
+          await closeDialogs();
+          await pp.locator('[data-preview-id="i2"]').click();
+          await pp.waitForTimeout(150);
+          await inspect("recovery preview (unavailable)", pp);
+          await closeDialogs();
+          await pp.locator('[data-rec-tab="apps"]').click();
+          const apps = await inspect("recovery/apps (after tab)", pp);
+          for (const needle of ["Tool", "Game", "Firewall", "VSS Shadow Copy", "AppData Leftover"]) {
+            if (!apps.includes(needle)) purityIssues.push("recovery apps: missing " + needle);
+          }
+        }
+        if (view === "history") {
+          for (const needle of ["Health / endurance dropped from 98% to 91%", "Counter 197 increased from 0 to 8"]) {
+            if (!text.includes(needle)) purityIssues.push("history: missing " + needle);
+          }
+        }
+        if (view === "tools") {
+          if (!/Storage mode/.test(text) || !/Portable/.test(text)) purityIssues.push("tools: portable storage mode row missing");
+          if (!text.includes("D:\\Tools\\SSD-Sentinel\\data")) purityIssues.push("tools: portable data folder not shown");
+          await pp.locator('[data-action="check-updates"]').click();
+          await pp.waitForTimeout(200);
+          const upd = await inspect("tools/update panel", pp);
+          if (!upd.includes("Download Portable .zip (SHA-256)")) purityIssues.push("tools: portable update button missing");
+          await pp.locator('[data-action="install-update"]').click();
+          await expect(pp.locator("#confirmation")).toBeVisible();
+          const dlg = await inspect("portable update dialog", pp);
+          if (!/portable/i.test(dlg) || !dlg.includes("SHA-256")) purityIssues.push("install-update dialog: portable copy missing");
+          await closeDialogs();
+        }
+      }
+      const unexpected = await pp.evaluate(() => window.__unexpected);
+      if (unexpected.length) purityIssues.push("unexpected IPC commands: " + [...new Set(unexpected)].join(", "));
+    } finally {
+      await purityCtx.close();
+    }
+    if (purityIssues.length) {
+      throw new Error("English purity sweep failed:\n - " + purityIssues.join("\n - "));
+    }
+    checks.push(
+      "English purity sweep: all 8 views, active/finished autopilot, optimizations, pinpoint repair, deleted apps, recovery preview, history events, portable storage and update dialogs show zero Turkish text while the backend data is Turkish",
+    );
   }
   if (errors.length) throw new Error(errors.join("\n"));
   await writeFile(

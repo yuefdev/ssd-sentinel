@@ -1,6 +1,6 @@
 use crate::{
     core::{lock, Core, JobRequest},
-    jobs::{autopilot_hdd_defrag_guard, cancelled, phase},
+    jobs::{autopilot_hdd_defrag_guard_for_lang, cancelled, phase_bi},
     model::Disk,
     platform, process,
 };
@@ -1810,7 +1810,8 @@ pub fn rollback_move_with_progress(
         "size_bytes": restored_bytes,
         "file_count": restored_files,
         "cleanup_warning": cleanup_warning,
-        "message_tr": "Öğe SHA-256 doğrulamasıyla özgün konumuna geri alındı."
+        "message_tr": "Öğe SHA-256 doğrulamasıyla özgün konumuna geri alındı.",
+        "message": "Item restored to its original path with SHA-256 verification."
     }))
 }
 
@@ -1831,14 +1832,17 @@ pub fn run_smart_tier_job(
         "ssd_extent_optimize" => {
             if disk.kind == "HDD" {
                 return Err(
-                    "SSD Akıllı Parça Temizliği yalnız SSD sürücülerde çalışır; HDD için Dış-İz Hızlı Yerleşim kullanın."
+                    core.t("SSD Akıllı Parça Temizliği yalnız SSD sürücülerde çalışır; HDD için Dış-İz Hızlı Yerleşim kullanın.", "Smart Extent Consolidation works on SSD drives only; use Outer-Track Placement for HDDs.")
                         .into(),
                 );
             }
             if !platform::is_admin() {
-                return Err(
-                    "Akıllı depolama optimizasyonu için Yönetici erişimi gereklidir.".into(),
-                );
+                return Err(core
+                    .t(
+                        "Akıllı depolama optimizasyonu için Yönetici erişimi gereklidir.",
+                        "Administrator access is required for smart storage optimization.",
+                    )
+                    .into());
             }
             #[cfg(windows)]
             {
@@ -1847,23 +1851,31 @@ pub fn run_smart_tier_job(
             #[cfg(not(windows))]
             {
                 let _ = (core, request, root);
-                Err("SSD Akıllı Parça Temizliği yalnız Windows NTFS'te desteklenir.".into())
+                Err(core
+                    .t(
+                        "SSD Akıllı Parça Temizliği yalnız Windows NTFS'te desteklenir.",
+                        "SSD Smart Extent Consolidation is supported on Windows NTFS only.",
+                    )
+                    .into())
             }
         }
         "hdd_outer_optimize" => {
             if disk.kind != "HDD" {
                 return Err(
-                    "HDD Dış-İz Hızlı Yerleşim yalnız mekanik HDD'lerde çalışır; SSD için Akıllı Parça Temizliği kullanın."
+                    core.t("HDD Dış-İz Hızlı Yerleşim yalnız mekanik HDD'lerde çalışır; SSD için Akıllı Parça Temizliği kullanın.", "HDD Outer-Track Placement works on mechanical HDDs only; use Smart Extent Consolidation for SSDs.")
                         .into(),
                 );
             }
-            if let Some(warning) = autopilot_hdd_defrag_guard(disk) {
+            if let Some(warning) = autopilot_hdd_defrag_guard_for_lang(disk, core.is_en()) {
                 return Err(warning);
             }
             if !platform::is_admin() {
-                return Err(
-                    "Akıllı depolama optimizasyonu için Yönetici erişimi gereklidir.".into(),
-                );
+                return Err(core
+                    .t(
+                        "Akıllı depolama optimizasyonu için Yönetici erişimi gereklidir.",
+                        "Administrator access is required for smart storage optimization.",
+                    )
+                    .into());
             }
             #[cfg(windows)]
             {
@@ -1872,10 +1884,20 @@ pub fn run_smart_tier_job(
             #[cfg(not(windows))]
             {
                 let _ = (core, request, root);
-                Err("HDD Dış-İz Hızlı Yerleşim yalnız Windows NTFS'te desteklenir.".into())
+                Err(core
+                    .t(
+                        "HDD Dış-İz Hızlı Yerleşim yalnız Windows NTFS'te desteklenir.",
+                        "HDD Outer-Track Placement is supported on Windows NTFS only.",
+                    )
+                    .into())
             }
         }
-        _ => Err("Geçersiz akıllı katmanlama optimizasyon modu.".into()),
+        _ => Err(core
+            .t(
+                "Geçersiz akıllı katmanlama optimizasyon modu.",
+                "Invalid smart tiering optimization mode.",
+            )
+            .into()),
     }
 }
 
@@ -2382,9 +2404,10 @@ mod win {
         let vol = open_volume_rw(&request.letter)?;
         let cluster = cluster_bytes(&request.letter);
         lock(&core.job)["total"] = json!(100);
-        phase(
+        phase_bi(
             core,
             "1/3 · Aşırı parçalanmış (>=50 parça) SSD dosyaları taranıyor",
+            "1/3 · Scanning heavily fragmented (>=50 extents) SSD files",
         );
 
         let files = collect_safe_user_files(core, root, 64 * 1024, 512 * MIB, 25_000)?;
@@ -2410,9 +2433,10 @@ mod win {
         }
         targets.sort_by_key(|a| std::cmp::Reverse(a.1));
 
-        phase(
+        phase_bi(
             core,
             "2/3 · Aşırı parçalanmış SSD dosyaları birleştiriliyor (en fazla 2 GiB yazma sınırı)",
+            "2/3 · Consolidating heavily fragmented SSD files (2 GiB write cap)",
         );
         let mut files_consolidated = 0u64;
         let mut extents_before = 0u64;
@@ -2467,7 +2491,11 @@ mod win {
         drop(vol);
 
         cancelled(core)?;
-        phase(core, "3/3 · SSD ReTrim (defrag /L) uygulanıyor");
+        phase_bi(
+            core,
+            "3/3 · SSD ReTrim (defrag /L) uygulanıyor",
+            "3/3 · Applying SSD ReTrim (defrag /L)",
+        );
         {
             let mut job = lock(&core.job);
             job["completed"] = json!(80);
@@ -2497,7 +2525,7 @@ mod win {
             "extents_after": extents_after,
             "bytes_written": bytes_written,
             "retrim_ok": retrim_ok,
-            "scope": "SSD Akıllı Parça Temizliği: Yalnız >=50 parçalı kullanıcı dosyaları (en fazla 2 GiB yazma sınırı) birleştirildi ve ReTrim (/L) uygulandı; klasik defrag yapılmadı."
+            "scope": if core.is_en() { "SSD Smart Extent Consolidation: only user files with >=50 extents were consolidated (2 GiB write cap) and ReTrim (/L) was applied; no classic defrag was run." } else { "SSD Akıllı Parça Temizliği: Yalnız >=50 parçalı kullanıcı dosyaları (en fazla 2 GiB yazma sınırı) birleştirildi ve ReTrim (/L) uygulandı; klasik defrag yapılmadı." }
         });
         Ok(())
     }
@@ -2510,7 +2538,11 @@ mod win {
         let vol = open_volume_rw(&request.letter)?;
         let cluster = cluster_bytes(&request.letter);
         lock(&core.job)["total"] = json!(100);
-        phase(core, "1/3 · Sıcak ve parçalanmış HDD dosyaları taranıyor");
+        phase_bi(
+            core,
+            "1/3 · Sıcak ve parçalanmış HDD dosyaları taranıyor",
+            "1/3 · Scanning hot and fragmented HDD files",
+        );
 
         let files = collect_safe_user_files(core, root, 64 * 1024, GIB, 25_000)?;
         // (priority, path, before_extents, first_lcn)
@@ -2547,9 +2579,10 @@ mod win {
         }
         candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.2.cmp(&a.2)));
 
-        phase(
+        phase_bi(
             core,
             "2/3 · Sıcak ve parçalanmış dosyalar en hızlı dış izlere (LCN 0+) yerleştiriliyor",
+            "2/3 · Placing hot and fragmented files on the fastest outer tracks (LCN 0+)",
         );
         let mut files_placed_outer = 0u64;
         let mut extents_before = 0u64;
@@ -2608,7 +2641,11 @@ mod win {
         }
         drop(vol);
 
-        phase(core, "3/3 · HDD dış-iz yerleşim özeti kaydediliyor");
+        phase_bi(
+            core,
+            "3/3 · HDD dış-iz yerleşim özeti kaydediliyor",
+            "3/3 · Saving the HDD outer-track placement summary",
+        );
         let mut job = lock(&core.job);
         job["completed"] = json!(100);
         job["progress"] = json!(100);
@@ -2619,7 +2656,7 @@ mod win {
             "extents_before": extents_before,
             "extents_after": extents_after,
             "bytes_moved": bytes_moved,
-            "scope": "HDD Dış-İz Hızlı Yerleşim: SMART güvenlik koruması doğrulandı; sıcak ve parçalanmış dosyalar en hızlı dış ZBR izlerine (LCN 0+, en fazla 4 GiB) kesintisiz yerleştirildi."
+            "scope": if core.is_en() { "HDD Outer-Track Placement: SMART safety guard verified; hot and fragmented files were placed contiguously on the fastest outer ZBR tracks (LCN 0+, up to 4 GiB)." } else { "HDD Dış-İz Hızlı Yerleşim: SMART güvenlik koruması doğrulandı; sıcak ve parçalanmış dosyalar en hızlı dış ZBR izlerine (LCN 0+, en fazla 4 GiB) kesintisiz yerleştirildi." }
         });
         Ok(())
     }

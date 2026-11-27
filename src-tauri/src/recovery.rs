@@ -1,7 +1,7 @@
 use crate::{
     core::{lock, Core, JobRequest},
     forensics::{self, AppDataEntry, ForensicAppTrace},
-    jobs::{cancelled, phase},
+    jobs::{cancelled, phase_bi},
     media_repair,
     model::Disk,
     platform,
@@ -3205,10 +3205,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
     let mut usn_deleted_count = 0usize;
     let mut indx_ghost_count = 0usize;
 
-    phase(
-        core,
-        "1/5 · Geri Dönüşüm Kutusu (dosya & klasörler), VSS Gölge Kopyaları ve adli kaynaklar taranıyor",
-    );
+    phase_bi(core, "1/5 · Geri Dönüşüm Kutusu (dosya & klasörler), VSS Gölge Kopyaları ve adli kaynaklar taranıyor", "1/5 · Scanning Recycle Bin (files & folders), VSS shadow copies and forensic sources");
     items.extend(scan_recycle_bin(core, root, &request.letter, is_ssd));
 
     // Also inspect SystemDrive $Recycle.Bin for deleted apps/installers if user scanned a secondary drive
@@ -3329,10 +3326,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
                 .iter()
                 .any(|v| v["letter"] == request.letter && v["filesystem"] == "NTFS")
         {
-            phase(
-                core,
-                "2/5 · NTFS $MFT tam kapsam dizin ağacı ve $UsnJrnl:$J silinme günlüğü okunuyor",
-            );
+            phase_bi(core, "2/5 · NTFS $MFT tam kapsam dizin ağacı ve $UsnJrnl:$J silinme günlüğü okunuyor", "2/5 · Reading the full NTFS $MFT directory tree and the $UsnJrnl:$J deletion journal");
             let max_records = if mode == "deep" { 1_200_000 } else { 350_000 };
             if let Ok((mft_items, scanned, dirs)) = win::scan_ntfs_mft(
                 core,
@@ -3428,12 +3422,17 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
             } else {
                 size_mib * 1024 * 1024
             };
-            phase(
+            phase_bi(
                 core,
                 if mode == "apps_only" {
                     "3/5 · Boş kümelerde kayıp EXE/MSI kurulum imzaları aranıyor"
                 } else {
                     "3/5 · Derin boş sektör imza kazıma ve medya onarım analizi (PE / Foto / Video / Belge / $I30)"
+                },
+                if mode == "apps_only" {
+                    "3/5 · Searching free clusters for lost EXE/MSI installer signatures"
+                } else {
+                    "3/5 · Deep free-sector signature carving and media repair analysis (PE / Photo / Video / Document / $I30)"
                 },
             );
             if let Ok((carved, ghosts)) = win::scan_signature_carving(
@@ -3452,10 +3451,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
     }
 
     cancelled(core)?;
-    phase(
-        core,
-        "4/5 · 11 Kaynaklı Kayıp Uygulama Korelasyonu (Firewall, GameConfigStore, Prefetch, ShimCache, UserAssist, BAM, AppData, VSS)",
-    );
+    phase_bi(core, "4/5 · 11 Kaynaklı Kayıp Uygulama Korelasyonu (Firewall, GameConfigStore, Prefetch, ShimCache, UserAssist, BAM, AppData, VSS)", "4/5 · 11-source lost-app correlation (Firewall, GameConfigStore, Prefetch, ShimCache, UserAssist, BAM, AppData, VSS)");
 
     // Append MuiCache / AppCompatFlags traces (across ALL local drive letters!)
     #[cfg(windows)]
@@ -3552,9 +3548,10 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         &vss_by_path,
     );
 
-    phase(
+    phase_bi(
         core,
         "5/5 · Sonuçlar önem, açılabilirlik ve bütünlüğe göre sıralanıyor",
+        "5/5 · Ranking results by importance, openability and integrity",
     );
     if mode == "apps_only" {
         items.retain(|i| matches!(i.category.as_str(), "exe_setup" | "game_portable"));
@@ -3636,7 +3633,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         "media_unrecoverable": media_unrecoverable,
         "deleted_apps": apps.len(),
         "dev_files_found": dev_files_found,
-        "scope": "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt)."
+        "scope": if core.is_en() { "11-source forensic detection and media repair engine (VSS, Recycle Bin, $MFT, $UsnJrnl, $I30, PE/Media carving, Prefetch, GameConfigStore, Firewall, ShimCache, UserAssist, BAM, AppData, .lnk, orphan records)." } else { "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt)." }
     });
     Ok(())
 }
@@ -4100,11 +4097,19 @@ mod win {
                     job["read_bytes"] = json!(total_read);
                     job["progress"] =
                         json!(15 + ((scanned * 25) / max_records.max(1) as u64).min(25));
-                    job["phase"] = json!(format!(
-                        "2/5 · $MFT taranıyor ({} kayıt · {} silinen aday)",
-                        scanned,
-                        raw_deleted.len()
-                    ));
+                    job["phase"] = json!(if core.is_en() {
+                        format!(
+                            "2/5 · Scanning $MFT ({} records · {} deleted candidates)",
+                            scanned,
+                            raw_deleted.len()
+                        )
+                    } else {
+                        format!(
+                            "2/5 · $MFT taranıyor ({} kayıt · {} silinen aday)",
+                            scanned,
+                            raw_deleted.len()
+                        )
+                    });
                 }
             }
         }
@@ -4642,10 +4647,17 @@ mod win {
                 job["read_bytes"] = json!(total_read);
                 job["progress"] =
                     json!(45 + ((scanned_free_bytes * 38) / target_scan_bytes).min(38));
-                job["phase"] = json!(format!(
-                    "3/5 · Derin kazıma: {scanned_gib:.2} / {target_gib:.2} GiB · {mb_s:.0} MB/sn · {exe_count} EXE · {indx_ghosts} $I30 · {} dosya",
-                    out.len()
-                ));
+                job["phase"] = json!(if core.is_en() {
+                    format!(
+                        "3/5 · Deep carving: {scanned_gib:.2} / {target_gib:.2} GiB · {mb_s:.0} MB/s · {exe_count} EXE · {indx_ghosts} $I30 · {} files",
+                        out.len()
+                    )
+                } else {
+                    format!(
+                        "3/5 · Derin kazıma: {scanned_gib:.2} / {target_gib:.2} GiB · {mb_s:.0} MB/sn · {exe_count} EXE · {indx_ghosts} $I30 · {} dosya",
+                        out.len()
+                    )
+                });
             }
             cur_lcn += clusters_per_chunk as i64;
         }

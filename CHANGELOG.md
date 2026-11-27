@@ -2,6 +2,15 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## [v1.11.0] — 2026-11-28
+
+### Added
+- **Windows x64 Portable `.zip` Edition:** Shipped `SSD-Sentinel_<version>_x64-portable.zip` (extract anywhere and run `ssd-sentinel.exe`). When `portable.txt` / `portable`, `--portable`, or `SSD_SENTINEL_PORTABLE=1` is present, `desktop::resolve_storage_paths` isolates SQLite (`history.sqlite3`), `preferences.json`, WebView2 (`webview2\`), and downloaded updates (`updates\`) strictly inside `<exe_dir>\data\` with zero `%LOCALAPPDATA%` writes (`tauri.conf.json` defers window creation to `.setup()`). Added Settings **Storage mode** indicator, SHA-256 verified portable `.zip` update flow, `tools/package_portable.ps1` (`npm run desktop:portable`), and CI release packaging + SLSA provenance attestation.
+- **Anti-Regression i18n Guardrails:** Added `npm run check:i18n` (`tools/check_i18n.mjs`) and `npm run gen:i18n` (`tools/gen_backend_i18n.mjs`), `tests/i18n_backend.test.ts`, and a full-DOM Playwright **English purity sweep** across all 8 views (`tools/smoke_tauri.mjs`), wired into CI and Release workflows.
+
+### Fixed
+- **Complete English Localization:** Localized Rust job progress phases (`phase_bi`), Autopilot Safe Profile steps/scope & HDD/SSD advisories, pinpoint surface repair results/advice/scope, optimization messages/errors, tray notifications (`format_event_notification`), HTML reports (`report.rs`), `space-*` free-space alerts, deleted app categories/sources, `ReadFile` dry-run label, and added UI-boundary translation (`src/i18n_backend.ts`) for previously saved SQLite history/optimizations and forensic/media-repair output.
+
 ## [v1.10.3] — 2026-11-27
 
 ### Fixed

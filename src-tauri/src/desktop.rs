@@ -6,7 +6,7 @@ use crate::{
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -189,13 +189,15 @@ async fn pick_dev_folder(app: tauri::AppHandle) -> Result<Option<String>, String
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn restart_as_admin(app: tauri::AppHandle) -> Result<Value, String> {
+fn restart_as_admin(app: tauri::AppHandle, core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let en = core.is_en();
     #[cfg(windows)]
     {
         use std::ptr::{null, null_mut};
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+        let _ = en;
         if crate::platform::is_admin() {
             return Ok(json!({"relaunching":false,"already_admin":true}));
         }
@@ -250,7 +252,12 @@ fn restart_as_admin(app: tauri::AppHandle) -> Result<Value, String> {
     #[cfg(not(windows))]
     {
         let _ = app;
-        Err("Yönetici yükseltmesi yalnız Windows'ta desteklenir.".into())
+        Err(crate::i18n::pick(
+            en,
+            "Yönetici yükseltmesi yalnız Windows'ta desteklenir.",
+            "Administrator elevation is supported on Windows only.",
+        )
+        .into())
     }
 }
 struct TrayMenus {
@@ -311,6 +318,40 @@ pub fn format_tray_tooltip(disks: &[Value], replay: bool, lang: &str) -> String 
     format!("{header}\n{lines}")
 }
 
+/// Notification body for a stored event. Stored messages are canonical Turkish; for the
+/// English UI they are rebuilt from the event code and the numbers embedded in the message.
+pub fn format_event_notification(event: &Value, lang: &str) -> String {
+    let message = event["message"].as_str().unwrap_or("");
+    if lang != "en" {
+        return message.to_owned();
+    }
+    let code = event["code"].as_str().unwrap_or("");
+    let numbers = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    if code == "health-drop" {
+        let n = numbers(message);
+        return if n.len() >= 2 {
+            format!("Health / endurance dropped from {}% to {}%.", n[0], n[1])
+        } else {
+            "Health / endurance dropped.".into()
+        };
+    }
+    if let Some(key) = code.strip_prefix("counter:") {
+        let rest = message.strip_prefix(key).unwrap_or(message);
+        let n = numbers(rest);
+        return if n.len() >= 2 {
+            format!("Counter {key} increased from {} to {}.", n[0], n[1])
+        } else {
+            format!("Counter {key} increased.")
+        };
+    }
+    "A new SMART alert was recorded.".into()
+}
+
 pub const DEFAULT_UPDATE_REPO: &str = "yuefdev/ssd-sentinel";
 
 pub fn resolve_update_repo(compile_time: Option<&str>, runtime: Option<&str>) -> Option<String> {
@@ -343,12 +384,18 @@ pub fn resolve_update_repo(compile_time: Option<&str>, runtime: Option<&str>) ->
 }
 
 pub fn validate_github_release_url(url: &str, repo: &str) -> Result<(), String> {
+    validate_github_release_url_lang(url, repo, false)
+}
+
+pub fn validate_github_release_url_lang(url: &str, repo: &str, en: bool) -> Result<(), String> {
     if url.is_empty()
         || url.chars().any(|c| c.is_control() || c.is_whitespace())
         || url.contains("..")
         || url.contains('\\')
     {
-        return Err("Geçersiz sürüm bağlantısı.".into());
+        return Err(
+            crate::i18n::pick(en, "Geçersiz sürüm bağlantısı.", "Invalid release link.").into(),
+        );
     }
     let base = format!("https://github.com/{repo}");
     let releases = format!("{base}/releases");
@@ -359,7 +406,12 @@ pub fn validate_github_release_url(url: &str, repo: &str) -> Result<(), String> 
     {
         Ok(())
     } else {
-        Err("Sürüm bağlantısı yalnızca resmi GitHub deposu altında açılabilir.".into())
+        Err(crate::i18n::pick(
+            en,
+            "Sürüm bağlantısı yalnızca resmi GitHub deposu altında açılabilir.",
+            "The release link can only be opened under the official GitHub repository.",
+        )
+        .into())
     }
 }
 
@@ -428,6 +480,20 @@ pub fn parse_sha256_for_asset(manifest: &str, asset_name: &str) -> Option<String
 }
 
 pub fn select_release_assets(release: &Value) -> (Option<(String, String, u64)>, Option<String>) {
+    select_release_assets_for_mode(release, false)
+}
+
+/// Picks the release asset matching the running edition: the NSIS `*-setup.exe` for installed
+/// builds, or the `*-portable.zip` for portable builds, plus the `SHA256SUMS.txt` manifest.
+pub fn select_release_assets_for_mode(
+    release: &Value,
+    portable: bool,
+) -> (Option<(String, String, u64)>, Option<String>) {
+    let suffix = if portable {
+        "-portable.zip"
+    } else {
+        "-setup.exe"
+    };
     let Some(assets) = release["assets"].as_array() else {
         return (None, None);
     };
@@ -445,7 +511,7 @@ pub fn select_release_assets(release: &Value) -> (Option<(String, String, u64)>,
         }
         if name.eq_ignore_ascii_case("SHA256SUMS.txt") {
             sha_url = Some(url.to_owned());
-        } else if name.to_ascii_lowercase().ends_with("-setup.exe") {
+        } else if name.to_ascii_lowercase().ends_with(suffix) {
             let size = asset["size"].as_u64().unwrap_or(0);
             let is_x64 = name.to_ascii_lowercase().contains("x64");
             if setup_asset.is_none() || is_x64 {
@@ -629,8 +695,9 @@ fn parse_semver(tag: &str) -> (u64, u64, u64) {
     )
 }
 #[tauri::command]
-async fn check_updates() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn check_updates(core: State<'_, Arc<Core>>) -> Result<Value, String> {
+    let portable = core.is_portable();
+    tauri::async_runtime::spawn_blocking(move || {
         let current = env!("CARGO_PKG_VERSION");
         let Some(repo) = active_update_repo() else {
             return Ok(json!({
@@ -703,7 +770,8 @@ async fn check_updates() -> Result<Value, String> {
                 }));
             };
             let url = parsed["html_url"].as_str().unwrap_or(&releases_fallback);
-            let (setup_asset, sha256_url) = select_release_assets(&parsed);
+            let (setup_asset, sha256_url) = select_release_assets_for_mode(&parsed, portable);
+            let asset_kind = if portable { "portable_zip" } else { "installer" };
             let notes: Option<String> = parsed["body"].as_str().and_then(|s| {
                 let trimmed = s.trim();
                 if trimmed.is_empty() {
@@ -721,6 +789,8 @@ async fn check_updates() -> Result<Value, String> {
                     "repo": repo,
                     "current": current,
                     "status": "update_available",
+                    "portable": portable,
+                    "asset_kind": asset_kind,
                     "latest": tag,
                     "url": url,
                     "download_url": download_url,
@@ -765,9 +835,14 @@ async fn check_updates() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn open_release_url(url: String) -> Result<(), String> {
-    let repo = active_update_repo().ok_or("Güncelleme deposu yapılandırılmamış.")?;
-    validate_github_release_url(&url, &repo)?;
+async fn open_release_url(core: State<'_, Arc<Core>>, url: String) -> Result<(), String> {
+    let en = core.is_en();
+    let repo = active_update_repo().ok_or(crate::i18n::pick(
+        en,
+        "Güncelleme deposu yapılandırılmamış.",
+        "The update repository is not configured.",
+    ))?;
+    validate_github_release_url_lang(&url, &repo, en)?;
     #[cfg(windows)]
     {
         use std::ptr::{null, null_mut};
@@ -787,24 +862,44 @@ async fn open_release_url(url: String) -> Result<(), String> {
             )
         };
         if (res as isize) <= 32 {
-            return Err("Tarayıcı açılamadı.".into());
+            return Err(crate::i18n::pick(
+                en,
+                "Tarayıcı açılamadı.",
+                "Could not open the browser.",
+            )
+            .into());
         }
         Ok(())
     }
     #[cfg(not(windows))]
     {
         let _ = url;
-        Err("Yalnız Windows'ta desteklenir.".into())
+        Err(crate::i18n::pick(
+            en,
+            "Yalnız Windows'ta desteklenir.",
+            "Supported on Windows only.",
+        )
+        .into())
     }
 }
 
 #[tauri::command]
 async fn download_and_launch_update(
+    core: State<'_, Arc<Core>>,
     download_url: String,
     asset_name: String,
     sha256_url: Option<String>,
 ) -> Result<Value, String> {
-    let repo = active_update_repo().ok_or("Güncelleme deposu yapılandırılmamış.")?;
+    let portable = core.is_portable();
+    let en = core.is_en();
+    let t = move |tr: &'static str, en_s: &'static str| crate::i18n::pick(en, tr, en_s).to_owned();
+    let portable_updates_dir = core.config.data_dir.join("updates");
+    let repo = active_update_repo().ok_or_else(|| {
+        t(
+            "Güncelleme deposu yapılandırılmamış.",
+            "The update repository is not configured.",
+        )
+    })?;
     let expected_prefix = format!("https://github.com/{repo}/releases/download/");
     if !download_url.starts_with(&expected_prefix)
         || download_url
@@ -813,14 +908,32 @@ async fn download_and_launch_update(
         || download_url.contains("..")
         || download_url.contains('\\')
     {
-        return Err("İndirme bağlantısı doğrulanamadı.".into());
+        return Err(t(
+            "İndirme bağlantısı doğrulanamadı.",
+            "The download link could not be verified.",
+        ));
     }
+    let required_suffix = if portable {
+        "-portable.zip"
+    } else {
+        "-setup.exe"
+    };
     if asset_name.is_empty()
-        || !asset_name.to_ascii_lowercase().ends_with("-setup.exe")
+        || !asset_name.to_ascii_lowercase().ends_with(required_suffix)
         || asset_name.contains(['/', '\\', ':', '\0'])
         || asset_name.contains("..")
     {
-        return Err("Geçersiz kurulum dosyası adı.".into());
+        return Err(if portable {
+            t(
+                "Geçersiz taşınabilir paket dosya adı.",
+                "Invalid portable package file name.",
+            )
+        } else {
+            t(
+                "Geçersiz kurulum dosyası adı.",
+                "Invalid installer file name.",
+            )
+        });
     }
     if let Some(ref su) = sha256_url {
         if !su.starts_with(&expected_prefix)
@@ -828,7 +941,10 @@ async fn download_and_launch_update(
             || su.contains("..")
             || su.contains('\\')
         {
-            return Err("SHA-256 doğrulama bağlantısı geçersiz.".into());
+            return Err(t(
+                "SHA-256 doğrulama bağlantısı geçersiz.",
+                "The SHA-256 verification link is invalid.",
+            ));
         }
     }
     #[cfg(windows)]
@@ -850,7 +966,11 @@ async fn download_and_launch_update(
                 5,
             )?;
             if status != 200 || bytes.len() < 64 * 1024 {
-                return Err(format!("Güncelleme paketi indirilemedi (HTTP {status})."));
+                return Err(if en {
+                    format!("Update package could not be downloaded (HTTP {status}).")
+                } else {
+                    format!("Güncelleme paketi indirilemedi (HTTP {status}).")
+                });
             }
 
             let mut hasher = Sha256::new();
@@ -861,7 +981,12 @@ async fn download_and_launch_update(
                 .map(|b| format!("{b:02x}"))
                 .collect();
 
-            let update_dir = std::env::temp_dir().join("ssd-sentinel-update");
+            // Portable builds keep the downloaded package next to their data; installed builds use %TEMP%.
+            let update_dir = if portable {
+                portable_updates_dir
+            } else {
+                std::env::temp_dir().join("ssd-sentinel-update")
+            };
             std::fs::create_dir_all(&update_dir).map_err(|e| e.to_string())?;
             let dest = update_dir.join(&asset_name);
             {
@@ -875,39 +1000,70 @@ async fn download_and_launch_update(
                 let (s_status, s_bytes) = winhttp_fetch(&surl, None, &ua, 10000, 256 * 1024, 5)?;
                 if s_status != 200 {
                     let _ = std::fs::remove_file(&dest);
-                    return Err(format!("SHA256SUMS.txt indirilemedi (HTTP {s_status})."));
+                    return Err(if en {
+                        format!("SHA256SUMS.txt could not be downloaded (HTTP {s_status}).")
+                    } else {
+                        format!("SHA256SUMS.txt indirilemedi (HTTP {s_status}).")
+                    });
                 }
                 let manifest = String::from_utf8_lossy(&s_bytes);
                 let Some(expected) = parse_sha256_for_asset(&manifest, &asset_name) else {
                     let _ = std::fs::remove_file(&dest);
-                    return Err("SHA256SUMS.txt içinde kurulum dosyası özeti bulunamadı.".into());
+                    return Err(if en {
+                        "No checksum for the downloaded package was found in SHA256SUMS.txt.".into()
+                    } else {
+                        "SHA256SUMS.txt içinde kurulum dosyası özeti bulunamadı.".into()
+                    });
                 };
                 if expected != actual_sha {
                     let _ = std::fs::remove_file(&dest);
-                    return Err("İndirilen kurulum dosyasının SHA-256 doğrulaması başarısız; güvenlik için silindi.".into());
+                    return Err(if en {
+                        "SHA-256 verification of the downloaded package failed; it was deleted for safety.".into()
+                    } else {
+                        "İndirilen kurulum dosyasının SHA-256 doğrulaması başarısız; güvenlik için silindi.".into()
+                    });
                 }
                 verified = true;
             }
 
             let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
             let op_w = wide("open");
-            let dest_w = wide(&dest.to_string_lossy());
+            let (file_w, params_w) = if portable {
+                // Reveal the verified zip in Explorer; the user extracts it over the old folder.
+                (
+                    wide("explorer.exe"),
+                    Some(wide(&format!("/select,\"{}\"", dest.display()))),
+                )
+            } else {
+                (wide(&dest.to_string_lossy()), None)
+            };
             let dir_w = wide(&update_dir.to_string_lossy());
             let res = unsafe {
                 ShellExecuteW(
                     null_mut(),
                     op_w.as_ptr(),
-                    dest_w.as_ptr(),
-                    null(),
+                    file_w.as_ptr(),
+                    params_w.as_ref().map_or(null(), |p| p.as_ptr()),
                     dir_w.as_ptr(),
                     SW_SHOWNORMAL,
                 )
             };
             if (res as isize) <= 32 {
-                return Err("İndirilen kurulum dosyası başlatılamadı.".into());
+                return Err(if portable {
+                    t(
+                        "İndirilen paket klasörü açılamadı.",
+                        "The downloaded package folder could not be opened.",
+                    )
+                } else {
+                    t(
+                        "İndirilen kurulum dosyası başlatılamadı.",
+                        "The downloaded installer could not be started.",
+                    )
+                });
             }
             Ok(json!({
                 "launched": true,
+                "portable": portable,
                 "path": dest.to_string_lossy(),
                 "sha256": actual_sha,
                 "verified": verified
@@ -918,8 +1074,11 @@ async fn download_and_launch_update(
     }
     #[cfg(not(windows))]
     {
-        let _ = (download_url, asset_name, sha256_url);
-        Err("Yalnız Windows'ta desteklenir.".into())
+        let _ = (download_url, asset_name, sha256_url, portable_updates_dir);
+        Err(t(
+            "Yalnız Windows'ta desteklenir.",
+            "Supported on Windows only.",
+        ))
     }
 }
 #[tauri::command]
@@ -968,13 +1127,21 @@ async fn restore_recovered_item(
     item_id: String,
 ) -> Result<Value, String> {
     if core.config.snapshot_dir.is_some() || core.state()["source"] == "replay" {
-        return Err("Kayıt modunda dosya kurtarma kapalıdır.".into());
+        return Err(core
+            .t(
+                "Kayıt modunda dosya kurtarma kapalıdır.",
+                "File recovery is disabled in replay mode.",
+            )
+            .into());
     }
     let (source_letter, item) = core.find_recovery_item(&job_id, &item_id)?;
     if item["trim_zeroed"] == true {
-        return Err(
-            "Bu dosyanın sektörleri SSD TRIM tarafından sıfırlandığı için kurtarılamaz.".into(),
-        );
+        return Err(core
+            .t(
+                "Bu dosyanın sektörleri SSD TRIM tarafından sıfırlandığı için kurtarılamaz.",
+                "This file cannot be recovered because its sectors were zeroed by SSD TRIM.",
+            )
+            .into());
     }
     let default_name = item["name"].as_str().unwrap_or("recovered.bin").to_owned();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1013,10 +1180,20 @@ async fn restore_recovered_batch(
     item_ids: Vec<String>,
 ) -> Result<Value, String> {
     if core.config.snapshot_dir.is_some() || core.state()["source"] == "replay" {
-        return Err("Kayıt modunda toplu dosya kurtarma kapalıdır.".into());
+        return Err(core
+            .t(
+                "Kayıt modunda toplu dosya kurtarma kapalıdır.",
+                "Batch file recovery is disabled in replay mode.",
+            )
+            .into());
     }
     if item_ids.is_empty() {
-        return Err("Toplu kurtarma için en az bir dosya seçin.".into());
+        return Err(core
+            .t(
+                "Toplu kurtarma için en az bir dosya seçin.",
+                "Select at least one file for batch recovery.",
+            )
+            .into());
     }
     let job = core.find_recovery_job(&job_id)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1050,6 +1227,7 @@ async fn save_report(
     redact: Option<bool>,
 ) -> Result<Value, String> {
     let do_redact = redact.unwrap_or(true);
+    let en = core.is_en();
     let fmt = format.unwrap_or_else(|| "json".into());
     let state_val = core.state();
     let jobs_val = if kind == "snapshot" {
@@ -1065,7 +1243,7 @@ async fn save_report(
             "current": state_val["job"]
         }))
     } else {
-        return Err("Geçersiz rapor türü.".into());
+        return Err(crate::i18n::pick(en, "Geçersiz rapor türü.", "Invalid report type.").into());
     };
     let html_filter = if crate::core::lock(&core.language).as_str() == "en" {
         "HTML Report"
@@ -1108,7 +1286,11 @@ async fn save_report(
             }
             serde_json::to_vec_pretty(&val).map_err(|e| e.to_string())?
         };
-        let parent = path.parent().ok_or("Geçersiz hedef klasör.")?;
+        let parent = path.parent().ok_or(crate::i18n::pick(
+            en,
+            "Geçersiz hedef klasör.",
+            "Invalid destination folder.",
+        ))?;
         let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
         use std::io::Write;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -1197,6 +1379,66 @@ fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
+/// Where the app keeps its SQLite history, preferences and WebView2 profile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoragePaths {
+    pub portable: bool,
+    pub data_dir: PathBuf,
+    /// `None` keeps Tauri's default WebView2 profile (only valid for installed mode).
+    pub webview_data_dir: Option<PathBuf>,
+}
+
+/// Decides between installed (`%LOCALAPPDATA%`) and portable (next to the exe) storage.
+///
+/// Portable mode is enabled by `--portable`, `SSD_SENTINEL_PORTABLE=1`, or a `portable.txt` /
+/// `portable` marker file beside the executable. An explicit `--data-dir` always wins for the
+/// app data folder, and `WEBVIEW2_USER_DATA_FOLDER` always wins for the WebView2 profile.
+pub fn resolve_storage_paths(
+    exe_dir: Option<&Path>,
+    default_local_data_dir: Option<&Path>,
+    explicit_data_dir: Option<PathBuf>,
+    cli_portable: bool,
+    env_portable: Option<&str>,
+    env_webview_dir: Option<PathBuf>,
+) -> Result<StoragePaths, String> {
+    let marker_present =
+        exe_dir.is_some_and(|d| d.join("portable.txt").is_file() || d.join("portable").is_file());
+    let env_flag = env_portable.is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    let portable = cli_portable || env_flag || marker_present;
+    let env_webview_dir = env_webview_dir.filter(|p| !p.as_os_str().is_empty());
+    if portable {
+        let data_dir = match explicit_data_dir {
+            Some(dir) => dir,
+            None => exe_dir
+                .ok_or("Cannot locate the executable folder for portable mode.")?
+                .join("data"),
+        };
+        let webview_data_dir = env_webview_dir.or_else(|| Some(data_dir.join("webview2")));
+        Ok(StoragePaths {
+            portable: true,
+            data_dir,
+            webview_data_dir,
+        })
+    } else {
+        let data_dir = match explicit_data_dir {
+            Some(dir) => dir,
+            None => default_local_data_dir
+                .ok_or("Cannot resolve the app local data folder.")?
+                .to_path_buf(),
+        };
+        Ok(StoragePaths {
+            portable: false,
+            data_dir,
+            webview_data_dir: env_webview_dir,
+        })
+    }
+}
+
 pub fn run() {
     let elevated_relaunch = std::env::args().any(|a| a == "--elevated-relaunch");
     let start_minimized = std::env::args().any(|a| a == "--minimized");
@@ -1252,7 +1494,8 @@ pub fn run() {
             restore_recovered_batch
         ])
         .setup(move |app| {
-            let mut data_dir = app.path().app_local_data_dir()?;
+            let mut explicit_data_dir: Option<PathBuf> = None;
+            let mut cli_portable = false;
             let resource = strip_verbatim_prefix(
                 app.path()
                     .resource_dir()?
@@ -1280,20 +1523,62 @@ pub fn run() {
                         ))
                     }
                     "--data-dir" => {
-                        data_dir = PathBuf::from(args.next().ok_or("--data-dir requires a path")?)
+                        explicit_data_dir = Some(PathBuf::from(
+                            args.next().ok_or("--data-dir requires a path")?,
+                        ))
                     }
+                    "--portable" => cli_portable = true,
                     "--smartctl" => {
                         smartctl = PathBuf::from(args.next().ok_or("--smartctl requires a path")?)
                     }
                     "--minimized" | "--elevated-relaunch" => {}
-                    _ => return Err(format!("Bilinmeyen seçenek: {arg}").into()),
+                    _ => return Err(format!("Bilinmeyen seçenek / Unknown option: {arg}").into()),
                 }
+            }
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| strip_verbatim_prefix(p.to_path_buf())));
+            let env_portable = std::env::var("SSD_SENTINEL_PORTABLE").ok();
+            let env_webview_dir = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").map(PathBuf::from);
+            let marker_portable = exe_dir.as_deref().is_some_and(|d| {
+                d.join("portable.txt").is_file() || d.join("portable").is_file()
+            });
+            let will_be_portable = cli_portable
+                || marker_portable
+                || env_portable.as_deref().is_some_and(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                });
+            // Portable mode must never touch %LOCALAPPDATA%.
+            let default_local = if will_be_portable || explicit_data_dir.is_some() {
+                None
+            } else {
+                Some(app.path().app_local_data_dir()?)
+            };
+            let paths = resolve_storage_paths(
+                exe_dir.as_deref(),
+                default_local.as_deref(),
+                explicit_data_dir,
+                cli_portable,
+                env_portable.as_deref(),
+                env_webview_dir,
+            )?;
+            if paths.portable {
+                std::fs::create_dir_all(&paths.data_dir).map_err(|e| {
+                    format!(
+                        "Portable data folder is not writable / Taşınabilir veri klasörü yazılamıyor ({}): {e}",
+                        paths.data_dir.display()
+                    )
+                })?;
             }
             let core = Core::new(Config {
                 smartctl,
-                data_dir,
+                data_dir: paths.data_dir.clone(),
                 snapshot_dir,
             })?;
+            core.set_portable(paths.portable);
             app.manage(core.clone());
             let show_item = MenuItem::with_id(app, "show", "Pencereyi göster", true, None::<&str>)?;
             let refresh_item =
@@ -1353,10 +1638,24 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            if let Some(window) = app.get_webview_window("main") {
-                if start_minimized {
-                    let _ = window.hide();
-                }
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or("No main window configured")?;
+            let mut window_builder =
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?;
+            if let Some(webview_dir) = paths.webview_data_dir.clone() {
+                std::fs::create_dir_all(&webview_dir)?;
+                window_builder = window_builder.data_directory(webview_dir);
+            }
+            if start_minimized {
+                window_builder = window_builder.visible(false);
+            }
+            let window = window_builder.build()?;
+            {
                 let core = core.clone();
                 let w = window.clone();
                 window.on_window_event(move |event| {
@@ -1419,7 +1718,7 @@ pub fn run() {
                                         .notification()
                                         .builder()
                                         .title(title)
-                                        .body(event["message"].as_str().unwrap_or(""))
+                                        .body(format_event_notification(event, lang))
                                         .show();
                                 }
                             }
@@ -1503,6 +1802,32 @@ mod tests {
         let en = format_tray_tooltip(&disks, true, "en");
         assert!(en.starts_with("SSD Sentinel · Replay mode\n"));
         assert!(!en.contains("null"));
+    }
+
+    #[test]
+    fn event_notification_formats_clean_english() {
+        let drop = json!({"code": "health-drop", "message": "Sağlık / dayanım %98 → %91 düştü."});
+        let counter = json!({"code": "counter:197", "message": "197 sayacı 0 → 8 arttı."});
+        let unknown = json!({"code": "other", "message": "Bilinmeyen olay"});
+        assert_eq!(
+            format_event_notification(&drop, "tr"),
+            "Sağlık / dayanım %98 → %91 düştü."
+        );
+        assert_eq!(
+            format_event_notification(&drop, "en"),
+            "Health / endurance dropped from 98% to 91%."
+        );
+        assert_eq!(
+            format_event_notification(&counter, "en"),
+            "Counter 197 increased from 0 to 8."
+        );
+        for ev in [&drop, &counter, &unknown] {
+            let text = format_event_notification(ev, "en");
+            assert!(
+                !text.chars().any(|c| "çğıöşüÇĞİÖŞÜ".contains(c)),
+                "Turkish leaked into EN notification: {text}"
+            );
+        }
     }
 
     #[test]
@@ -1612,6 +1937,105 @@ mod tests {
         assert_eq!(
             sha.as_deref(),
             Some("https://github.com/yuefdev/ssd-sentinel/releases/download/v2.0.0/SHA256SUMS.txt")
+        );
+    }
+
+    #[test]
+    fn portable_storage_resolution_honours_markers_flags_and_overrides() {
+        let exe = tempfile::tempdir().unwrap();
+        let local = Path::new("C:\\Users\\demo\\AppData\\Local\\com.ssdsentinel.desktop");
+
+        // Installed mode: no marker, no flag.
+        let installed =
+            resolve_storage_paths(Some(exe.path()), Some(local), None, false, None, None).unwrap();
+        assert!(!installed.portable);
+        assert_eq!(installed.data_dir, local);
+        assert_eq!(installed.webview_data_dir, None);
+
+        // CLI flag.
+        let cli =
+            resolve_storage_paths(Some(exe.path()), Some(local), None, true, None, None).unwrap();
+        assert!(cli.portable);
+        assert_eq!(cli.data_dir, exe.path().join("data"));
+        assert_eq!(
+            cli.webview_data_dir,
+            Some(exe.path().join("data").join("webview2"))
+        );
+
+        // Environment flag, several spellings.
+        for v in ["1", "true", "YES", " on "] {
+            let env =
+                resolve_storage_paths(Some(exe.path()), None, None, false, Some(v), None).unwrap();
+            assert!(env.portable, "{v}");
+        }
+        assert!(
+            !resolve_storage_paths(Some(exe.path()), Some(local), None, false, Some("0"), None)
+                .unwrap()
+                .portable
+        );
+
+        // Marker files.
+        std::fs::write(exe.path().join("portable.txt"), "x").unwrap();
+        let marker =
+            resolve_storage_paths(Some(exe.path()), None, None, false, None, None).unwrap();
+        assert!(marker.portable);
+        assert_eq!(marker.data_dir, exe.path().join("data"));
+        std::fs::remove_file(exe.path().join("portable.txt")).unwrap();
+        std::fs::write(exe.path().join("portable"), "x").unwrap();
+        assert!(
+            resolve_storage_paths(Some(exe.path()), None, None, false, None, None)
+                .unwrap()
+                .portable
+        );
+
+        // Explicit data dir and WebView2 override win.
+        let custom = resolve_storage_paths(
+            Some(exe.path()),
+            None,
+            Some(PathBuf::from("D:\\custom")),
+            true,
+            None,
+            Some(PathBuf::from("D:\\wv")),
+        )
+        .unwrap();
+        assert_eq!(custom.data_dir, PathBuf::from("D:\\custom"));
+        assert_eq!(custom.webview_data_dir, Some(PathBuf::from("D:\\wv")));
+
+        // Installed mode keeps explicit data dir but the default WebView2 profile.
+        let explicit = resolve_storage_paths(
+            Some(exe.path().join("nomarker").as_path()),
+            Some(local),
+            Some(PathBuf::from("E:\\replay-data")),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!explicit.portable);
+        assert_eq!(explicit.data_dir, PathBuf::from("E:\\replay-data"));
+        assert_eq!(explicit.webview_data_dir, None);
+
+        // Missing exe dir cannot be portable.
+        assert!(resolve_storage_paths(None, None, None, true, None, None).is_err());
+    }
+
+    #[test]
+    fn release_asset_selection_follows_installed_or_portable_edition() {
+        let release = json!({
+            "assets": [
+                {"name": "SSD-Sentinel_2.0.0_x64-setup.exe", "size": 10, "browser_download_url": "https://github.com/yuefdev/ssd-sentinel/releases/download/v2.0.0/SSD-Sentinel_2.0.0_x64-setup.exe"},
+                {"name": "SSD-Sentinel_2.0.0_x64-portable.zip", "size": 20, "browser_download_url": "https://github.com/yuefdev/ssd-sentinel/releases/download/v2.0.0/SSD-Sentinel_2.0.0_x64-portable.zip"},
+                {"name": "SHA256SUMS.txt", "size": 5, "browser_download_url": "https://github.com/yuefdev/ssd-sentinel/releases/download/v2.0.0/SHA256SUMS.txt"}
+            ]
+        });
+        let (installer, sums) = select_release_assets_for_mode(&release, false);
+        assert_eq!(installer.unwrap().0, "SSD-Sentinel_2.0.0_x64-setup.exe");
+        assert!(sums.is_some());
+        let (zip, _) = select_release_assets_for_mode(&release, true);
+        assert_eq!(zip.unwrap().0, "SSD-Sentinel_2.0.0_x64-portable.zip");
+        assert_eq!(
+            select_release_assets(&release).0.unwrap().0,
+            "SSD-Sentinel_2.0.0_x64-setup.exe"
         );
     }
 }

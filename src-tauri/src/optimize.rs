@@ -16,21 +16,27 @@ pub struct OptimizeRequest {
     pub confirmation: String,
 }
 
-fn validate_letter(letter: &str) -> Result<(), String> {
+fn validate_letter(letter: &str, en: bool) -> Result<(), String> {
     if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
-        return Err("Geçersiz bölüm harfi.".into());
+        return Err(
+            crate::i18n::pick(en, "Geçersiz bölüm harfi.", "Invalid volume letter.").into(),
+        );
     }
     Ok(())
 }
 
-fn split_target(target: &str) -> Result<(&str, &str), String> {
-    let (disk_id, letter) = target
-        .split_once(':')
-        .ok_or("Hedef biçimi geçersiz (<disk_id>:<harf> bekleniyor).")?;
+fn split_target(target: &str, en: bool) -> Result<(&str, &str), String> {
+    let (disk_id, letter) = target.split_once(':').ok_or(crate::i18n::pick(
+        en,
+        "Hedef biçimi geçersiz (<disk_id>:<harf> bekleniyor).",
+        "Invalid target format (expected <disk_id>:<letter>).",
+    ))?;
     if disk_id.is_empty() {
-        return Err("Disk kimliği boş olamaz.".into());
+        return Err(
+            crate::i18n::pick(en, "Disk kimliği boş olamaz.", "Drive ID cannot be empty.").into(),
+        );
     }
-    validate_letter(letter)?;
+    validate_letter(letter, en)?;
     Ok((disk_id, letter))
 }
 
@@ -41,7 +47,7 @@ fn verify_disk(core: &Core, disk_id: &str) -> Result<Disk, String> {
 }
 
 #[cfg(windows)]
-fn set_write_cache_ioctl(disk_number: u64, enable: bool) -> Result<bool, String> {
+fn set_write_cache_ioctl(disk_number: u64, enable: bool, en: bool) -> Result<bool, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::{
         CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
@@ -70,10 +76,17 @@ fn set_write_cache_ioctl(disk_number: u64, enable: bool) -> Result<bool, String>
         )
     };
     if h == INVALID_HANDLE_VALUE || h.is_null() {
-        return Err(format!(
-            "Fiziksel sürücü açılamadı: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(if en {
+            format!(
+                "Could not open the physical drive: {}",
+                std::io::Error::last_os_error()
+            )
+        } else {
+            format!(
+                "Fiziksel sürücü açılamadı: {}",
+                std::io::Error::last_os_error()
+            )
+        });
     }
     let mut info = DISK_CACHE_INFORMATION::default();
     let mut ret = 0u32;
@@ -94,7 +107,11 @@ fn set_write_cache_ioctl(disk_number: u64, enable: bool) -> Result<bool, String>
         unsafe {
             CloseHandle(h);
         }
-        return Err(format!("Yazma önbelleği bilgisi okunamadı: {err}"));
+        return Err(if en {
+            format!("Could not read write cache information: {err}")
+        } else {
+            format!("Yazma önbelleği bilgisi okunamadı: {err}")
+        });
     }
     let previous = info.WriteCacheEnabled;
     info.WriteCacheEnabled = enable;
@@ -115,13 +132,17 @@ fn set_write_cache_ioctl(disk_number: u64, enable: bool) -> Result<bool, String>
         CloseHandle(h);
     }
     if set_ok == 0 {
-        return Err(format!("Aygıt yazma önbelleği değişimini reddetti: {err}"));
+        return Err(if en {
+            format!("The device rejected the write cache change: {err}")
+        } else {
+            format!("Aygıt yazma önbelleği değişimini reddetti: {err}")
+        });
     }
     Ok(previous)
 }
 
 #[cfg(windows)]
-fn set_autostart_registry(enable: bool) -> Result<(), String> {
+fn set_autostart_registry(enable: bool, en: bool) -> Result<(), String> {
     use windows_sys::Win32::System::Registry::{
         RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
     };
@@ -146,19 +167,27 @@ fn set_autostart_registry(enable: bool) -> Result<(), String> {
             )
         };
         if rc != 0 {
-            return Err(format!("Başlangıç kaydı yazılamadı (hata kodu {rc})."));
+            return Err(if en {
+                format!("Could not write the startup entry (error code {rc}).")
+            } else {
+                format!("Başlangıç kaydı yazılamadı (hata kodu {rc}).")
+            });
         }
     } else {
         let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, sub_w.as_ptr(), name_w.as_ptr()) };
         if rc != 0 && rc != 2 {
-            return Err(format!("Başlangıç kaydı silinemedi (hata kodu {rc})."));
+            return Err(if en {
+                format!("Could not remove the startup entry (error code {rc}).")
+            } else {
+                format!("Başlangıç kaydı silinemedi (hata kodu {rc}).")
+            });
         }
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn set_long_paths_registry(enable: bool) -> Result<bool, String> {
+fn set_long_paths_registry(enable: bool, en: bool) -> Result<bool, String> {
     use std::ptr::null_mut;
     use windows_sys::Win32::System::Registry::{
         RegGetValueW, RegSetKeyValueW, HKEY_LOCAL_MACHINE, REG_DWORD, RRF_RT_REG_DWORD,
@@ -193,9 +222,11 @@ fn set_long_paths_registry(enable: bool) -> Result<bool, String> {
         )
     };
     if rc != 0 {
-        return Err(format!(
-            "LongPathsEnabled kayıt defteri yazılamadı (hata kodu {rc})."
-        ));
+        return Err(if en {
+            format!("Could not write the LongPathsEnabled registry value (error code {rc}).")
+        } else {
+            format!("LongPathsEnabled kayıt defteri yazılamadı (hata kodu {rc}).")
+        });
     }
     Ok(prev_enabled)
 }
@@ -223,7 +254,8 @@ fn run_ps(core: &Core, script: &str, timeout_secs: u64) -> Result<String, String
 }
 
 fn query_partition_bounds(core: &Core, letter: &str) -> Result<(u64, u64, u64), String> {
-    validate_letter(letter)?;
+    let en = core.is_en();
+    validate_letter(letter, en)?;
     let script = format!(
         "$ErrorActionPreference='Stop'; \
          $s = Get-PartitionSupportedSize -DriveLetter '{letter}'; \
@@ -231,11 +263,23 @@ fn query_partition_bounds(core: &Core, letter: &str) -> Result<(u64, u64, u64), 
          @{{ size_min = [uint64]$s.SizeMin; size_max = [uint64]$s.SizeMax; size = [uint64]$p.Size }} | ConvertTo-Json -Compress"
     );
     let stdout = run_ps(core, &script, 30)?;
-    let v: Value = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("Bölüm sınırları okunamadı: {e}"))?;
-    let size_min = v["size_min"].as_u64().ok_or("SizeMin okunamadı.")?;
-    let size_max = v["size_max"].as_u64().ok_or("SizeMax okunamadı.")?;
-    let size = v["size"].as_u64().ok_or("Bölüm boyutu okunamadı.")?;
+    let v: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+        if en {
+            format!("Could not read partition bounds: {e}")
+        } else {
+            format!("Bölüm sınırları okunamadı: {e}")
+        }
+    })?;
+    let size_min = v["size_min"]
+        .as_u64()
+        .ok_or(core.t("SizeMin okunamadı.", "Could not read SizeMin."))?;
+    let size_max = v["size_max"]
+        .as_u64()
+        .ok_or(core.t("SizeMax okunamadı.", "Could not read SizeMax."))?;
+    let size = v["size"].as_u64().ok_or(core.t(
+        "Bölüm boyutu okunamadı.",
+        "Could not read the partition size.",
+    ))?;
     Ok((size_min, size_max, size))
 }
 
@@ -245,6 +289,7 @@ pub fn execute(core: &Core, req: &OptimizeRequest) -> Result<Value, String> {
 }
 
 pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Value, String> {
+    let en = core.is_en();
     if !matches!(
         req.action.as_str(),
         "write_cache"
@@ -263,72 +308,111 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             | "ntfs_8dot3"
             | "compact_wsl_vhdx"
     ) {
-        return Err("Desteklenmeyen optimizasyon işlemi.".into());
+        return Err(core
+            .t(
+                "Desteklenmeyen optimizasyon işlemi.",
+                "Unsupported optimization action.",
+            )
+            .into());
     }
     if req.confirmation != format!("optimize:{}:{}", req.action, req.target) {
-        return Err("Optimizasyon işlemi için açık onay anahtarı eksik veya hatalı.".into());
+        return Err(core
+            .t(
+                "Optimizasyon işlemi için açık onay anahtarı eksik veya hatalı.",
+                "The confirmation key for this optimization is missing or invalid.",
+            )
+            .into());
     }
     {
         let data = lock(&core.data);
         if core.config.snapshot_dir.is_some() || data["source"] == "replay" {
-            return Err("Kayıt modunda sistem ve disk optimizasyonları kapalıdır.".into());
+            return Err(core
+                .t(
+                    "Kayıt modunda sistem ve disk optimizasyonları kapalıdır.",
+                    "System and drive optimizations are disabled in replay mode.",
+                )
+                .into());
         }
         if data["stale"] != false {
-            return Err("Disk verileri güncel değil; önce SMART verilerini yenileyin.".into());
+            return Err(core
+                .t(
+                    "Disk verileri güncel değil; önce SMART verilerini yenileyin.",
+                    "Drive data is stale; refresh SMART data first.",
+                )
+                .into());
         }
     }
     if !matches!(req.action.as_str(), "query_op_bounds" | "autostart") {
         core.require_write_unlocked(&req.action)?;
     }
     if req.action != "autostart" && !platform::is_admin() {
-        return Err("Bu işlem için uygulamayı Yönetici olarak başlatın.".into());
+        return Err(core
+            .t(
+                "Bu işlem için uygulamayı Yönetici olarak başlatın.",
+                "Start the app as Administrator for this operation.",
+            )
+            .into());
     }
 
     match req.action.as_str() {
         "autostart" => {
             if !matches!(req.value.as_str(), "enable" | "disable") {
-                return Err("Geçersiz başlangıç tercihi.".into());
+                return Err(core
+                    .t("Geçersiz başlangıç tercihi.", "Invalid startup preference.")
+                    .into());
             }
             #[cfg(windows)]
             {
                 let enable = req.value == "enable";
-                set_autostart_registry(enable)?;
+                set_autostart_registry(enable, en)?;
                 Ok(json!({
                     "status": "completed",
                     "action": "autostart",
                     "enabled": enable,
                     "message": if enable {
-                        "SSD Sentinel Windows açılışında sistem tepsisinde başlatılacak."
+                        core.t("SSD Sentinel Windows açılışında sistem tepsisinde başlatılacak.", "SSD Sentinel will start in the system tray when Windows starts.")
                     } else {
-                        "Windows açılışında otomatik başlatma kapatıldı."
+                        core.t("Windows açılışında otomatik başlatma kapatıldı.", "Automatic startup with Windows was turned off.")
                     }
                 }))
             }
             #[cfg(not(windows))]
             {
-                Err("Yalnız Windows desteklenmektedir.".into())
+                Err(core
+                    .t(
+                        "Yalnız Windows desteklenmektedir.",
+                        "Only Windows is supported.",
+                    )
+                    .into())
             }
         }
         "write_cache" => {
             if !matches!(req.value.as_str(), "enable" | "disable" | "rollback") {
-                return Err("Geçersiz yazma önbelleği değeri.".into());
+                return Err(core
+                    .t(
+                        "Geçersiz yazma önbelleği değeri.",
+                        "Invalid write cache value.",
+                    )
+                    .into());
             }
             let mapped = verify_disk(core, &req.target)?;
-            let num = mapped
-                .os_disk_number
-                .ok_or("Fiziksel disk numarası doğrulanamadı.")?;
+            let num = mapped.os_disk_number.ok_or(core.t(
+                "Fiziksel disk numarası doğrulanamadı.",
+                "The physical drive number could not be verified.",
+            ))?;
             let key = format!("write_cache:{}", req.target);
             let target_enable = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(&key)?
-                    .ok_or("Geri alınacak yazma önbelleği kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(&key)?.ok_or(core.t(
+                    "Geri alınacak yazma önbelleği kaydı bulunamadı.",
+                    "No write cache record to roll back was found.",
+                ))?;
                 saved["previous_value"].as_str() == Some("enable")
             } else {
                 req.value == "enable"
             };
             #[cfg(windows)]
             let prev = {
-                let was_enabled = set_write_cache_ioctl(num, target_enable)?;
+                let was_enabled = set_write_cache_ioctl(num, target_enable, en)?;
                 if was_enabled {
                     "enable"
                 } else {
@@ -338,7 +422,12 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             #[cfg(not(windows))]
             let prev = {
                 let _ = (num, target_enable);
-                return Err("Yalnız Windows desteklenmektedir.".into());
+                return Err(core
+                    .t(
+                        "Yalnız Windows desteklenmektedir.",
+                        "Only Windows is supported.",
+                    )
+                    .into());
             };
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(&key)?;
@@ -352,19 +441,21 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 )?;
             }
             Ok(json!({
-                "status": "completed",
-                "action": "write_cache",
-                "enabled": target_enable,
-                "message": format!(
-                    "{} için donanım yazma önbelleği {}.",
-                    mapped.model,
-                    if target_enable { "etkinleştirildi" } else { "kapatıldı" }
-                )
-            }))
+                           "status": "completed",
+                           "action": "write_cache",
+                           "enabled": target_enable,
+                           "message": if en {
+            format!("Hardware write cache for {} was {}.", mapped.model, if target_enable { "enabled" } else { "disabled" })
+            } else {
+            format!("{} için donanım yazma önbelleği {}.", mapped.model, if target_enable { "etkinleştirildi" } else { "kapatıldı" })
+            }
+                       }))
         }
         "ntfs_trim" => {
             if !matches!(req.value.as_str(), "enable" | "rollback") {
-                return Err("Geçersiz TRIM ayarı.".into());
+                return Err(core
+                    .t("Geçersiz TRIM ayarı.", "Invalid TRIM setting.")
+                    .into());
             }
             let key = "ntfs_trim:system";
             let current = lock(&core.data)["windows"]["trim_enabled"].as_bool();
@@ -374,9 +465,10 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 None => "enable",
             };
             let target_flag = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(key)?
-                    .ok_or("Geri alınacak TRIM kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(key)?.ok_or(core.t(
+                    "Geri alınacak TRIM kaydı bulunamadı.",
+                    "No TRIM record to roll back was found.",
+                ))?;
                 if saved["previous_value"].as_str() == Some("disable") {
                     "1"
                 } else {
@@ -397,10 +489,11 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if out.code != 0 {
-                return Err(format!(
-                    "fsutil başarısız (kod {}): {}",
-                    out.code, out.stderr
-                ));
+                return Err(if en {
+                    format!("fsutil failed (code {}): {}", out.code, out.stderr)
+                } else {
+                    format!("fsutil başarısız (kod {}): {}", out.code, out.stderr)
+                });
             }
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(key)?;
@@ -417,15 +510,17 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "status": "completed",
                 "action": "ntfs_trim",
                 "message": if target_flag == "0" {
-                    "Windows TRIM bildirimleri etkinleştirildi."
+                    core.t("Windows TRIM bildirimleri etkinleştirildi.", "Windows TRIM notifications were enabled.")
                 } else {
-                    "Windows TRIM ayarı önceki değerine döndürüldü."
+                    core.t("Windows TRIM ayarı önceki değerine döndürüldü.", "The Windows TRIM setting was reverted to its previous value.")
                 }
             }))
         }
         "pcie_aspm" => {
             if !matches!(req.value.as_str(), "off" | "moderate" | "rollback") {
-                return Err("Geçersiz PCIe ASPM modu.".into());
+                return Err(core
+                    .t("Geçersiz PCIe ASPM modu.", "Invalid PCIe ASPM mode.")
+                    .into());
             }
             let key = "pcie_aspm:system";
             let prev_idx = lock(&core.data)["windows"]["system_tuning"]["pcie_aspm"]
@@ -433,12 +528,18 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 .unwrap_or(1)
                 .to_string();
             let target_idx = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(key)?
-                    .ok_or("Geri alınacak PCIe ASPM kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(key)?.ok_or(core.t(
+                    "Geri alınacak PCIe ASPM kaydı bulunamadı.",
+                    "No PCIe ASPM record to roll back was found.",
+                ))?;
                 let val = saved["previous_value"].as_str().unwrap_or("1").to_owned();
                 if !matches!(val.as_str(), "0" | "1" | "2") {
-                    return Err("Kayıtlı ASPM değeri geçersiz.".into());
+                    return Err(core
+                        .t(
+                            "Kayıtlı ASPM değeri geçersiz.",
+                            "The saved ASPM value is invalid.",
+                        )
+                        .into());
                 }
                 val
             } else if req.value == "off" {
@@ -460,7 +561,11 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if out.code != 0 {
-                return Err(format!("powercfg başarısız: {}", out.stderr));
+                return Err(if en {
+                    format!("powercfg failed: {}", out.stderr)
+                } else {
+                    format!("powercfg başarısız: {}", out.stderr)
+                });
             }
             let act = process::run(
                 &powercfg,
@@ -469,7 +574,11 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if act.code != 0 {
-                return Err(format!("Güç planı etkinleştirilemedi: {}", act.stderr));
+                return Err(if en {
+                    format!("Could not activate the power plan: {}", act.stderr)
+                } else {
+                    format!("Güç planı etkinleştirilemedi: {}", act.stderr)
+                });
             }
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(key)?;
@@ -486,12 +595,17 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "status": "completed",
                 "action": "pcie_aspm",
                 "value": target_idx,
-                "message": "Aktif güç planında PCIe ASPM ayarı güncellendi."
+                "message": core.t("Aktif güç planında PCIe ASPM ayarı güncellendi.", "The PCIe ASPM setting was updated in the active power plan.")
             }))
         }
         "hibernation" => {
             if !matches!(req.value.as_str(), "off" | "on" | "rollback") {
-                return Err("Geçersiz hazırda bekletme değeri.".into());
+                return Err(core
+                    .t(
+                        "Geçersiz hazırda bekletme değeri.",
+                        "Invalid hibernation value.",
+                    )
+                    .into());
             }
             let key = "hibernation:system";
             let current = lock(&core.data)["windows"]["system_tuning"]["hibernate_enabled"]
@@ -499,9 +613,10 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 .unwrap_or(true);
             let prev = if current { "on" } else { "off" };
             let target = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(key)?
-                    .ok_or("Geri alınacak hazırda bekletme kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(key)?.ok_or(core.t(
+                    "Geri alınacak hazırda bekletme kaydı bulunamadı.",
+                    "No hibernation record to roll back was found.",
+                ))?;
                 match saved["previous_value"].as_str() {
                     Some("on") => "on",
                     _ => "off",
@@ -516,7 +631,11 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if out.code != 0 {
-                return Err(format!("powercfg /h başarısız: {}", out.stderr));
+                return Err(if en {
+                    format!("powercfg /h failed: {}", out.stderr)
+                } else {
+                    format!("powercfg /h başarısız: {}", out.stderr)
+                });
             }
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(key)?;
@@ -534,25 +653,33 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "action": "hibernation",
                 "value": target,
                 "message": if target == "off" {
-                    "Hazırda bekletme kapatıldı ve hiberfil.sys alanı geri kazanıldı."
+                    core.t("Hazırda bekletme kapatıldı ve hiberfil.sys alanı geri kazanıldı.", "Hibernation was turned off and hiberfil.sys space was reclaimed.")
                 } else {
-                    "Hazırda bekletme etkinleştirildi."
+                    core.t("Hazırda bekletme etkinleştirildi.", "Hibernation was enabled.")
                 }
             }))
         }
         "hdd_apm" => {
             if !matches!(req.value.as_str(), "254" | "128" | "off" | "rollback") {
-                return Err("Geçersiz HDD APM seviyesi.".into());
+                return Err(core
+                    .t("Geçersiz HDD APM seviyesi.", "Invalid HDD APM level.")
+                    .into());
             }
             let mapped = verify_disk(core, &req.target)?;
             if mapped.kind != "HDD" {
-                return Err("APM kafa park kontrolü yalnız mekanik HDD'lerde sunulur.".into());
+                return Err(core
+                    .t(
+                        "APM kafa park kontrolü yalnız mekanik HDD'lerde sunulur.",
+                        "APM head-park control is available on mechanical HDDs only.",
+                    )
+                    .into());
             }
             let key = format!("hdd_apm:{}", req.target);
             let level = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(&key)?
-                    .ok_or("Geri alınacak HDD APM kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(&key)?.ok_or(core.t(
+                    "Geri alınacak HDD APM kaydı bulunamadı.",
+                    "No HDD APM record to roll back was found.",
+                ))?;
                 saved["previous_value"].as_str().unwrap_or("128").to_owned()
             } else {
                 req.value.clone()
@@ -569,7 +696,12 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if res["smartctl"]["exit_status"].as_u64().unwrap_or(7) & 7 != 0 {
-                return Err("Aygıt APM komutunu kabul etmedi.".into());
+                return Err(core
+                    .t(
+                        "Aygıt APM komutunu kabul etmedi.",
+                        "The device did not accept the APM command.",
+                    )
+                    .into());
             }
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(&key)?;
@@ -583,23 +715,35 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 )?;
             }
             Ok(json!({
-                "status": "completed",
-                "action": "hdd_apm",
-                "value": level,
-                "message": format!("{} için APM seviyesi '{level}' olarak ayarlandı.", mapped.model)
-            }))
+                           "status": "completed",
+                           "action": "hdd_apm",
+                           "value": level,
+                           "message": if en {
+            format!("APM level for {} set to '{level}'.", mapped.model)
+            } else {
+            format!("{} için APM seviyesi '{level}' olarak ayarlandı.", mapped.model)
+            }
+                       }))
         }
         "query_op_bounds" => {
-            let (disk_id, letter) = split_target(&req.target)?;
+            let (disk_id, letter) = split_target(&req.target, en)?;
             let mapped = verify_disk(core, disk_id)?;
             if mapped.kind == "HDD" {
-                return Err("Over-Provisioning yalnız SSD'lerde desteklenir.".into());
+                return Err(core
+                    .t(
+                        "Over-Provisioning yalnız SSD'lerde desteklenir.",
+                        "Over-Provisioning is supported on SSDs only.",
+                    )
+                    .into());
             }
             let vol = mapped
                 .volumes
                 .iter()
                 .find(|v| v["letter"] == letter)
-                .ok_or("Seçilen bölüm diskte bulunamadı.")?;
+                .ok_or(core.t(
+                    "Seçilen bölüm diskte bulunamadı.",
+                    "The selected volume was not found on the drive.",
+                ))?;
             platform::check_filesystem(vol, false)?;
             let (size_min, size_max, size) = query_partition_bounds(core, letter)?;
             Ok(json!({
@@ -620,22 +764,38 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 (true, "15") => 15,
                 _ => {
                     return Err(if is_tail {
-                        "Ölü kuyruk koruma oranı %5, %10 veya %15 olmalıdır.".into()
+                        core.t(
+                            "Ölü kuyruk koruma oranı %5, %10 veya %15 olmalıdır.",
+                            "The dead-tail guard ratio must be 5%, 10%, or 15%.",
+                        )
+                        .into()
                     } else {
-                        "Over-Provisioning oranı %5, %7 veya %10 olmalıdır.".into()
+                        core.t(
+                            "Over-Provisioning oranı %5, %7 veya %10 olmalıdır.",
+                            "The Over-Provisioning ratio must be 5%, 7%, or 10%.",
+                        )
+                        .into()
                     })
                 }
             };
-            let (disk_id, letter) = split_target(&req.target)?;
+            let (disk_id, letter) = split_target(&req.target, en)?;
             let mapped = verify_disk(core, disk_id)?;
             if !is_tail && mapped.kind == "HDD" {
-                return Err("Over-Provisioning yalnız SSD'lerde desteklenir.".into());
+                return Err(core
+                    .t(
+                        "Over-Provisioning yalnız SSD'lerde desteklenir.",
+                        "Over-Provisioning is supported on SSDs only.",
+                    )
+                    .into());
             }
             let vol = mapped
                 .volumes
                 .iter()
                 .find(|v| v["letter"] == letter)
-                .ok_or("Seçilen bölüm diskte bulunamadı.")?;
+                .ok_or(core.t(
+                    "Seçilen bölüm diskte bulunamadı.",
+                    "The selected volume was not found on the drive.",
+                ))?;
             platform::check_filesystem(vol, false)?;
             let disk_cap = mapped.metrics["capacity_bytes"]
                 .as_u64()
@@ -644,29 +804,41 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                         .as_str()
                         .and_then(|s| s.parse().ok())
                 })
-                .ok_or("Disk toplam kapasitesi okunamadı.")?;
+                .ok_or(core.t(
+                    "Disk toplam kapasitesi okunamadı.",
+                    "Could not read the drive's total capacity.",
+                ))?;
             let unallocated = mapped.optimization["unallocated_bytes"]
                 .as_u64()
                 .unwrap_or(0);
             let target_unalloc = disk_cap / 100 * pct;
             if unallocated >= target_unalloc {
                 return Ok(json!({
-                    "status": "already_satisfied",
-                    "message": format!("Disk sonunda zaten %{pct} veya daha fazla ayrılmamış koruma alanı mevcut.")
-                }));
+                                   "status": "already_satisfied",
+                                   "message": if en {
+                format!("The drive already has {pct}% or more unallocated protection space at its end.")
+                } else {
+                format!("Disk sonunda zaten %{pct} veya daha fazla ayrılmamış koruma alanı mevcut.")
+                }
+                               }));
             }
             let delta = target_unalloc - unallocated;
             let vol_free = vol["free_bytes"].as_u64().unwrap_or(0);
             let min_keep_free = 10 * 1024 * 1024 * 1024u64;
             if vol_free.saturating_sub(delta) < min_keep_free {
-                return Err("Bölüm daraltıldıktan sonra en az 10 GiB boş alan kalmalıdır.".into());
+                return Err(core
+                    .t(
+                        "Bölüm daraltıldıktan sonra en az 10 GiB boş alan kalmalıdır.",
+                        "At least 10 GiB of free space must remain after shrinking the volume.",
+                    )
+                    .into());
             }
             let (size_min, _size_max, current_size) = query_partition_bounds(core, letter)?;
             let new_size = ((current_size.saturating_sub(delta)) / (1024 * 1024)) * (1024 * 1024);
             let safety_min = size_min.saturating_add(64 * 1024 * 1024);
             if new_size < safety_min || new_size >= current_size {
                 return Err(
-                    "Taşınamayan sistem dosyaları nedeniyle bölüm istenen boyuta daraltılamıyor."
+                    core.t("Taşınamayan sistem dosyaları nedeniyle bölüm istenen boyuta daraltılamıyor.", "The volume cannot be shrunk to the requested size because of unmovable system files.")
                         .into(),
                 );
             }
@@ -697,35 +869,51 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &new_size.to_string(),
             )?;
             Ok(json!({
-                "status": "completed",
-                "action": req.action,
-                "letter": letter,
-                "new_size": new_size,
-                "message": if is_tail {
-                    format!("{letter}: bölümü sondan %{pct} küçültülerek bozuk kuyruk izleri bölüm dışına çıkarıldı.")
-                } else {
-                    format!("{letter}: bölümü küçültülerek %{pct} Over-Provisioning ayrılmamış alanı ayrıldı ve TRIM ile temizlendi.")
-                }
-            }))
+                           "status": "completed",
+                           "action": req.action,
+                           "letter": letter,
+                           "new_size": new_size,
+                           "message": if is_tail {
+                               if en {
+            format!("Volume {letter}: was shrunk by {pct}% from its end, moving damaged tail traces outside the partition.")
+            } else {
+            format!("{letter}: bölümü sondan %{pct} küçültülerek bozuk kuyruk izleri bölüm dışına çıkarıldı.")
+            }
+                           } else {
+                               if en {
+            format!("Volume {letter}: was shrunk to reserve {pct}% Over-Provisioning unallocated space, then cleaned with TRIM.")
+            } else {
+            format!("{letter}: bölümü küçültülerek %{pct} Over-Provisioning ayrılmamış alanı ayrıldı ve TRIM ile temizlendi.")
+            }
+                           }
+                       }))
         }
         "reclaim_op" | "expand_tail" => {
             let is_tail = req.action == "expand_tail";
-            let (disk_id, letter) = split_target(&req.target)?;
+            let (disk_id, letter) = split_target(&req.target, en)?;
             let mapped = verify_disk(core, disk_id)?;
             if !is_tail && mapped.kind == "HDD" {
-                return Err("Over-Provisioning yalnız SSD'lerde desteklenir.".into());
+                return Err(core
+                    .t(
+                        "Over-Provisioning yalnız SSD'lerde desteklenir.",
+                        "Over-Provisioning is supported on SSDs only.",
+                    )
+                    .into());
             }
             let vol = mapped
                 .volumes
                 .iter()
                 .find(|v| v["letter"] == letter)
-                .ok_or("Seçilen bölüm diskte bulunamadı.")?;
+                .ok_or(core.t(
+                    "Seçilen bölüm diskte bulunamadı.",
+                    "The selected volume was not found on the drive.",
+                ))?;
             platform::check_filesystem(vol, false)?;
             let (_size_min, size_max, current_size) = query_partition_bounds(core, letter)?;
             if size_max <= current_size {
                 return Ok(json!({
                     "status": "already_satisfied",
-                    "message": "Bölüm arkasında geri katılabilecek ayrılmamış alan bulunmuyor."
+                    "message": core.t("Bölüm arkasında geri katılabilecek ayrılmamış alan bulunmuyor.", "There is no unallocated space behind the volume that can be merged back.")
                 }));
             }
             let script = format!(
@@ -740,53 +928,69 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             };
             lock(&core.store).remove_optimization(&key)?;
             Ok(json!({
-                "status": "completed",
-                "action": req.action,
-                "letter": letter,
-                "new_size": size_max,
-                "message": format!("{letter}: bölümü bitişik ayrılmamış alanla ({size_max} bayt) genişletildi.")
-            }))
+                           "status": "completed",
+                           "action": req.action,
+                           "letter": letter,
+                           "new_size": size_max,
+                           "message": if en {
+            format!("Volume {letter}: was extended into the adjacent unallocated space ({size_max} bytes).")
+            } else {
+            format!("{letter}: bölümü bitişik ayrılmamış alanla ({size_max} bayt) genişletildi.")
+            }
+                       }))
         }
         "release_quarantine" => {
-            let (disk_id, letter) = split_target(&req.target)?;
+            let (disk_id, letter) = split_target(&req.target, en)?;
             let mapped = verify_disk(core, disk_id)?;
             let vol = mapped
                 .volumes
                 .iter()
                 .find(|v| v["letter"] == letter)
-                .ok_or("Seçilen bölüm diskte bulunamadı.")?;
+                .ok_or(core.t(
+                    "Seçilen bölüm diskte bulunamadı.",
+                    "The selected volume was not found on the drive.",
+                ))?;
             platform::check_filesystem(vol, false)?;
             let root = platform::volume_root(letter)?;
             let removed = crate::surface_heal::release_quarantine_vault(&root)?;
             let key = format!("quarantine:{disk_id}:{letter}");
             lock(&core.store).remove_optimization(&key)?;
             Ok(json!({
-                "status": "completed",
-                "action": "release_quarantine",
-                "letter": letter,
-                "removed_files": removed,
-                "message": format!("{letter}: üzerindeki karantina kalkanı kaldırıldı ({removed} bölge dosyası temizlendi).")
-            }))
+                           "status": "completed",
+                           "action": "release_quarantine",
+                           "letter": letter,
+                           "removed_files": removed,
+                           "message": if en {
+            format!("The quarantine shield on {letter}: was removed ({removed} zone files cleaned).")
+            } else {
+            format!("{letter}: üzerindeki karantina kalkanı kaldırıldı ({removed} bölge dosyası temizlendi).")
+            }
+                       }))
         }
         "long_paths" => {
             if req.target != "system" {
-                return Err("Geçersiz uzun yol hedefi.".into());
+                return Err(core
+                    .t("Geçersiz uzun yol hedefi.", "Invalid long path target.")
+                    .into());
             }
             if !matches!(req.value.as_str(), "enable" | "disable" | "rollback") {
-                return Err("Geçersiz uzun yol değeri.".into());
+                return Err(core
+                    .t("Geçersiz uzun yol değeri.", "Invalid long path value.")
+                    .into());
             }
             let key = "long_paths:system";
             let target_enable = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(key)?
-                    .ok_or("Geri alınacak uzun yol kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(key)?.ok_or(core.t(
+                    "Geri alınacak uzun yol kaydı bulunamadı.",
+                    "No long path record to roll back was found.",
+                ))?;
                 saved["previous_value"].as_str() == Some("enable")
             } else {
                 req.value == "enable"
             };
             #[cfg(windows)]
             let prev = {
-                if set_long_paths_registry(target_enable)? {
+                if set_long_paths_registry(target_enable, en)? {
                     "enable"
                 } else {
                     "disable"
@@ -795,7 +999,12 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
             #[cfg(not(windows))]
             let prev = {
                 let _ = target_enable;
-                return Err("Yalnız Windows desteklenmektedir.".into());
+                return Err(core
+                    .t(
+                        "Yalnız Windows desteklenmektedir.",
+                        "Only Windows is supported.",
+                    )
+                    .into());
             };
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(key)?;
@@ -813,18 +1022,22 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "action": "long_paths",
                 "enabled": target_enable,
                 "message": if target_enable {
-                    "Windows uzun dosya yolu desteği (LongPathsEnabled) etkinleştirildi."
+                    core.t("Windows uzun dosya yolu desteği (LongPathsEnabled) etkinleştirildi.", "Windows long path support (LongPathsEnabled) was enabled.")
                 } else {
-                    "Windows uzun dosya yolu desteği kapatıldı."
+                    core.t("Windows uzun dosya yolu desteği kapatıldı.", "Windows long path support was turned off.")
                 }
             }))
         }
         "ntfs_8dot3" => {
             if req.target != "system" {
-                return Err("Geçersiz NTFS 8.3 hedefi.".into());
+                return Err(core
+                    .t("Geçersiz NTFS 8.3 hedefi.", "Invalid NTFS 8.3 target.")
+                    .into());
             }
             if !matches!(req.value.as_str(), "disable" | "default" | "rollback") {
-                return Err("Geçersiz NTFS 8.3 ayarı.".into());
+                return Err(core
+                    .t("Geçersiz NTFS 8.3 ayarı.", "Invalid NTFS 8.3 setting.")
+                    .into());
             }
             let key = "ntfs_8dot3:system";
             let prev_idx = lock(&core.data)["windows"]["system_tuning"]["ntfs_8dot3_creation"]
@@ -833,12 +1046,18 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 .unwrap_or(2)
                 .to_string();
             let target_idx = if req.value == "rollback" {
-                let saved = lock(&core.store)
-                    .get_optimization(key)?
-                    .ok_or("Geri alınacak NTFS 8.3 kaydı bulunamadı.")?;
+                let saved = lock(&core.store).get_optimization(key)?.ok_or(core.t(
+                    "Geri alınacak NTFS 8.3 kaydı bulunamadı.",
+                    "No NTFS 8.3 record to roll back was found.",
+                ))?;
                 let val = saved["previous_value"].as_str().unwrap_or("2").to_owned();
                 if !matches!(val.as_str(), "0" | "1" | "2" | "3") {
-                    return Err("Kayıtlı NTFS 8.3 değeri geçersiz.".into());
+                    return Err(core
+                        .t(
+                            "Kayıtlı NTFS 8.3 değeri geçersiz.",
+                            "The saved NTFS 8.3 value is invalid.",
+                        )
+                        .into());
                 }
                 val
             } else if req.value == "disable" {
@@ -858,10 +1077,17 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 &core.stop,
             )?;
             if out.code != 0 {
-                return Err(format!(
-                    "fsutil disable8dot3 başarısız (kod {}): {}",
-                    out.code, out.stderr
-                ));
+                return Err(if en {
+                    format!(
+                        "fsutil disable8dot3 failed (code {}): {}",
+                        out.code, out.stderr
+                    )
+                } else {
+                    format!(
+                        "fsutil disable8dot3 başarısız (kod {}): {}",
+                        out.code, out.stderr
+                    )
+                });
             }
             if req.value == "rollback" {
                 lock(&core.store).remove_optimization(key)?;
@@ -879,23 +1105,34 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 "action": "ntfs_8dot3",
                 "value": target_idx,
                 "message": if target_idx == "1" {
-                    "NTFS 8.3 kısa dosya adı üretimi tüm birimlerde kapatıldı (node_modules / target hızlandırması)."
+                    core.t("NTFS 8.3 kısa dosya adı üretimi tüm birimlerde kapatıldı (node_modules / target hızlandırması).", "NTFS 8.3 short file name generation was turned off on all volumes (speeds up node_modules / target).")
                 } else {
-                    "NTFS 8.3 kısa dosya adı ayarı güncellendi."
+                    core.t("NTFS 8.3 kısa dosya adı ayarı güncellendi.", "The NTFS 8.3 short file name setting was updated.")
                 }
             }))
         }
         "compact_wsl_vhdx" => {
             if req.value != "compact" {
-                return Err("Geçersiz VHDX sıkıştırma komutu.".into());
+                return Err(core
+                    .t(
+                        "Geçersiz VHDX sıkıştırma komutu.",
+                        "Invalid VHDX compaction command.",
+                    )
+                    .into());
             }
             let valid_path = crate::dev_workspace::validate_wsl_vhdx_path(&req.target)?;
             #[cfg(windows)]
             {
                 use std::io::Write;
-                let size_before = std::fs::metadata(&valid_path)
-                    .map(|m| m.len())
-                    .map_err(|_| "VHDX dosyası boyutu okunamadı.")?;
+                let size_before =
+                    std::fs::metadata(&valid_path)
+                        .map(|m| m.len())
+                        .map_err(|_| {
+                            core.t(
+                                "VHDX dosyası boyutu okunamadı.",
+                                "Could not read the VHDX file size.",
+                            )
+                        })?;
                 let _ = process::run(
                     &platform::system_executable("wsl.exe"),
                     &["--shutdown".into()],
@@ -908,10 +1145,17 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                let mut script = tempfile::Builder::new()
-                    .suffix(".txt")
-                    .tempfile()
-                    .map_err(|e| format!("diskpart geçici betiği oluşturulamadı: {e}"))?;
+                let mut script =
+                    tempfile::Builder::new()
+                        .suffix(".txt")
+                        .tempfile()
+                        .map_err(|e| {
+                            if en {
+                                format!("Could not create the temporary diskpart script: {e}")
+                            } else {
+                                format!("diskpart geçici betiği oluşturulamadı: {e}")
+                            }
+                        })?;
                 let body = format!(
                     "select vdisk file=\"{}\"\r\nattach vdisk readonly\r\ncompact vdisk\r\ndetach vdisk\r\nexit\r\n",
                     valid_path.display()
@@ -919,7 +1163,13 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                 script
                     .write_all(body.as_bytes())
                     .and_then(|()| script.flush())
-                    .map_err(|e| format!("diskpart betiği yazılamadı: {e}"))?;
+                    .map_err(|e| {
+                        if en {
+                            format!("Could not write the diskpart script: {e}")
+                        } else {
+                            format!("diskpart betiği yazılamadı: {e}")
+                        }
+                    })?;
                 let out = process::run(
                     &platform::system_executable("diskpart.exe"),
                     &["/s".into(), script.path().to_string_lossy().into_owned()],
@@ -932,38 +1182,60 @@ pub(crate) fn execute_unlocked(core: &Core, req: &OptimizeRequest) -> Result<Val
                     } else {
                         &out.stderr
                     };
-                    return Err(format!(
-                        "diskpart compact başarısız (kod {}): {}",
-                        out.code,
-                        detail.chars().take(600).collect::<String>()
-                    ));
+                    return Err(if en {
+                        format!(
+                            "diskpart compact failed (code {}): {}",
+                            out.code,
+                            detail.chars().take(600).collect::<String>()
+                        )
+                    } else {
+                        format!(
+                            "diskpart compact başarısız (kod {}): {}",
+                            out.code,
+                            detail.chars().take(600).collect::<String>()
+                        )
+                    });
                 }
                 let size_after = std::fs::metadata(&valid_path)
                     .map(|m| m.len())
                     .unwrap_or(size_before);
                 let freed_bytes = size_before.saturating_sub(size_after);
                 Ok(json!({
-                    "status": "completed",
-                    "action": "compact_wsl_vhdx",
-                    "path": valid_path.to_string_lossy(),
-                    "size_before": size_before,
-                    "size_after": size_after,
-                    "freed_bytes": freed_bytes,
-                    "message": format!(
-                        "{} sıkıştırıldı ({:.2} GiB → {:.2} GiB · {:.2} GiB geri kazanıldı).",
-                        valid_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                        size_before as f64 / (1024.0 * 1024.0 * 1024.0),
-                        size_after as f64 / (1024.0 * 1024.0 * 1024.0),
-                        freed_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
-                    )
-                }))
+                                   "status": "completed",
+                                   "action": "compact_wsl_vhdx",
+                                   "path": valid_path.to_string_lossy(),
+                                   "size_before": size_before,
+                                   "size_after": size_after,
+                                   "freed_bytes": freed_bytes,
+                                   "message": if en {
+                format!("{} compacted ({:.2} GiB → {:.2} GiB · {:.2} GiB reclaimed).", valid_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                                       size_before as f64 / (1024.0 * 1024.0 * 1024.0),
+                                       size_after as f64 / (1024.0 * 1024.0 * 1024.0),
+                                       freed_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+                } else {
+                format!("{} sıkıştırıldı ({:.2} GiB → {:.2} GiB · {:.2} GiB geri kazanıldı).", valid_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                                       size_before as f64 / (1024.0 * 1024.0 * 1024.0),
+                                       size_after as f64 / (1024.0 * 1024.0 * 1024.0),
+                                       freed_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+                }
+                               }))
             }
             #[cfg(not(windows))]
             {
                 let _ = valid_path;
-                Err("Yalnız Windows desteklenmektedir.".into())
+                Err(core
+                    .t(
+                        "Yalnız Windows desteklenmektedir.",
+                        "Only Windows is supported.",
+                    )
+                    .into())
             }
         }
-        _ => Err("Desteklenmeyen optimizasyon işlemi.".into()),
+        _ => Err(core
+            .t(
+                "Desteklenmeyen optimizasyon işlemi.",
+                "Unsupported optimization action.",
+            )
+            .into()),
     }
 }

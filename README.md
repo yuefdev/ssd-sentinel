@@ -101,6 +101,23 @@ gh attestation verify "SSD-Sentinel_<version>_x64-setup.exe" --owner yuefdev
 ### Option 1 — Quick Install (Recommended)
 Download the latest installer from [GitHub Releases](https://github.com/yuefdev/ssd-sentinel/releases/latest) and verify its checksum against `SHA256SUMS.txt` (or `gh attestation verify`). WebView2 uses Microsoft's lightweight bootstrapper if not already present on Windows 10/11.
 
+### Option 1b — Portable Edition (`.zip`, no installer)
+Download `SSD-Sentinel_<version>_x64-portable.zip` from [GitHub Releases](https://github.com/yuefdev/ssd-sentinel/releases/latest), extract it anywhere (USB stick, `D:\Tools`, Desktop) and run `ssd-sentinel.exe`. Nothing is installed and **nothing is written outside the folder**:
+
+```text
+SSD-Sentinel/
+├─ ssd-sentinel.exe        the app (portable.txt next to it switches portable mode on)
+├─ portable.txt            marker file - delete it to use %LOCALAPPDATA% again
+├─ smartmontools/          bundled smartctl (GPL-2.0-or-later)
+└─ data/                   created on first run
+   ├─ history.sqlite3      SMART history, jobs, rollback records
+   ├─ preferences.json     language, Read-Only Guard, update settings
+   ├─ webview2/            WebView2 profile (cache, local storage)
+   └─ updates/             verified update packages
+```
+
+Portable mode is also enabled with `--portable` or `SSD_SENTINEL_PORTABLE=1`. In portable mode the in-app updater downloads the matching `-portable.zip` into `data\updates`, verifies its SHA-256 against `SHA256SUMS.txt` and reveals it in Explorer - extract it over the old folder and `data` is kept. Build it yourself with `npm run desktop:portable` (see [`tools/package_portable.ps1`](tools/package_portable.ps1)); verify a download with `gh attestation verify "SSD-Sentinel_<version>_x64-portable.zip" --owner yuefdev`.
+
 ### Option 2 — Try Without Touching Disks (Snapshot Replay Mode)
 Inspect the UI and test sample HDD + NVMe telemetry safely with **zero physical disk access** using anonymized repo fixtures:
 
@@ -141,7 +158,7 @@ npm run tauri -- build --bundles nsis
 
 Looking for a **free, open-source alternative to CrystalDiskInfo or Hard Disk Sentinel** on Windows 10/11? **SSD Sentinel** unifies live SMART monitoring, endurance forecasting, raw Win32 IOCP benchmarking, LBA surface diagnostics, and read-only NTFS recovery behind a hardware-protective **Default Read-Only Guard**.
 
-| Capability | SSD Sentinel (`v1.10.3`) | CrystalDiskInfo | Hard Disk Sentinel |
+| Capability | SSD Sentinel (`v1.11.0`) | CrystalDiskInfo | Hard Disk Sentinel |
 |---|---|---|---|
 | **License & Cost** | **MIT** (Free & Open Source; `smartctl` GPLv2+) | **MIT** (Freeware / Open Source) | Commercial (Limited Free Trial; Paid Standard/Pro) |
 | **Ads & Hidden Telemetry** | **Zero ads, zero telemetry, offline-first** | Clean open-source (themed editions available) | No telemetry |
@@ -169,7 +186,7 @@ Install SSD Sentinel, leave the **Write Guard** locked for pure read-only inspec
 Yes. Every fresh install boots with `read_only_guard = true` enforced in Rust (`src-tauri/src/core.rs`), blocking benchmarks, repairs, tiering, and system policy writes until you explicitly unlock the guard and approve a structured Dry-Run execution manifest. You can also test the full interface with zero physical disk access using `--snapshot-dir .\src-tauri\tests\fixtures`.
 
 **Why does Windows SmartScreen warn on the installer?**
-Community installers do not currently use a paid commercial Authenticode certificate. Always verify the downloaded `.exe` against `SHA256SUMS.txt` or `gh attestation verify "SSD-Sentinel_1.10.3_x64-setup.exe" --owner yuefdev` before running, or read the full [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/).
+Community installers do not currently use a paid commercial Authenticode certificate. Always verify the downloaded `.exe` against `SHA256SUMS.txt` or `gh attestation verify "SSD-Sentinel_1.11.0_x64-setup.exe" --owner yuefdev` before running, or read the full [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/).
 
 ---
 

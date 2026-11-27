@@ -12,7 +12,7 @@ body:
     attributes:
       label: SSD Sentinel Version
       description: Found in the bottom footer or Tools & Settings.
-      placeholder: "e.g. v1.10.3"
+      placeholder: "e.g. v1.11.0"
     validations:
       required: true
   - type: input

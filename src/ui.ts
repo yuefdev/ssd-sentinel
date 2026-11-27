@@ -967,6 +967,8 @@ export function computePollSignature(
     auto_check_updates: s.auto_check_updates,
     health_mode: s.health_mode,
     language: s.language,
+    portable: s.portable,
+    data_dir: s.data_dir,
     version: s.version,
     windows: s.windows,
     optimizations: s.optimizations,

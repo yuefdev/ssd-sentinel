@@ -1,16 +1,19 @@
 {
   "name": "ssd-sentinel-desktop",
-  "version": "1.10.3",
+  "version": "1.11.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node tools/check_i18n.mjs && node --experimental-strip-types --test tests/*.test.ts",
     "tauri": "tauri",
     "desktop": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "tauri build",
+    "check:i18n": "node tools/check_i18n.mjs",
+    "gen:i18n": "node tools/gen_backend_i18n.mjs",
+    "desktop:portable": "npm run tauri -- build --no-bundle && powershell -NoProfile -ExecutionPolicy Bypass -File tools/package_portable.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4"

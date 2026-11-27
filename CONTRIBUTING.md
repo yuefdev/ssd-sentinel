@@ -24,7 +24,8 @@ Thank you for helping improve **SSD Sentinel**! Before making changes—especial
 # 1. Install frontend dependencies
 npm ci
 
-# 2. Run TypeScript unit tests and verify production bundle
+# 2. Run the i18n guard, TypeScript unit tests and verify the production bundle
+npm run check:i18n   # also part of `npm test`
 npm test
 npm run build
 
@@ -50,8 +51,9 @@ pwsh -NoProfile -File tools/vhdx_integration_test.ps1
 2. **Dry-Run Preview & Confirmation Tokens:** Mutating UI flows must present an accurate `DryRunSpec` manifest inside `#confirmation` and pass deterministic IPC confirmation tokens validated in Rust `core.rs`.
 3. **Honest Telemetry:** Never fabricate a `100%` score or `up_to_date` status when a required SMART read or network check fails or lacks data. Surface partial warnings cleanly via `read_incomplete` / `partial_warnings`.
 4. **Zero Privacy Leakage in Fixtures & Tests:** Never commit real disk serial numbers, WWN/EUI-64 identifiers, user paths, or machine telemetry captures. Keep fixtures synthetic (`src-tauri/tests/fixtures/`).
-5. **Bilingual Parity (`TR` / `EN`):** User-facing UI strings, badges, tooltips, and dialogs must support both Turkish and English cleanly via `L(tr, en)` and `src/i18n.ts`.
-6. **Clean-Room & Minimal External Bloat:** Implement storage logic against documented Windows APIs only, keep dependencies lean, pass `npm audit` / `cargo audit`, respect CSP rules in `src-tauri/tauri.conf.json`, and preserve upstream license headers (MIT for project code; GPLv2+ notice for `smartmontools`).
+5. **Bilingual Parity (`TR` / `EN`):** User-facing UI strings, badges, tooltips, and dialogs must support both Turkish and English cleanly via `L(tr, en)` and `src/i18n.ts`. In Rust use `core.t(tr, en)` / `phase_bi(core, tr, en)` (never a bare `phase(core, "...")`) for anything the user can read. `npm run check:i18n` enforces this in CI; after adding Turkish text to Rust, run `npm run gen:i18n` (and add a pair to `tools/backend_i18n_manual.mjs` for text that cannot use `core.t`). Never change `process::CANCELLED`; the UI translates it.
+6. **Portable parity:** anything that writes files must use `core.config.data_dir` (never `%LOCALAPPDATA%` directly) so portable mode (`portable.txt` / `--portable`) keeps all data next to the executable.
+7. **Clean-Room & Minimal External Bloat:** Implement storage logic against documented Windows APIs only, keep dependencies lean, pass `npm audit` / `cargo audit`, respect CSP rules in `src-tauri/tauri.conf.json`, and preserve upstream license headers (MIT for project code; GPLv2+ notice for `smartmontools`).
 
 ---
 

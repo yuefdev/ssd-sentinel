@@ -598,6 +598,8 @@ export interface AppState {
   auto_check_updates?: boolean;
   health_mode?: string;
   language?: "tr" | "en";
+  portable?: boolean;
+  data_dir?: string;
   optimizations?: OptimizationRecord[];
   tier_moves?: TierMoveRecord[];
   version: string;

@@ -712,23 +712,43 @@ pub fn run_native_io_step(
 }
 
 fn defrag(core: &Core, request: &JobRequest, disk: &Disk) -> Result<(), String> {
+    let en = core.is_en();
     if disk.kind != "HDD" {
-        return Err(
-            "SSD'lerde disk birleştirme (Defrag) NAND ömrünü kısaltır ve engellenmiştir; ReTrim kullanın."
-                .into(),
-        );
+        return Err(core
+            .t(
+                "SSD'lerde disk birleştirme (Defrag) NAND ömrünü kısaltır ve engellenmiştir; ReTrim kullanın.",
+                "Defragmenting SSDs shortens NAND lifetime and is blocked; use ReTrim.",
+            )
+            .into());
     }
     if !platform::is_admin() {
-        return Err("Disk birleştirme / analiz işlemi yönetici erişimi gerektirir.".into());
+        return Err(core
+            .t(
+                "Disk birleştirme / analiz işlemi yönetici erişimi gerektirir.",
+                "Defragmentation / analysis requires administrator access.",
+            )
+            .into());
     }
     let mode = request.options["mode"].as_str().unwrap_or("analyze");
-    let (flag, title) = match mode {
-        "defrag" => ("/O", "HDD akıllı birleştirme · defrag /O"),
-        "consolidate" => ("/X", "HDD boş alan birleştirme · defrag /X"),
-        _ => ("/A", "HDD parçalanma analizi · defrag /A"),
+    let (flag, title_tr, title_en) = match mode {
+        "defrag" => (
+            "/O",
+            "HDD akıllı birleştirme · defrag /O",
+            "HDD smart optimization · defrag /O",
+        ),
+        "consolidate" => (
+            "/X",
+            "HDD boş alan birleştirme · defrag /X",
+            "HDD free-space consolidation · defrag /X",
+        ),
+        _ => (
+            "/A",
+            "HDD parçalanma analizi · defrag /A",
+            "HDD fragmentation analysis · defrag /A",
+        ),
     };
     lock(&core.job)["total"] = json!(1);
-    phase(core, title);
+    phase_bi(core, title_tr, title_en);
     let output = process::run(
         &platform::system_executable("defrag.exe"),
         &[format!("{}:", request.letter), flag.into(), "/V".into()],
@@ -744,7 +764,11 @@ fn defrag(core: &Core, request: &JobRequest, disk: &Disk) -> Result<(), String> 
         "output": output.stdout.chars().take(12000).collect::<String>()
     });
     if output.code != 0 {
-        return Err(format!("defrag.exe hata kodu döndürdü: {}", output.code));
+        return Err(if en {
+            format!("defrag.exe returned error code: {}", output.code)
+        } else {
+            format!("defrag.exe hata kodu döndürdü: {}", output.code)
+        });
     }
     Ok(())
 }
@@ -1135,6 +1159,10 @@ pub(crate) fn phase(core: &Core, text: &str) {
     job["status"] = json!("running");
     job["phase"] = json!(text);
 }
+/// Bilingual progress text: picks the Turkish or English phase for the active UI language.
+pub(crate) fn phase_bi(core: &Core, tr: &str, en: &str) {
+    phase(core, crate::i18n::pick(core.is_en(), tr, en));
+}
 fn increment(job: &mut Value, key: &str, amount: u64) {
     job[key] = json!(job[key].as_u64().unwrap_or(0).saturating_add(amount));
 }
@@ -1143,38 +1171,66 @@ fn increment(job: &mut Value, key: &str, amount: u64) {
 /// Never stress a failing mechanical drive with heavy head seeks when SMART reports
 /// critical status, pending (#197), uncorrectable (#198), or >= 50 reallocated (#5) sectors.
 pub fn autopilot_hdd_defrag_guard(disk: &Disk) -> Option<String> {
+    autopilot_hdd_defrag_guard_for_lang(disk, false)
+}
+
+pub fn autopilot_hdd_defrag_guard_for_lang(disk: &Disk, en: bool) -> Option<String> {
     let snap = crate::surface_heal::SmartSnapshot::from_disk(disk);
     let mut reasons = Vec::new();
     if disk.health.status == "critical" {
-        reasons.push("disk sağlık durumu kritik".to_owned());
+        reasons.push(
+            crate::i18n::pick(
+                en,
+                "disk sağlık durumu kritik",
+                "drive health status is critical",
+            )
+            .to_owned(),
+        );
     }
     if snap.pending_197 > 0 {
-        reasons.push(format!("{} bekleyen sektör (#197)", snap.pending_197));
+        reasons.push(if en {
+            format!("{} pending sectors (#197)", snap.pending_197)
+        } else {
+            format!("{} bekleyen sektör (#197)", snap.pending_197)
+        });
     }
     if snap.uncorrectable_198 > 0 {
-        reasons.push(format!(
-            "{} düzeltilemeyen sektör (#198)",
-            snap.uncorrectable_198
-        ));
+        reasons.push(if en {
+            format!("{} uncorrectable sectors (#198)", snap.uncorrectable_198)
+        } else {
+            format!("{} düzeltilemeyen sektör (#198)", snap.uncorrectable_198)
+        });
     }
     if snap.reallocated_5 >= 50 {
-        reasons.push(format!(
-            "{} yeniden eşlenen sektör (#5)",
-            snap.reallocated_5
-        ));
+        reasons.push(if en {
+            format!("{} reallocated sectors (#5)", snap.reallocated_5)
+        } else {
+            format!("{} yeniden eşlenen sektör (#5)", snap.reallocated_5)
+        });
     }
     if reasons.is_empty() {
         return None;
     }
-    Some(format!(
-        "Güvenlik uyarısı: HDD birleştirme (defrag /O) atlandı ({}). Arızalı diski zorlamamak için önce Tam Yüzey Taraması ve Nokta Atışı Onarım çalıştırın, ardından önemli verilerinizi yedekleyin.",
-        reasons.join(", ")
-    ))
+    Some(if en {
+        format!(
+            "Safety warning: HDD defragmentation (defrag /O) was skipped ({}). To avoid stressing a failing drive, run a Full Surface Scan and Pinpoint Repair first, then back up your important data.",
+            reasons.join(", ")
+        )
+    } else {
+        format!(
+            "Güvenlik uyarısı: HDD birleştirme (defrag /O) atlandı ({}). Arızalı diski zorlamamak için önce Tam Yüzey Taraması ve Nokta Atışı Onarım çalıştırın, ardından önemli verilerinizi yedekleyin.",
+            reasons.join(", ")
+        )
+    })
 }
 
-/// Read-only Turkish advisory steps appended by Autopilot on SSDs when large hibernation
+/// Read-only advisory steps appended by Autopilot on SSDs when large hibernation
 /// files (> 4 GiB) or low over-provisioning (< 5%) are detected. Never mutates silently.
 pub fn autopilot_ssd_advisories(disk: &Disk, windows: &Value) -> Vec<String> {
+    autopilot_ssd_advisories_for_lang(disk, windows, false)
+}
+
+pub fn autopilot_ssd_advisories_for_lang(disk: &Disk, windows: &Value, en: bool) -> Vec<String> {
     const FOUR_GIB: u64 = 4 * 1024 * 1024 * 1024;
     let mut notes = Vec::new();
     if let Some(hiber_bytes) = windows["system_tuning"]["hiberfil_bytes"]
@@ -1182,17 +1238,29 @@ pub fn autopilot_ssd_advisories(disk: &Disk, windows: &Value) -> Vec<String> {
         .filter(|b| *b > FOUR_GIB)
     {
         let gib = hiber_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-        notes.push(format!(
-            "Öneri: Hazırda bekletme dosyası (hiberfil.sys) {gib:.1} GiB yer kaplıyor. Hazırda bekletmeyi kullanmıyorsanız Hızlandır → Elle Ayarla bölümünden kapatarak SSD'de boş alan ve yazma dayanımı kazanabilirsiniz."
-        ));
+        notes.push(if en {
+            format!(
+                "Tip: The hibernation file (hiberfil.sys) uses {gib:.1} GiB. If you do not use hibernation, you can turn it off under Optimize → Manual tuning to gain free space and write endurance on the SSD."
+            )
+        } else {
+            format!(
+                "Öneri: Hazırda bekletme dosyası (hiberfil.sys) {gib:.1} GiB yer kaplıyor. Hazırda bekletmeyi kullanmıyorsanız Hızlandır → Elle Ayarla bölümünden kapatarak SSD'de boş alan ve yazma dayanımı kazanabilirsiniz."
+            )
+        });
     }
     if let Some(op_pct) = disk.optimization["over_provisioning_percent"]
         .as_f64()
         .filter(|p| p.is_finite() && *p < 5.0)
     {
-        notes.push(format!(
-            "Öneri: SSD ayrılmamış koruma alanı (Over-Provisioning) %{op_pct:.1} düzeyinde (%5'in altında). Uzun vadeli yazma hızı ve NAND ömrü için Hızlandır → Elle Ayarla altından %7–%10 Over-Provisioning ayırmayı değerlendirebilirsiniz."
-        ));
+        notes.push(if en {
+            format!(
+                "Tip: SSD unallocated reserve (Over-Provisioning) is {op_pct:.1}% (below 5%). For long-term write speed and NAND endurance, consider reserving 7–10% Over-Provisioning under Optimize → Manual tuning."
+            )
+        } else {
+            format!(
+                "Öneri: SSD ayrılmamış koruma alanı (Over-Provisioning) %{op_pct:.1} düzeyinde (%5'in altında). Uzun vadeli yazma hızı ve NAND ömrü için Hızlandır → Elle Ayarla altından %7–%10 Over-Provisioning ayırmayı değerlendirebilirsiniz."
+            )
+        });
     }
     notes
 }
@@ -1203,8 +1271,14 @@ fn run_autopilot(
     disk: &Disk,
     root: &Path,
 ) -> Result<(), String> {
+    let en = core.is_en();
     if !platform::is_admin() {
-        return Err("Tek Tıkla Otopilot için Yönetici erişimi gereklidir.".into());
+        return Err(core
+            .t(
+                "Tek Tıkla Otopilot için Yönetici erişimi gereklidir.",
+                "One-click Autopilot requires administrator access.",
+            )
+            .into());
     }
     let _ = root;
     let is_hdd = disk.kind == "HDD";
@@ -1212,9 +1286,10 @@ fn run_autopilot(
     lock(&core.job)["total"] = json!(4);
 
     if is_hdd {
-        phase(
+        phase_bi(
             core,
             "1/4 · Donanım yazma önbelleği ve APM kafa park kontrolü uygulanıyor",
+            "1/4 · Applying hardware write cache and APM head-parking control",
         );
         if disk.optimization["write_cache"]["changeable"] == true
             && disk.optimization["write_cache"]["enabled"] != true
@@ -1231,12 +1306,18 @@ fn run_autopilot(
                 steps.push(
                     res["message"]
                         .as_str()
-                        .unwrap_or("Yazma önbelleği açıldı.")
+                        .unwrap_or(core.t("Yazma önbelleği açıldı.", "Write cache enabled."))
                         .to_owned(),
                 );
             }
         } else {
-            steps.push("Donanım yazma önbelleği zaten optimum durumda.".into());
+            steps.push(
+                core.t(
+                    "Donanım yazma önbelleği zaten optimum durumda.",
+                    "Hardware write cache is already optimal.",
+                )
+                .into(),
+            );
         }
         if crate::optimize::execute_unlocked(
             core,
@@ -1249,7 +1330,13 @@ fn run_autopilot(
         )
         .is_ok()
         {
-            steps.push("HDD APM seviyesi 254 (gereksiz kafa park azaltıldı) ayarlandı.".into());
+            steps.push(
+                core.t(
+                    "HDD APM seviyesi 254 (gereksiz kafa park azaltıldı) ayarlandı.",
+                    "HDD APM level set to 254 (unnecessary head parking reduced).",
+                )
+                .into(),
+            );
         }
         {
             let mut j = lock(&core.job);
@@ -1258,9 +1345,10 @@ fn run_autopilot(
         }
         cancelled(core)?;
 
-        phase(
+        phase_bi(
             core,
             "2/4 · Çevrimiçi dosya sistemi bütünlüğü denetleniyor (chkdsk /scan)",
+            "2/4 · Checking online file system integrity (chkdsk /scan)",
         );
         if disk
             .volumes
@@ -1273,10 +1361,17 @@ fn run_autopilot(
                 Duration::from_secs(600),
                 &core.job_cancel,
             )?;
-            steps.push(format!(
-                "{}: NTFS çevrimiçi bütünlük taraması tamamlandı (kod {}).",
-                request.letter, chk.code
-            ));
+            steps.push(if en {
+                format!(
+                    "{}: NTFS online integrity scan completed (code {}).",
+                    request.letter, chk.code
+                )
+            } else {
+                format!(
+                    "{}: NTFS çevrimiçi bütünlük taraması tamamlandı (kod {}).",
+                    request.letter, chk.code
+                )
+            });
         }
         {
             let mut j = lock(&core.job);
@@ -1285,16 +1380,18 @@ fn run_autopilot(
         }
         cancelled(core)?;
 
-        if let Some(warning) = autopilot_hdd_defrag_guard(disk) {
-            phase(
+        if let Some(warning) = autopilot_hdd_defrag_guard_for_lang(disk, en) {
+            phase_bi(
                 core,
                 "3/4 · Güvenlik kontrolü: sağlık uyarısı nedeniyle defrag /O atlandı",
+                "3/4 · Safety check: defrag /O skipped because of a health warning",
             );
             steps.push(warning);
         } else {
-            phase(
+            phase_bi(
                 core,
                 "3/4 · HDD akıllı dosya & boş alan hızlandırması çalışıyor (defrag /O)",
+                "3/4 · Running HDD smart file & free-space optimization (defrag /O)",
             );
             let defrag_out = process::run(
                 &platform::system_executable("defrag.exe"),
@@ -1303,12 +1400,23 @@ fn run_autopilot(
                 &core.job_cancel,
             )?;
             if defrag_out.code != 0 {
-                return Err(format!("defrag /O hata kodu döndürdü: {}", defrag_out.code));
+                return Err(if en {
+                    format!("defrag /O returned error code: {}", defrag_out.code)
+                } else {
+                    format!("defrag /O hata kodu döndürdü: {}", defrag_out.code)
+                });
             }
-            steps.push(format!(
-                "{}: bölümü defrag /O ile en hızlı izlere düzenlendi.",
-                request.letter
-            ));
+            steps.push(if en {
+                format!(
+                    "{}: volume arranged onto the fastest tracks with defrag /O.",
+                    request.letter
+                )
+            } else {
+                format!(
+                    "{}: bölümü defrag /O ile en hızlı izlere düzenlendi.",
+                    request.letter
+                )
+            });
         }
         {
             let mut j = lock(&core.job);
@@ -1316,9 +1424,10 @@ fn run_autopilot(
             j["progress"] = json!(85);
         }
     } else {
-        phase(
+        phase_bi(
             core,
             "1/4 · Windows TRIM (DisableDeleteNotify) doğrulanıyor",
+            "1/4 · Verifying Windows TRIM (DisableDeleteNotify)",
         );
         if lock(&core.data)["windows"]["trim_enabled"] != true {
             if let Ok(res) = crate::optimize::execute_unlocked(
@@ -1333,12 +1442,18 @@ fn run_autopilot(
                 steps.push(
                     res["message"]
                         .as_str()
-                        .unwrap_or("TRIM etkinleştirildi.")
+                        .unwrap_or(core.t("TRIM etkinleştirildi.", "TRIM enabled."))
                         .to_owned(),
                 );
             }
         } else {
-            steps.push("Windows TRIM zaten etkin.".into());
+            steps.push(
+                core.t(
+                    "Windows TRIM zaten etkin.",
+                    "Windows TRIM is already enabled.",
+                )
+                .into(),
+            );
         }
         {
             let mut j = lock(&core.job);
@@ -1347,7 +1462,11 @@ fn run_autopilot(
         }
         cancelled(core)?;
 
-        phase(core, "2/4 · PCIe ASPM düşük gecikme güç ayarı uygulanıyor");
+        phase_bi(
+            core,
+            "2/4 · PCIe ASPM düşük gecikme güç ayarı uygulanıyor",
+            "2/4 · Applying low-latency PCIe ASPM power setting",
+        );
         if lock(&core.data)["windows"]["system_tuning"]["pcie_aspm"] != 0 {
             if let Ok(res) = crate::optimize::execute_unlocked(
                 core,
@@ -1361,12 +1480,21 @@ fn run_autopilot(
                 steps.push(
                     res["message"]
                         .as_str()
-                        .unwrap_or("PCIe ASPM tam performans moduna alındı.")
+                        .unwrap_or(core.t(
+                            "PCIe ASPM tam performans moduna alındı.",
+                            "PCIe ASPM switched to full performance mode.",
+                        ))
                         .to_owned(),
                 );
             }
         } else {
-            steps.push("PCIe ASPM zaten düşük gecikme modunda.".into());
+            steps.push(
+                core.t(
+                    "PCIe ASPM zaten düşük gecikme modunda.",
+                    "PCIe ASPM is already in low-latency mode.",
+                )
+                .into(),
+            );
         }
         {
             let mut j = lock(&core.job);
@@ -1375,7 +1503,11 @@ fn run_autopilot(
         }
         cancelled(core)?;
 
-        phase(core, "3/4 · Yazma önbelleği ve SSD ReTrim uygulanıyor");
+        phase_bi(
+            core,
+            "3/4 · Yazma önbelleği ve SSD ReTrim uygulanıyor",
+            "3/4 · Applying write cache and SSD ReTrim",
+        );
         if disk.optimization["write_cache"]["changeable"] == true
             && disk.optimization["write_cache"]["enabled"] != true
         {
@@ -1391,7 +1523,7 @@ fn run_autopilot(
                 steps.push(
                     res["message"]
                         .as_str()
-                        .unwrap_or("Yazma önbelleği açıldı.")
+                        .unwrap_or(core.t("Yazma önbelleği açıldı.", "Write cache enabled."))
                         .to_owned(),
                 );
             }
@@ -1404,13 +1536,27 @@ fn run_autopilot(
         );
         match retrim_out {
             Ok(out) if out.code == 0 => {
-                steps.push(format!("{}: SSD ReTrim (/L) tamamlandı.", request.letter));
+                steps.push(if en {
+                    format!("{}: SSD ReTrim (/L) completed.", request.letter)
+                } else {
+                    format!("{}: SSD ReTrim (/L) tamamlandı.", request.letter)
+                });
             }
-            _ => steps.push("SSD ReTrim adımı sistem tarafından atlandı.".into()),
+            _ => steps.push(
+                core.t(
+                    "SSD ReTrim adımı sistem tarafından atlandı.",
+                    "The SSD ReTrim step was skipped by the system.",
+                )
+                .into(),
+            ),
         }
         {
             let data = lock(&core.data);
-            steps.extend(autopilot_ssd_advisories(disk, &data["windows"]));
+            steps.extend(autopilot_ssd_advisories_for_lang(
+                disk,
+                &data["windows"],
+                en,
+            ));
         }
         {
             let mut j = lock(&core.job);
@@ -1419,7 +1565,11 @@ fn run_autopilot(
         }
     }
 
-    phase(core, "4/4 · Otopilot özeti hazırlanıyor");
+    phase_bi(
+        core,
+        "4/4 · Otopilot özeti hazırlanıyor",
+        "4/4 · Preparing the autopilot summary",
+    );
     let mut j = lock(&core.job);
     j["completed"] = json!(4);
     j["progress"] = json!(100);
@@ -1427,7 +1577,11 @@ fn run_autopilot(
         "mode": "autopilot",
         "disk_type": disk.kind,
         "steps": steps,
-        "scope": "Tek Tıkla Otopilot: Tüm adımlar SQLite rollback kaydıyla uygulanır."
+        "scope": if en {
+            "One-click Autopilot: every step is applied with a SQLite rollback record."
+        } else {
+            "Tek Tıkla Otopilot: Tüm adımlar SQLite rollback kaydıyla uygulanır."
+        }
     });
     Ok(())
 }
@@ -1478,10 +1632,14 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk) {
     let saved = {
         let mut job = lock(&core.job);
         job["status"] = json!(if cleanup.is_err() { "failed" } else { status });
-        job["phase"] = json!(match job["status"].as_str() {
-            Some("completed") => "Tamamlandı",
-            Some("cancelled") => "İptal edildi",
-            _ => "Tamamlanamadı",
+        let en = core.is_en();
+        job["phase"] = json!(match (job["status"].as_str(), en) {
+            (Some("completed"), false) => "Tamamlandı",
+            (Some("completed"), true) => "Completed",
+            (Some("cancelled"), false) => "İptal edildi",
+            (Some("cancelled"), true) => "Cancelled",
+            (_, false) => "Tamamlanamadı",
+            (_, true) => "Failed",
         });
         job["finished_at"] = json!(Utc::now().to_rfc3339());
         if let Err(error) = result {
@@ -1493,7 +1651,11 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk) {
         job.clone()
     };
     if let Err(error) = lock(&core.store).save_job(&request.kind, &saved) {
-        lock(&core.job)["error"] = json!(format!("Sonuç kaydedilemedi: {error}"));
+        lock(&core.job)["error"] = json!(if core.is_en() {
+            format!("Result could not be saved: {error}")
+        } else {
+            format!("Sonuç kaydedilemedi: {error}")
+        });
     }
 }
 
@@ -1512,9 +1674,10 @@ fn benchmark(
     if options["data"] != "zero" {
         getrandom::fill(&mut buffer).map_err(|e| e.to_string())?;
     }
-    phase(
+    phase_bi(
         core,
         "Geçici test dosyası hazırlanıyor · bu aşama yazma yapar",
+        "Preparing temporary test file · this stage writes data",
     );
     for _ in 0..options["size_mib"].as_u64().unwrap_or(0) {
         cancelled(core)?;
@@ -1544,16 +1707,22 @@ fn benchmark(
                 cancelled(core)?;
                 validate_target(core, disk, &request.letter, 1, false, false)?;
                 owned.check()?;
-                phase(
+                let pass = if repeat == 0 {
+                    None
+                } else {
+                    Some(format!("{repeat}/{repeats}"))
+                };
+                phase_bi(
                     core,
                     &format!(
                         "{} · {direction} · {}",
                         row.name,
-                        if repeat == 0 {
-                            "ısınma".into()
-                        } else {
-                            format!("{repeat}/{repeats}")
-                        }
+                        pass.as_deref().unwrap_or("ısınma")
+                    ),
+                    &format!(
+                        "{} · {direction} · {}",
+                        row.name,
+                        pass.as_deref().unwrap_or("warm-up")
                     ),
                 );
                 check_engine()?;
@@ -1666,7 +1835,7 @@ fn surface(
                 && crate::store::decimal_greater(&r.raw, "0")
         })
         .collect();
-    lock(&core.job)["repair_summary"] = json!({"smart_findings":findings,"filesystem_check":null,"scope":"Dosya tabanlı örnekleme; fiziksel LBA / tüm yüzey kapsamı yok. İşletim sistemi önbelleği gecikmeyi etkiler."});
+    lock(&core.job)["repair_summary"] = json!({"smart_findings":findings,"filesystem_check":null,"scope":core.t("Dosya tabanlı örnekleme; fiziksel LBA / tüm yüzey kapsamı yok. İşletim sistemi önbelleği gecikmeyi etkiler.","File-based sampling; no physical LBA / full-surface coverage. The operating system cache affects latency.")});
     if mode == "targeted_repair" {
         if !platform::is_admin() {
             return Err("Çevrimiçi dosya sistemi kontrolü yönetici erişimi gerektirir.".into());
@@ -1678,7 +1847,11 @@ fn surface(
         {
             return Err("chkdsk /scan yalnız NTFS bölümlerinde sunulur.".into());
         }
-        phase(core, "Windows çevrimiçi NTFS kontrolü · chkdsk /scan");
+        phase_bi(
+            core,
+            "Windows çevrimiçi NTFS kontrolü · chkdsk /scan",
+            "Windows online NTFS check · chkdsk /scan",
+        );
         let result = process::run(
             &platform::system_executable("chkdsk.exe"),
             &[format!("{}:", request.letter), "/scan".into()],
@@ -1707,9 +1880,10 @@ fn surface(
                 validate_target(core, disk, &request.letter, 1, true, false)?;
             }
             getrandom::fill(&mut buffer).map_err(|e| e.to_string())?;
-            phase(
+            phase_bi(
                 core,
                 &format!("Geçici dosya doğrulaması · {}/{BLOCKS}", i + 1),
+                &format!("Temporary file verification · {}/{BLOCKS}", i + 1),
             );
             let start = Instant::now();
             file.seek(SeekFrom::Start(i as u64 * bytes))
@@ -1725,16 +1899,17 @@ fn surface(
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
             add_block(
                 core,
-                json!({"index":i,"status":classify(elapsed),"latency_ms":elapsed,"mb_s":bytes as f64/elapsed/1000.0,"offset_bytes":i as u64*bytes,"bytes":bytes,"file":"Geçici doğrulama dosyası","error":null}),
+                json!({"index":i,"status":classify(elapsed),"latency_ms":elapsed,"mb_s":bytes as f64/elapsed/1000.0,"offset_bytes":i as u64*bytes,"bytes":bytes,"file":core.t("Geçici doğrulama dosyası","Temporary verification file"),"error":null}),
                 bytes,
                 bytes,
             );
         }
         return Ok(());
     }
-    phase(
+    phase_bi(
         core,
         "Erişilebilir dosyalar örnekleniyor · fiziksel sektör taraması değil",
+        "Sampling accessible files · not a physical sector scan",
     );
     let samples = candidate_samples_with_cancel(root, budget, &core.job_cancel)?;
     if samples.is_empty() {
@@ -1775,9 +1950,10 @@ fn surface(
             Ok(())
         })();
         let ms = start.elapsed().as_secs_f64() * 1000.0;
-        phase(
+        phase_bi(
             core,
             &format!("Dosya örneği {}/{} · {rel}", index + 1, samples.len()),
+            &format!("File sample {}/{} · {rel}", index + 1, samples.len()),
         );
         if let Err(error) = result {
             lock(&core.job)["damaged_files"]
@@ -2062,6 +2238,33 @@ mod tests {
         });
         assert!(autopilot_ssd_advisories(&ssd_good, &win_small_hiber).is_empty());
         assert!(autopilot_ssd_advisories(&ssd_good, &json!({})).is_empty());
+    }
+
+    #[test]
+    fn autopilot_advisories_and_guard_render_clean_english() {
+        let has_tr = |s: &str| s.chars().any(|c| "çğıöşüÇĞİÖŞÜ".contains(c));
+        let crit = test_disk(
+            "HDD",
+            "critical",
+            &[("5", "0"), ("197", "3"), ("198", "2")],
+            None,
+        );
+        let guard = autopilot_hdd_defrag_guard_for_lang(&crit, true).unwrap();
+        assert!(!has_tr(&guard), "Turkish leaked into EN guard: {guard}");
+        assert!(guard.contains("defrag /O"));
+        let guard_tr = autopilot_hdd_defrag_guard_for_lang(&crit, false).unwrap();
+        assert!(has_tr(&guard_tr));
+
+        let gib = 1024 * 1024 * 1024u64;
+        let ssd = test_disk("NVMe SSD", "ok", &[], Some(2.4));
+        let win =
+            json!({ "system_tuning": { "hiberfil_bytes": 6 * gib, "sysmain_running": true } });
+        let notes = autopilot_ssd_advisories_for_lang(&ssd, &win, true);
+        assert!(!notes.is_empty());
+        for note in &notes {
+            assert!(!has_tr(note), "Turkish leaked into EN advisory: {note}");
+        }
+        assert!(notes.iter().any(|n| n.contains("hiberfil.sys")));
     }
 
     #[test]

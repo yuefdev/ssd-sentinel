@@ -120,6 +120,8 @@ fn read_only_guard_defaults_on_blocks_mutations_and_persists_unlock() {
 
     let dir = tempfile::tempdir().unwrap();
     let (core, hdd, ssd) = live_test_core(dir.path());
+    // The host locale differs between dev machines and CI, so pin the UI language explicitly.
+    core.set_preferences(false, None, Some("tr"), None).unwrap();
     assert_eq!(core.state()["read_only_guard"], true);
     assert!(core.require_write_unlocked("test").is_err());
 
@@ -225,6 +227,39 @@ fn read_only_guard_defaults_on_blocks_mutations_and_persists_unlock() {
         .rollback_tier_move("move-1", "tier_rollback:move-1")
         .unwrap_err();
     assert!(rb_err.contains("Salt-okunur koruma etkin"));
+
+    // English UI: the same guard must answer in clean English (no Turkish leakage).
+    core.set_preferences(false, None, Some("en"), None).unwrap();
+    let en_guard = core.require_write_unlocked("test").unwrap_err();
+    assert!(
+        en_guard.contains("Read-Only Guard is active"),
+        "Unexpected error: {en_guard}"
+    );
+    let en_bench = core
+        .start_job(JobRequest {
+            kind: "benchmark".into(),
+            disk_id: ssd.id.clone(),
+            letter: "C".into(),
+            confirmation: format!("benchmark:{}:C", ssd.id),
+            options: json!({
+                "profile": "standard",
+                "mode": "read",
+                "size_mib": 256,
+                "repeats": 1,
+                "seconds": 5,
+                "interval": 0,
+                "data": "random",
+                "row": "all"
+            }),
+        })
+        .unwrap_err();
+    for text in [&en_guard, &en_bench] {
+        assert!(
+            !text.chars().any(|c| "çğıöşüÇĞİÖŞÜ".contains(c)),
+            "Turkish leaked into EN error: {text}"
+        );
+    }
+    core.set_preferences(false, None, Some("tr"), None).unwrap();
 
     // Unlock write mode and verify persistence across restart.
     core.set_preferences(false, None, None, Some(false))
@@ -474,6 +509,7 @@ fn vhdx_real_ntfs_cross_volume_junction_and_rollback() {
 fn dev_workspace_and_dev_optimizations_respect_read_only_guard_and_to_archive_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let (core, _hdd, ssd) = live_test_core(dir.path());
+    core.set_preferences(false, None, Some("tr"), None).unwrap();
     assert_eq!(core.state()["read_only_guard"], true);
 
     // 1. Read-only dev workspace analysis works while guard is active.

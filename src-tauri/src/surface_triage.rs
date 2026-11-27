@@ -33,10 +33,18 @@ pub enum TargetKind {
 
 impl TargetKind {
     pub fn label(self) -> &'static str {
-        match self {
-            TargetKind::SlowArea => "Yavaş bölge",
-            TargetKind::WeakSector => "Zayıf sektör",
-            TargetKind::Unreadable => "Okunamayan sektör",
+        self.label_for(false)
+    }
+
+    /// Label in the requested UI language (`true` = English).
+    pub fn label_for(self, en: bool) -> &'static str {
+        match (self, en) {
+            (TargetKind::SlowArea, false) => "Yavaş bölge",
+            (TargetKind::WeakSector, false) => "Zayıf sektör",
+            (TargetKind::Unreadable, false) => "Okunamayan sektör",
+            (TargetKind::SlowArea, true) => "Slow region",
+            (TargetKind::WeakSector, true) => "Weak sector",
+            (TargetKind::Unreadable, true) => "Unreadable sector",
         }
     }
 }

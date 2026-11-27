@@ -8,6 +8,16 @@ import {
   localeTag,
   setLang,
   translateAlert,
+  translateAppCategory,
+  translateAppSource,
+  translateAutopilotStep,
+  translateBackendError,
+  translateBlockText,
+  translateEventMessage,
+  translateJobPhase,
+  translateOptimizationTitle,
+  translateRecoveryText,
+  translateScopeOrAdvice,
   translateDiagnosis,
   translateDiskType,
   translateForecast,
@@ -173,6 +183,8 @@ let updateStatus: {
   notes?: string | null;
   message: string;
   message_en?: string;
+  portable?: boolean;
+  asset_kind?: string;
 } | null = null;
 let autoUpdateChecked = false;
 let updateBannerDismissed = false;
@@ -222,6 +234,25 @@ const date = (v: string | null | undefined) =>
       })
     : L("Henüz okunmadı", "Not read yet");
 const disk = () => state?.disks.find((d) => d.id === selected);
+const isPortableEdition = () =>
+  !!(
+    state?.portable ||
+    updateStatus?.portable ||
+    updateStatus?.asset_kind === "portable_zip"
+  );
+const recoverySourceLabel = (src: string, lang: Lang): string =>
+  (
+    {
+      vss_shadow: L("VSS Gölge Kopya (%100)", "VSS Shadow Copy (100%)", lang),
+      installer_cache: L("MSI Önbelleği", "MSI Cache", lang),
+      recycle_bin: L("Geri Dönüşüm", "Recycle Bin", lang),
+      mft_resident: L("$MFT Yerleşik", "$MFT Resident", lang),
+      mft_nonresident: L("$MFT Küme", "$MFT Clusters", lang),
+      usn_journal: L("$UsnJrnl İzi", "$UsnJrnl Trace", lang),
+      indx_slack: "$I30 Slack",
+      carved: L("İmza Kazıma", "Header Carving", lang),
+    } as Record<string, string>
+  )[src] ?? src;
 const active = (job: Job | null | undefined) =>
   !!job && ["preparing", "running", "cancelling"].includes(job.status);
 const pill = (label: string, type = "") =>
@@ -256,7 +287,8 @@ const currentJob = (kind: string) =>
 const empty = (title: string, detail: string, ico = "info") =>
   `<div class="empty-state">${icon(ico)}<h3>${e(title)}</h3><p>${e(detail)}</p></div>`;
 
-function toast(text: string, error = false) {
+function toast(rawText: string, error = false) {
+  const text = translateBackendError(rawText, getLang());
   const node = document.querySelector<HTMLDivElement>("#toast")!;
   node.textContent = text;
   node.className = `visible ${error ? "error" : ""}`;
@@ -647,7 +679,7 @@ function volumeSelect(
 }
 function jobProgress(job: Job | null): string {
   return job
-    ? `<div class="job-progress ${job.status}"><div><span>${active(job) ? '<i class="live-dot"></i>' : icon(job.status === "completed" ? "check" : "info")}<strong>${e(statusText(job.status))}</strong></span><b>${job.progress}%</b></div><progress max="100" value="${job.progress}" aria-label="${L("İş ilerlemesi", "Job progress")}"></progress><p>${e(job.phase)}</p>${job.error ? `<p class="error-text">${e(job.error)}</p>` : ""}${job.cleanup_error ? `<p class="error-text">${e(job.cleanup_error)}</p>` : ""}</div>`
+    ? `<div class="job-progress ${job.status}"><div><span>${active(job) ? '<i class="live-dot"></i>' : icon(job.status === "completed" ? "check" : "info")}<strong>${e(statusText(job.status))}</strong></span><b>${job.progress}%</b></div><progress max="100" value="${job.progress}" aria-label="${L("İş ilerlemesi", "Job progress")}"></progress><p>${e(translateJobPhase(job.phase, getLang()))}</p>${job.error ? `<p class="error-text">${e(translateBackendError(job.error, getLang()))}</p>` : ""}${job.cleanup_error ? `<p class="error-text">${e(translateBackendError(job.cleanup_error, getLang()))}</p>` : ""}</div>`
     : "";
 }
 function disabledReason(d: Disk): string {
@@ -720,7 +752,7 @@ function performanceView(d: Disk): string {
       : "";
 
   return `${heading(d, L("HIZ TESTİ", "BENCHMARK", lang), L("Diskiniz ne kadar hızlı?", "How fast is your drive?", lang), L("Anlık okuma/yazma hızı ve kontrollü hız testi.", "Live Windows physical throughput counters and Win32 IOCP unbuffered benchmark.", lang))}
-    <div class="performance-live"><article class="card"><div class="section-title"><div><h2>${L("Anlık disk etkinliği", "Live disk activity", lang)}</h2><p>${state?.source === "replay" ? L("Kayıt modunda canlı sayaçlar kapalı", "Live counters unavailable during snapshot replay", lang) : (state?.performance.error ?? L("Windows fiziksel disk sayaçları · 3 sn", "Windows physical disk counters · 3s", lang))}</p></div>${pill(p ? L("CANLI", "LIVE", lang) : L("ÖLÇÜM YOK", "NO SIGNAL", lang), p ? "ok" : "")}</div><div class="io-numbers"><div><span><i></i>${L("Okuma", "Read", lang)}</span><strong>${p ? fmt(p.read_bps / 1e6, 2) : "—"}<small>${unitLabels.mb_s}</small></strong></div><div><span><i class="blue"></i>${L("Yazma", "Write", lang)}</span><strong>${p ? fmt(p.write_bps / 1e6, 2) : "—"}<small>${unitLabels.mb_s}</small></strong></div><div><span>${L("Meşguliyet", "Busy", lang)}</span><strong>${p ? fmt(p.busy_percent, 1) : "—"}<small>%</small></strong></div></div>${
+    <div class="performance-live"><article class="card"><div class="section-title"><div><h2>${L("Anlık disk etkinliği", "Live disk activity", lang)}</h2><p>${state?.source === "replay" ? L("Kayıt modunda canlı sayaçlar kapalı", "Live counters unavailable during snapshot replay", lang) : (translateBackendError(state?.performance.error, lang) || L("Windows fiziksel disk sayaçları · 3 sn", "Windows physical disk counters · 3s", lang))}</p></div>${pill(p ? L("CANLI", "LIVE", lang) : L("ÖLÇÜM YOK", "NO SIGNAL", lang), p ? "ok" : "")}</div><div class="io-numbers"><div><span><i></i>${L("Okuma", "Read", lang)}</span><strong>${p ? fmt(p.read_bps / 1e6, 2) : "—"}<small>${unitLabels.mb_s}</small></strong></div><div><span><i class="blue"></i>${L("Yazma", "Write", lang)}</span><strong>${p ? fmt(p.write_bps / 1e6, 2) : "—"}<small>${unitLabels.mb_s}</small></strong></div><div><span>${L("Meşguliyet", "Busy", lang)}</span><strong>${p ? fmt(p.busy_percent, 1) : "—"}<small>%</small></strong></div></div>${
       p
         ? chart(
             points.map((p) => p.read),
@@ -876,8 +908,9 @@ function autopilotHero(d: Disk): string {
       ${
         !runningAuto && steps?.length
           ? `<ul class="autopilot-steps">${steps
-              .map((s) => {
-                const warn = /atlandı|uyarı|kritik|⚠|öneri|tasarruf|skipped|warning|critical/i.test(s);
+              .map((rawStep) => {
+                const s = translateAutopilotStep(rawStep, getLang());
+                const warn = /atlandı|uyarı|kritik|⚠|öneri|tasarruf|skipped|warning|critical|safety|advis/i.test(`${rawStep} ${s}`);
                 return `<li class="${warn ? "step-advisory" : ""}">${warn ? "!" : "✓"} ${e(s)}</li>`;
               })
               .join("")}</ul>`
@@ -921,7 +954,7 @@ function smartTierResultBanner(job: Job | null): string {
       <div><span>${L("Parça (Extent) azaltımı", "Extent reduction")}</span><strong class="mono">${fmt(extBefore)} → ${fmt(extAfter)}</strong></div>
       <div><span>${isSsdOpt ? L("Yazılan veri (2 GiB sınır)", "Data moved (2 GiB cap)") : L("Taşınan veri (4 GiB sınır)", "Data moved (4 GiB cap)")}</span><strong>${fmtBytes(isSsdOpt ? (rs.bytes_written ?? 0) : (rs.bytes_moved ?? 0))}</strong></div>
     </div>
-    ${rs.scope ? `<p class="tier-job-scope">${e(rs.scope)}</p>` : ""}
+    ${rs.scope ? `<p class="tier-job-scope">${e(translateScopeOrAdvice(rs.scope, getLang()))}</p>` : ""}
   </div>`;
 }
 
@@ -1514,7 +1547,7 @@ function optimizeView(d: Disk): string {
           ? state.optimizations
               .map(
                 (rec) => `<div class="opt-history-row">
-                  <div><strong>${e(rec.title)}</strong><small class="mono">${e(rec.previous_value)} → ${e(rec.applied_value)} · ${date(rec.updated_at)}</small></div>
+                  <div><strong>${e(translateOptimizationTitle(rec, lang))}</strong><small class="mono">${e(rec.previous_value)} → ${e(rec.applied_value)} · ${date(rec.updated_at)}</small></div>
                   <button type="button" class="button compact quiet" data-rollback-key="${e(rec.key)}" data-rollback-target="${e(rec.target)}" ${!sysLive ? "disabled" : ""}>${L("Önceki Değere Dön", "Revert", lang)}</button>
                 </div>`,
               )
@@ -1596,7 +1629,7 @@ function pinpointAffectedText(r: PinpointRepairRow): string {
   if (r.lost_files?.length) parts.push(`${L("Kayıp", "Lost", lang)}: ${r.lost_files.join(", ")}`);
   if (r.system_files?.length) parts.push(`${L("Sistem", "System", lang)}: ${r.system_files.join(", ")}`);
   if (r.blocked?.length) parts.push(`${L("Kilitli", "Locked", lang)}: ${r.blocked.join(", ")}`);
-  if (r.dead_errors?.length) parts.push(r.dead_errors[0]);
+  if (r.dead_errors?.length) parts.push(translateBackendError(r.dead_errors[0], lang));
   return parts.length ? parts.join(" · ") : L("Boş alan", "Unallocated space", lang);
 }
 
@@ -1630,7 +1663,7 @@ function pinpointSummaryCard(
           : "";
 
   return `<div class="heal-summary pinpoint-summary">
-    <div class="section-title"><div><h3>${L("Nokta atışı onarım sonucu", "Pinpoint repair summary", lang)}</h3><p>${e(rs.scope ?? L("Tarama haritası üzerinden nokta atışı onarım özeti", "Pinpoint repair summary from scan target map", lang))}</p></div>${badge}</div>
+    <div class="section-title"><div><h3>${L("Nokta atışı onarım sonucu", "Pinpoint repair summary", lang)}</h3><p>${e(rs.scope ? translateScopeOrAdvice(rs.scope, lang) : L("Tarama haritası üzerinden nokta atışı onarım özeti", "Pinpoint repair summary from scan target map", lang))}</p></div>${badge}</div>
     ${
       hasSpeed
         ? `<div class="pinpoint-speed">
@@ -1653,7 +1686,7 @@ function pinpointSummaryCard(
     </div>
     ${
       rs.advice?.length
-        ? `<ul class="pinpoint-advice">${rs.advice.map((a) => `<li>${e(a)}</li>`).join("")}</ul>`
+        ? `<ul class="pinpoint-advice">${rs.advice.map((a) => `<li>${e(translateScopeOrAdvice(a, lang))}</li>`).join("")}</ul>`
         : ""
     }
     ${
@@ -1871,7 +1904,7 @@ function surfaceView(d: Disk): string {
     .map(([cls, label]) => `<span><i class="${cls}"></i>${label}</span>`)
     .join(
       "",
-    )}</div>${jobProgress(job)}<div class="block-inspector">${block ? `<div><span class="eyebrow">${L("BÖLGE", "ZONE", lang)} #${block.index + 1}</span><h3>${blockStatus(block)}</h3><p class="mono">${e(block.file)}</p></div><dl><dt>${L("Gecikme", "Latency", lang)}</dt><dd>${fmt(block.latency_ms, 3)} ms</dd><dt>${L("Aktarım", "Speed", lang)}</dt><dd>${fmt(block.mb_s, 2)} ${L("MB/sn", "MB/s", lang)}</dd><dt>${L("Ofset", "Offset", lang)}</dt><dd>${fmtBytes(block.offset_bytes)}</dd><dt>${L("Boyut", "Size", lang)}</dt><dd>${fmtBytes(block.bytes)}</dd></dl>${block.error ? `<p class="error-text">${e(block.error)}</p>` : ""}` : `${icon("surface")}<div><h3>${L("Her bölgeyi ayrı inceleyin", "Inspect any zone", lang)}</h3><p>${L("Bir bölge veya LBA ölçüldüğünde hedefini, fiziksel ofsetini ve gecikmesini burada görebilirsiniz.", "Click any measured square to inspect its file target, byte offset, and latency.", lang)}</p></div>`}</div>${
+    )}</div>${jobProgress(job)}<div class="block-inspector">${block ? `<div><span class="eyebrow">${L("BÖLGE", "ZONE", lang)} #${block.index + 1}</span><h3>${blockStatus(block)}</h3><p class="mono">${e(translateBlockText(block.file, lang))}</p></div><dl><dt>${L("Gecikme", "Latency", lang)}</dt><dd>${fmt(block.latency_ms, 3)} ms</dd><dt>${L("Aktarım", "Speed", lang)}</dt><dd>${fmt(block.mb_s, 2)} ${L("MB/sn", "MB/s", lang)}</dd><dt>${L("Ofset", "Offset", lang)}</dt><dd>${fmtBytes(block.offset_bytes)}</dd><dt>${L("Boyut", "Size", lang)}</dt><dd>${fmtBytes(block.bytes)}</dd></dl>${block.error ? `<p class="error-text">${e(translateBlockText(block.error, lang))}</p>` : ""}` : `${icon("surface")}<div><h3>${L("Her bölgeyi ayrı inceleyin", "Inspect any zone", lang)}</h3><p>${L("Bir bölge veya LBA ölçüldüğünde hedefini, fiziksel ofsetini ve gecikmesini burada görebilirsiniz.", "Click any measured square to inspect its file target, byte offset, and latency.", lang)}</p></div>`}</div>${
     hasThroughput
       ? `<div class="zbr-card"><div class="section-title"><div><h3>${L("ZBR Platter Hız Eğrisi (Dış İz → İç İz)", "Surface Speed Profile (Outer → Inner Track)", lang)}</h3><p>${L("Okuma kararlılığı ve iç iz düşüş analizi", "Sequential read consistency & inner-track dropoff", lang)}</p></div>${zbr?.outer_mb_s != null ? `<div class="inline-actions">${pill(`${L("Dış", "Outer", lang)}: ${fmt(zbr.outer_mb_s, 1)} ${L("MB/sn", "MB/s", lang)}`, "ok")}${pill(`${L("İç", "Inner", lang)}: ${fmt(zbr.inner_mb_s, 1)} ${L("MB/sn", "MB/s", lang)}`)}${zbr.drop_percent != null ? pill(L(`Düşüş: %${fmt(zbr.drop_percent, 1)}`, `Drop: ${fmt(zbr.drop_percent, 1)}%`, lang), zbr.tail_degraded ? "warning" : "") : ""}</div>` : ""}</div>${chart(
           Array.from({ length: 200 }, (_, i) => blocks.find((b) => b.index === i)?.mb_s ?? null),
@@ -1884,7 +1917,7 @@ function surfaceView(d: Disk): string {
       ? pinpointSummaryCard(rs, d, isHdd, selectedVol, volReady, qRec)
       : rs && (rs.smart_before || rs.zbr_profile || rs.isolated_clusters != null || rs.evacuated_clusters != null || rs.bad_lbas?.length || (isHdd && qRec))
         ? `<div class="heal-summary">
-             <div class="section-title"><div><h3>${L("Tarama ve onarım sonucu", "Scan &amp; repair result", lang)}</h3><p>${e(rs.scope ?? L("Fiziksel tarama ve onarım özeti", "Physical scan and repair summary", lang))}</p></div>${rs.recovered_pending ? pill(L(`${rs.recovered_pending} bekleyen sektör onarıldı`, `${rs.recovered_pending} pending sectors healed`, lang), "ok") : rs.isolated_clusters ? pill(L(`${rs.isolated_clusters} küme kilitlendi`, `${rs.isolated_clusters} clusters locked`, lang), "warning") : ""}</div>
+             <div class="section-title"><div><h3>${L("Tarama ve onarım sonucu", "Scan &amp; repair result", lang)}</h3><p>${e(rs.scope ? translateScopeOrAdvice(rs.scope, lang) : L("Fiziksel tarama ve onarım özeti", "Physical scan and repair summary", lang))}</p></div>${rs.recovered_pending ? pill(L(`${rs.recovered_pending} bekleyen sektör onarıldı`, `${rs.recovered_pending} pending sectors healed`, lang), "ok") : rs.isolated_clusters ? pill(L(`${rs.isolated_clusters} küme kilitlendi`, `${rs.isolated_clusters} clusters locked`, lang), "warning") : ""}</div>
              ${
                rs.smart_before && rs.smart_after
                  ? `<div class="heal-stat-grid">
@@ -1913,7 +1946,7 @@ function surfaceView(d: Disk): string {
              }
            </div>`
         : ""
-  }${job?.damaged_files.length ? `<div class="damaged-files"><h3>${L("Okunamayan / Hasarlı LBA ile Çakışan Dosyalar", "Files Overlapping Unreadable / Damaged LBAs", lang)}</h3>${job.damaged_files.map((v) => `<p><code>${e(v.path)}</code><span>${e(v.error)}</span></p>`).join("")}</div>` : ""}</article></div></div>${jobHistory(surfaceHistory, "surface")}`;
+  }${job?.damaged_files.length ? `<div class="damaged-files"><h3>${L("Okunamayan / Hasarlı LBA ile Çakışan Dosyalar", "Files Overlapping Unreadable / Damaged LBAs", lang)}</h3>${job.damaged_files.map((v) => `<p><code>${e(v.path)}</code><span>${e(translateBackendError(v.error, lang))}</span></p>`).join("")}</div>` : ""}</article></div></div>${jobHistory(surfaceHistory, "surface")}`;
 }
 const blockStatus = (b: Block) =>
   ({
@@ -2035,17 +2068,7 @@ function recoveryView(d: Disk): string {
       ).length,
   );
   const highConf = Number(rs?.high_confidence ?? 0);
-  const sourceLabel = (src: string) =>
-    ({
-      vss_shadow: L("VSS Gölge Kopya (%100)", "VSS Shadow Copy (100%)", lang),
-      installer_cache: L("MSI Önbelleği", "MSI Cache", lang),
-      recycle_bin: L("Geri Dönüşüm", "Recycle Bin", lang),
-      mft_resident: L("$MFT Yerleşik", "$MFT Resident", lang),
-      mft_nonresident: L("$MFT Küme", "$MFT Clusters", lang),
-      usn_journal: L("$UsnJrnl İzi", "$UsnJrnl Trace", lang),
-      indx_slack: "$I30 Slack",
-      carved: L("İmza Kazıma", "Header Carving", lang),
-    })[src] ?? src;
+  const sourceLabel = (src: string) => recoverySourceLabel(src, lang);
 
   if (recConfig.mode === "apps_only") recConfig.mode = "quick";
   const recCard = (value: string, ico: string, title: string, text: string, tag = "") =>
@@ -2088,7 +2111,7 @@ function recoveryView(d: Disk): string {
                 ? L("Oyun", "Game", lang)
                 : !app.category || app.category.toLocaleLowerCase("tr") === "uygulama" || app.category.toLowerCase() === "app"
                   ? L("Uygulama", "App", lang)
-                  : app.category;
+                  : translateAppCategory(app.category, lang);
               const catCls = isGame ? "info" : "";
               const statusLabel =
                 st === "full_restore"
@@ -2146,7 +2169,7 @@ function recoveryView(d: Disk): string {
                   <div class="app-evidence-body">
                     ${
                       app.sources?.length
-                        ? `<div class="inline-actions">${app.sources.map((s) => pill(s, /VSS|Geri Dönüşüm|Recycle/i.test(s) ? "ok" : "")).join("")}</div>`
+                        ? `<div class="inline-actions">${app.sources.map((s) => pill(translateAppSource(s, lang), /VSS|Geri Dönüşüm|Recycle/i.test(s) ? "ok" : "")).join("")}</div>`
                         : ""
                     }
                     <div class="app-ev-line"><span>${L("Çalıştırılabilir yol", "Executable path", lang)}</span><code class="mono">${e(app.exe_path)}</code></div>
@@ -2236,13 +2259,13 @@ function recoveryView(d: Disk): string {
                     <strong>${e(it.name)}</strong>
                     ${pill(L(`%${it.confidence}`, `${it.confidence}%`, lang), it.trim_zeroed || unopenable ? "critical" : it.confidence >= 75 ? "ok" : "warning")}
                     ${mBadge ? pill(mBadge.label, mBadge.level) : ""}
-                    ${it.sub_type ? pill(it.sub_type) : ""}
+                    ${it.sub_type ? pill(translateRecoveryText(it.sub_type, lang)) : ""}
                     ${it.publisher ? pill(it.publisher) : ""}
                     ${pill(sourceLabel(it.source), it.source === "vss_shadow" ? "ok" : "")}
                   </div>
                   <small class="mono">${e(it.original_path)}${it.size_bytes ? ` · ${fmtBytes(it.size_bytes)}` : ""}${it.deleted_at ? ` · ${date(it.deleted_at)}` : ""}</small>
-                  <p class="ai-note">${e(it.ai_summary)}</p>
-                  ${it.repair_note ? `<p class="repair-note ${unopenable ? "repair-note-bad" : ""}">${icon(unopenable ? "alert" : "check")}<span>${e(it.repair_note)}</span></p>` : ""}
+                  <p class="ai-note">${e(translateRecoveryText(it.ai_summary, lang))}</p>
+                  ${it.repair_note ? `<p class="repair-note ${unopenable ? "repair-note-bad" : ""}">${icon(unopenable ? "alert" : "check")}<span>${e(translateRecoveryText(it.repair_note, lang))}</span></p>` : ""}
                 </div>
                 <div class="recovery-row-actions">
                   <button type="button" class="button compact quiet" data-preview-job="${e(job!.id)}" data-preview-id="${e(it.id)}" data-preview-name="${e(it.name)}" data-preview-recoverable="${recoverable ? "1" : "0"}" ${pending ? "disabled" : ""}>${icon("eye")}<span>${L("Önizle", "Preview", lang)}</span></button>
@@ -2311,7 +2334,7 @@ function historyView(d: Disk): string {
       "var(--blue)",
       L("Sıcaklık geçmişi", "Temperature history", lang),
     )}<div class="chart-footer"><span>${history.length < 2 ? L("Eğilim için daha fazla örnek gerekli", "Collect more samples for trends", lang) : L("Kaydedilmiş ölçüm zamanları", "Recorded sample timestamps", lang)}</span></div></article></div>
-    <article class="card event-card"><div class="section-title"><div><h2>${L("Olay günlüğü", "Event log", lang)}</h2><p>${L("Son 200 olay", "Latest 200 events", lang)} · ${state?.source === "replay" ? L("kayıt kaynağı", "snapshot replay", lang) : L("canlı kaynak", "live telemetry", lang)}</p></div><span class="small-count">${events.length}</span></div>${events.length ? events.map((ev) => `<div class="event-row"><span class="event-icon ${ev.level}">${icon(ev.level === "info" ? "info" : "alert")}</span><div><strong>${e(ev.message)}</strong><small>${e(ev.code)}</small></div><time>${date(ev.time)}</time></div>`).join("") : empty(L("Henüz yeni bir olay yok", "No events recorded yet", lang), L("İlk okuma geçmiş sayacınızı başlangıç kabul eder; eski hatalar yeni olay olarak bildirilmez.", "First scan captures your baseline counters; only new threshold changes appear here.", lang), "history")}</article>`;
+    <article class="card event-card"><div class="section-title"><div><h2>${L("Olay günlüğü", "Event log", lang)}</h2><p>${L("Son 200 olay", "Latest 200 events", lang)} · ${state?.source === "replay" ? L("kayıt kaynağı", "snapshot replay", lang) : L("canlı kaynak", "live telemetry", lang)}</p></div><span class="small-count">${events.length}</span></div>${events.length ? events.map((ev) => `<div class="event-row"><span class="event-icon ${ev.level}">${icon(ev.level === "info" ? "info" : "alert")}</span><div><strong>${e(translateEventMessage(ev, lang))}</strong><small>${e(ev.code)}</small></div><time>${date(ev.time)}</time></div>`).join("") : empty(L("Henüz yeni bir olay yok", "No events recorded yet", lang), L("İlk okuma geçmiş sayacınızı başlangıç kabul eder; eski hatalar yeni olay olarak bildirilmez.", "First scan captures your baseline counters; only new threshold changes appear here.", lang), "history")}</article>`;
 }
 
 function toolsView(d: Disk): string {
@@ -2324,22 +2347,23 @@ function toolsView(d: Disk): string {
     ? translateUpdateMessage(updateStatus, lang)
     : autoUpdateOn
       ? L(
-          `Yüklü sürüm v${state?.version ?? "1.10.3"} · canlı modda açılışta yeni sürümler kontrol edilir.`,
-          `Installed v${state?.version ?? "1.10.3"} · checks for new releases once on launch in live mode.`,
+          `Yüklü sürüm v${state?.version ?? "1.11.0"} · canlı modda açılışta yeni sürümler kontrol edilir.`,
+          `Installed v${state?.version ?? "1.11.0"} · checks for new releases once on launch in live mode.`,
           lang,
         )
       : L(
-          `Yüklü sürüm v${state?.version ?? "1.10.3"} · otomatik denetim kapalı (yalnız elle kontrol).`,
-          `Installed v${state?.version ?? "1.10.3"} · automatic checks off (manual check only).`,
+          `Yüklü sürüm v${state?.version ?? "1.11.0"} · otomatik denetim kapalı (yalnız elle kontrol).`,
+          `Installed v${state?.version ?? "1.11.0"} · automatic checks off (manual check only).`,
           lang,
         );
   return `${heading(d, L("BAKIM & AYARLAR", "TOOLS & SETTINGS", lang), L("Bakım araçları ve uygulama ayarları", "Maintenance tools &amp; preferences", lang), L("Her işlem başlamadan önce onay ister.", "Every write or firmware command prompts for confirmation before running.", lang))}
     <div class="scope-note">${icon("shield")}<div><strong>${L("Yedeğiniz her zaman ilk adım.", "Keep backups first.", lang)}</strong> ${L("SMART testleri ve dosya sistemi kontrolleri fiziksel hasarı iyileştirme garantisi vermez.", "Hardware self-tests and filesystem scans help diagnose drives but cannot fix failing flash or platters.", lang)}</div></div>
     <div class="tool-grid">${toolCard("smart", L("SMART günlükleri", "SMART device logs", lang), L("Aygıtın kaydettiği hata ve dahili test sonuçlarını okuyun. Test başlatmaz.", "Inspect hardware error & self-test logs read-only without starting a new test.", lang), "logs", L("Günlükleri oku", "Read logs", lang), pending)}${toolCard("activity", L("Kısa dahili test", "Short self-test", lang), L("Disk firmware’inin desteklediği kısa öz testi başlatır. İlerleme ve sonuç günlükte izlenir.", "Triggers the firmware short self-test (typically 1–2 min). Results appear in logs.", lang), "short_test", L("Kısa testi başlat", "Run short test", lang), !live || !state?.admin || !d.capabilities.self_test)}${toolCard("clock", L("Uzun dahili test", "Extended self-test", lang), L("Kapsamlı firmware öz testi. İş yükünü etkileyebilir ve uzun sürebilir.", "Runs a full surface firmware self-test. May affect I/O throughput while active.", lang), "long_test", L("Uzun testi başlat", "Run extended test", lang), !live || !state?.admin || !d.capabilities.self_test)}${toolCard("refresh", "SSD ReTrim", L("Windows’a boş blokları yeniden bildirmesini söyler. Seçilen NTFS / ReFS bölümü doğrulanır.", "Asks Windows to re-trim free blocks on the selected NTFS / ReFS volume.", lang), "retrim", L("ReTrim iste", "Run ReTrim", lang), !live || !state?.admin || d.type === "HDD" || !canStart(state, d))}</div>
     <article class="card settings-card"><div class="section-title"><div><h2>${L("Uygulama tercihleri", "Application preferences", lang)}</h2><p>${L("Windows masaüstü entegrasyonu ve hesaplama ayarları", "Desktop integration, language, and health calculation settings", lang)}</p></div>${pill("RUST + TAURI 2", "ok")}</div>
+      <div class="setting-row"><span>${icon("folder")}<span><strong>${L("Depolama modu", "Storage mode", lang)}</strong><small>${state?.portable ? L("Tüm veriler uygulamanın yanındaki .\\data klasöründe tutulur; %LOCALAPPDATA% kullanılmaz.", "All data stays in the .\\data folder next to the app; nothing is written to %LOCALAPPDATA%.", lang) : L("Veriler %LOCALAPPDATA% altında tutulur (standart kurulum).", "Data is stored under %LOCALAPPDATA% (standard install).", lang)}</small></span></span><div class="inline-actions">${pill(state?.portable ? L("Taşınabilir (Portable)", "Portable", lang) : L("Standart kurulum", "Standard install", lang), state?.portable ? "ok" : "")}${state?.portable && state?.data_dir ? `<code class="mono">${e(state.data_dir)}</code>` : ""}</div></div>
       <div class="setting-row"><span>${icon("settings")}<span><strong>${L("Uygulama dili", "Application language", lang)}</strong><small>${L("Arayüz ve sistem tepsisi bildirim dili (TR / EN).", "UI and system tray notification language (TR / EN).", lang)}</small></span></span><select id="language-setting" aria-label="${L("Uygulama dili", "Application language", lang)}"><option value="tr" ${lang === "tr" ? "selected" : ""}>Türkçe (TR)</option><option value="en" ${lang === "en" ? "selected" : ""}>English (EN)</option></select></div>
       <label class="setting-row"><span>${icon("disk")}<span><strong>${L("Kapatınca sistem tepsisine küçült", "Minimize to tray on close", lang)}</strong><small>${L("İzleme arka planda devam eder. Tam çıkış için tepsi menüsünü kullanın.", "Background SMART & temperature monitoring stays active; use tray menu to quit.", lang)}</small></span></span><input type="checkbox" role="switch" id="minimise-setting" ${state?.minimise_to_tray ? "checked" : ""}></label>
-      <label class="setting-row"><span>${icon("bolt")}<span><strong>${L("Windows açılışında tepside başlat", "Launch minimized on Windows startup", lang)}</strong><small>${L("Oturum açılışında sessizce sistem tepsisinde başlar (HKCU\\Run).", "Starts silently in the system tray at login via HKCU\\Run.", lang)}</small></span></span><input type="checkbox" role="switch" id="autostart-setting" ${autostart ? "checked" : ""} ${state?.source !== "live" || state?.stale || pending ? "disabled" : ""}></label>
+      <label class="setting-row"><span>${icon("bolt")}<span><strong>${L("Windows açılışında tepside başlat", "Launch minimized on Windows startup", lang)}</strong><small>${(state?.portable ? L("Oturum açılışında bu taşınabilir kopyayı sistem tepsisinde başlatır (HKCU\\Run); klasörü taşırsanız anahtarı yeniden açıp kapatın.", "Starts this portable copy in the system tray at login via HKCU\\Run; toggle it again if you move the folder.", lang) : L("Oturum açılışında sessizce sistem tepsisinde başlar (HKCU\\Run).", "Starts silently in the system tray at login via HKCU\\Run.", lang))}</small></span></span><input type="checkbox" role="switch" id="autostart-setting" ${autostart ? "checked" : ""} ${state?.source !== "live" || state?.stale || pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("shield")}<span><strong>${L("Sağlık hesaplama modu", "Health calculation mode", lang)}</strong><small>${L("Sıkı modda HDD/SATA hata sayaçları daha yüksek ağırlık ve kuyruk cezası alır.", "Strict mode applies heavier penalties to ATA/SATA sector reallocate & pending error counters.", lang)}</small></span></span><select id="health-mode-setting" aria-label="${L("Sağlık hesaplama modu", "Health calculation mode", lang)}"><option value="default" ${healthMode === "default" ? "selected" : ""}>${L("Varsayılan (Standart)", "Default (Standard)", lang)}</option><option value="strict" ${healthMode === "strict" ? "selected" : ""}>${L("Sıkı Mod (Erken Uyarı)", "Strict Mode (Early Warning)", lang)}</option></select></div>
       <label class="setting-row"><span>${icon("lock")}<span><strong>${L("Salt-okunur koruma kilidi (Write Guard)", "Read-Only Guard (Write Protection)", lang)}</strong><small>${L("Etkin olduğunda disklere yazan hız testi, onarım, optimize ve taşıma işlemleri Rust çekirdeğinde engellenir.", "When enabled, mutating operations (benchmarks, repairs, tuning, tiering) are blocked at the Rust core boundary.", lang)}</small></span></span><input type="checkbox" role="switch" id="write-guard-setting" ${isWriteLocked(state) ? "checked" : ""} ${state?.source !== "live" || pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("temperature")}<span><strong>${L("Yüksek sıcaklık uyarısı", "Thermal alert threshold", lang)}</strong><small>${L("55 °C’de tek bildirim; 50 °C’ye düşünce yeniden etkinleşir.", "Single notification at 55 °C with hysteresis reset below 50 °C.", lang)}</small></span></span>${pill(state?.source === "replay" ? L("Kayıt modunda kapalı", "Off in replay", lang) : L("Etkin", "Active", lang), state?.source === "replay" ? "" : "ok")}</div>
@@ -2352,7 +2376,7 @@ function toolsView(d: Disk): string {
                <div class="update-panel-head">
                  <div class="inline-actions">${icon("info")}<strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong>${updateStatus.asset_size ? pill(fmtBytes(updateStatus.asset_size), "ok") : ""}</div>
                  <div class="inline-actions">
-                   ${updateStatus.download_url && updateStatus.asset_name ? button("install-update", L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang), "export", "compact primary", pending) : ""}
+                   ${updateStatus.download_url && updateStatus.asset_name ? button("install-update", (isPortableEdition() ? L("Taşınabilir .zip İndir (SHA-256)", "Download Portable .zip (SHA-256)", lang) : L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang)), "export", "compact primary", pending) : ""}
                    ${updateStatus.url ? button("open-release", L("GitHub Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}
                  </div>
                </div>
@@ -2426,20 +2450,20 @@ function render() {
       }[page](d)
     : empty(
         state?.updating ? L("Diskler okunuyor…", "Scanning drives…", lang) : L("Disk bilgisi bulunamadı", "No drives detected", lang),
-        state?.error ??
+        translateBackendError(state?.error, lang) ||
           L("smartctl bağlantısını ve yönetici erişimini kontrol edin.", "Verify smartctl bundle path and administrator permissions.", lang),
         "disk",
       );
   const partialBanner = partialWarnings.length
-    ? `<div class="warning-banner" role="status"><div class="warning-banner-main">${icon("alert")}<div class="warning-banner-text"><strong>${L("Kısmi SMART okuma uyarısı", "Partial SMART read warning", lang)}</strong><ul>${partialWarnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></div></div>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact primary warning-elevate", pending) : ""}</div>`
+    ? `<div class="warning-banner" role="status"><div class="warning-banner-main">${icon("alert")}<div class="warning-banner-text"><strong>${L("Kısmi SMART okuma uyarısı", "Partial SMART read warning", lang)}</strong><ul>${partialWarnings.map((w) => `<li>${e(translateBackendError(w, lang))}</li>`).join("")}</ul></div></div>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact primary warning-elevate", pending) : ""}</div>`
     : "";
   const updateBanner =
     updateStatus?.status === "update_available" &&
     !updateBannerDismissed &&
     page !== "tools"
-      ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang)}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
+      ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${(isPortableEdition() ? L("Resmi taşınabilir .zip, SHA-256 ile doğrulanarak .\\data\\updates klasörüne indirilir.", "The official portable .zip is downloaded to .\\data\\updates and verified with SHA-256.", lang) : L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang))}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", (isPortableEdition() ? L("Taşınabilir .zip İndir (SHA-256)", "Download Portable .zip (SHA-256)", lang) : L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang)), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
       : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.3")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(connectionError, lang))}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(state.error, lang))}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.11.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(translateJobPhase(state.job.phase, lang))}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;
@@ -2656,7 +2680,7 @@ async function openRecoveryPreview(
     });
     const repairBanner =
       res.repaired || res.repair_note
-        ? `<div class="preview-repair-banner">${icon("check")}<div><strong>${res.repaired ? L("Otomatik Onarıldı", "Auto-Repaired", lang) : L("Medya Durumu", "Media Status", lang)}</strong>${res.repair_note ? `<p>${e(res.repair_note)}</p>` : ""}</div></div>`
+        ? `<div class="preview-repair-banner">${icon("check")}<div><strong>${res.repaired ? L("Otomatik Onarıldı", "Auto-Repaired", lang) : L("Medya Durumu", "Media Status", lang)}</strong>${res.repair_note ? `<p>${e(translateRecoveryText(res.repair_note, lang))}</p>` : ""}</div></div>`
         : "";
     let body = "";
     if (res.kind === "image") {
@@ -2675,13 +2699,13 @@ async function openRecoveryPreview(
       body = `<dl class="preview-kv">
         <dt>${L("Ürün Adı", "Product Name", lang)}</dt><dd>${e(m.product_name || "—")}</dd>
         <dt>${L("Yayıncı", "Publisher", lang)}</dt><dd>${e(m.publisher || "—")}</dd>
-        <dt>${L("Dosya Türü", "File Type", lang)}</dt><dd>${e(m.sub_type || L("PE / Çalıştırılabilir", "PE / Executable", lang))}</dd>
+        <dt>${L("Dosya Türü", "File Type", lang)}</dt><dd>${e(translateRecoveryText(m.sub_type, lang) || L("PE / Çalıştırılabilir", "PE / Executable", lang))}</dd>
         <dt>${L("Boyut", "Size", lang)}</dt><dd>${m.size_bytes != null ? fmtBytes(m.size_bytes) : "—"}</dd>
-        <dt>${L("Kaynak", "Source", lang)}</dt><dd>${e(m.source || "—")}</dd>
-        <dt>${L("Durum", "Status", lang)}</dt><dd>${e(m.status_label || "—")}</dd>
+        <dt>${L("Kaynak", "Source", lang)}</dt><dd>${e(m.source ? recoverySourceLabel(m.source, lang) : "—")}</dd>
+        <dt>${L("Durum", "Status", lang)}</dt><dd>${e(translateRecoveryText(m.status_label, lang) || "—")}</dd>
       </dl>`;
     } else {
-      body = `${repairBanner}<div class="preview-unavailable">${icon("info")}<div><strong>${L("Önizleme kullanılamıyor", "Preview unavailable", lang)}</strong><p>${e(res.reason)}</p></div></div>`;
+      body = `${repairBanner}<div class="preview-unavailable">${icon("info")}<div><strong>${L("Önizleme kullanılamıyor", "Preview unavailable", lang)}</strong><p>${e(translateRecoveryText(res.reason, lang))}</p></div></div>`;
     }
     const kindBadge =
       res.kind === "image"
@@ -2986,7 +3010,7 @@ function start(kind: "benchmark" | "surface", row = "all", resume = false) {
             activeMode === "physical_scan"
               ? "CreateFileW(GENERIC_READ | FILE_FLAG_NO_BUFFERING) + 4K Probe + Checkpoint"
               : activeMode === "read_scan"
-                ? "ReadFile (salt-okunur dosya örnekleme)"
+                ? L("ReadFile (salt-okunur dosya örnekleme)", "ReadFile (read-only file sampling)")
                 : activeMode === "magnetic_refresh"
                   ? "FSCTL_GET_RETRIEVAL_POINTERS + FSCTL_MOVE_FILE + Raw Sector Verify"
                   : activeMode === "bad_zone_isolate"
@@ -4171,12 +4195,20 @@ root.addEventListener("click", (event) => {
       : "";
     confirm(
       L(
-        `Güncelleme indirilsin ve kurulsun mu? (${latest})`,
-        `Download & install update (${latest})?`,
+        isPortableEdition()
+          ? `Taşınabilir .zip indirilsin mi? (${latest})`
+          : `Güncelleme indirilsin ve kurulsun mu? (${latest})`,
+        isPortableEdition()
+          ? `Download the portable .zip (${latest})?`
+          : `Download & install update (${latest})?`,
       ),
       L(
-        `${aName}${sizeText} resmi GitHub deposundan HTTPS ile indirilecek, SHA-256 doğrulaması yapılacak ve kurulum başlatılacaktır.`,
-        `${aName}${sizeText} will be downloaded over HTTPS from GitHub, verified against SHA-256, and launched.`,
+        isPortableEdition()
+          ? `${aName}${sizeText} resmi GitHub deposundan HTTPS ile indirilecek, SHA-256 ile doğrulanacak, .\\data\\updates klasörüne kaydedilecek ve Gezgin'de gösterilecek. Zip'i mevcut klasörün üzerine çıkarın; .\\data korunur.`
+          : `${aName}${sizeText} resmi GitHub deposundan HTTPS ile indirilecek, SHA-256 doğrulaması yapılacak ve kurulum başlatılacaktır.`,
+        isPortableEdition()
+          ? `${aName}${sizeText} will be downloaded over HTTPS from GitHub, verified against SHA-256, saved to .\\data\\updates, and revealed in Explorer. Extract it over the current folder; .\\data is kept.`
+          : `${aName}${sizeText} will be downloaded over HTTPS from GitHub, verified against SHA-256, and launched.`,
       ),
       async () => {
         const res = await invoke<{
@@ -4184,21 +4216,33 @@ root.addEventListener("click", (event) => {
           path?: string;
           sha256?: string;
           verified?: boolean;
+          portable?: boolean;
         }>("download_and_launch_update", {
           downloadUrl: dlUrl,
           assetName: aName,
           sha256Url: shaUrl,
         });
+        const portablePkg = res.portable ?? isPortableEdition();
         toast(
-          res.verified
-            ? L(
-                `Kurulum SHA-256 doğrulaması ile başlatıldı: ${aName}`,
-                `Verified installer (SHA-256) launched: ${aName}`,
-              )
-            : L(
-                `Kurulum başlatıldı: ${aName}`,
-                `Installer launched: ${aName}`,
-              ),
+          portablePkg
+            ? res.verified
+              ? L(
+                  `Taşınabilir paket SHA-256 ile doğrulandı ve Gezgin'de gösterildi: ${aName}`,
+                  `Portable package verified (SHA-256) and shown in Explorer: ${aName}`,
+                )
+              : L(
+                  `Taşınabilir paket indirildi: ${aName}`,
+                  `Portable package downloaded: ${aName}`,
+                )
+            : res.verified
+              ? L(
+                  `Kurulum SHA-256 doğrulaması ile başlatıldı: ${aName}`,
+                  `Verified installer (SHA-256) launched: ${aName}`,
+                )
+              : L(
+                  `Kurulum başlatıldı: ${aName}`,
+                  `Installer launched: ${aName}`,
+                ),
         );
       },
       {

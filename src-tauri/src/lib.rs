@@ -1,6 +1,7 @@
 pub mod core;
 pub mod dev_workspace;
 pub mod forensics;
+pub mod i18n;
 pub mod jobs;
 pub mod media_repair;
 pub mod model;
