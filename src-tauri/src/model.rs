@@ -54,6 +54,10 @@ pub struct Disk {
     pub physical_block_size: Option<u64>,
     pub rotation_rate: Option<u64>,
     pub nvme_eui64: Vec<String>,
+    #[serde(default)]
+    pub nvme_nguid: Vec<String>,
+    #[serde(default)]
+    pub wwn: Option<String>,
     pub source_time: Option<i64>,
     pub os_disk_number: Option<u64>,
     pub os_serial: Option<String>,
@@ -761,6 +765,65 @@ pub fn normalise_with_mode(s: &Value, strict: bool) -> Disk {
             (oui < (1 << 24) && ext < (1 << 40)).then(|| format!("{oui:06x}{ext:010x}"))
         })
         .collect();
+    let nvme_nguid = s["nvme_namespaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            if let Some(raw) = n["nguid"].as_str() {
+                let low = raw.trim().to_ascii_lowercase();
+                let stripped = low
+                    .strip_prefix("nguid.")
+                    .or_else(|| low.strip_prefix("eui."))
+                    .unwrap_or(&low);
+                let hex: String = stripped
+                    .chars()
+                    .filter(|c| !matches!(c, '-' | '_' | '.') && !c.is_ascii_whitespace())
+                    .collect();
+                (hex.len() == 32
+                    && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                    && hex.bytes().any(|b| b != b'0'))
+                .then_some(hex)
+            } else if let Some(arr) = n["nguid"].as_array().filter(|a| a.len() == 16) {
+                let mut hex = String::with_capacity(32);
+                for item in arr {
+                    let b = item.as_u64().filter(|v| *v <= 255)? as u8;
+                    hex.push_str(&format!("{b:02x}"));
+                }
+                hex.bytes().any(|b| b != b'0').then_some(hex)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let wwn = if let (Some(naa), Some(oui), Some(wid)) = (
+        s["wwn"]["naa"].as_u64(),
+        s["wwn"]["oui"].as_u64(),
+        s["wwn"]["id"].as_u64(),
+    ) {
+        if naa < 16 && oui < (1 << 24) && wid < (1 << 36) {
+            let val = (naa << 60) | (oui << 36) | wid;
+            (val != 0).then(|| format!("{val:016x}"))
+        } else {
+            None
+        }
+    } else if let Some(raw) = s["wwn"].as_str() {
+        let low = raw.trim().to_ascii_lowercase();
+        let stripped = low
+            .strip_prefix("naa.")
+            .or_else(|| low.strip_prefix("eui."))
+            .unwrap_or(&low);
+        let hex: String = stripped
+            .chars()
+            .filter(|c| !matches!(c, '-' | '_' | '.') && !c.is_ascii_whitespace())
+            .collect();
+        (matches!(hex.len(), 16 | 32)
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            && hex.bytes().any(|b| b != b'0'))
+        .then_some(hex)
+    } else {
+        None
+    };
     let exit = s["smartctl"]["exit_status"].as_u64();
     let read_incomplete = exit.is_some_and(|code| code & 7 != 0);
     let dev_name = s["device"]["name"].as_str().unwrap_or("?");
@@ -800,6 +863,8 @@ pub fn normalise_with_mode(s: &Value, strict: bool) -> Disk {
         physical_block_size: s["physical_block_size"].as_u64(),
         rotation_rate: s["rotation_rate"].as_u64(),
         nvme_eui64,
+        nvme_nguid,
+        wwn,
         source_time: s["local_time"]["time_t"].as_i64(),
         os_disk_number: None,
         os_serial: None,

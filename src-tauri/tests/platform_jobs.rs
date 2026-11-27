@@ -390,7 +390,12 @@ fn replay_rejects_every_optimize_action_and_validates_defrag_options() {
 fn live_win32_inventory_and_performance_are_read_only_and_finite() {
     let stop = AtomicBool::new(false);
     let inv = platform::inventory(&stop).unwrap();
-    assert!(inv["disks"].is_array());
+    let inv_disks = inv["disks"].as_array().unwrap();
+    let mut seen_numbers = std::collections::HashSet::new();
+    for d in inv_disks {
+        assert!(d["unique_ids"].is_array());
+        assert!(seen_numbers.insert(d["number"].as_u64().unwrap()));
+    }
     assert!(inv["system_tuning"].is_object());
     let mut prev = Value::Null;
     let first = platform::performance(&mut prev, &stop).unwrap();
@@ -1145,6 +1150,9 @@ fn v19_preferences_persist_language_and_update_check_handles_unconfigured() {
     assert_eq!(state["minimise_to_tray"], true);
     assert_eq!(state["health_mode"], "strict");
     assert_eq!(state["read_only_guard"], true);
+    assert_eq!(state["auto_check_updates"], true);
+    core.set_auto_check_updates(false).unwrap();
+    assert_eq!(core.state()["auto_check_updates"], false);
     drop(core);
 
     let reopened = Core::new(Config {
@@ -1158,10 +1166,333 @@ fn v19_preferences_persist_language_and_update_check_handles_unconfigured() {
     assert_eq!(reopened_state["minimise_to_tray"], true);
     assert_eq!(reopened_state["health_mode"], "strict");
     assert_eq!(reopened_state["read_only_guard"], true);
+    assert_eq!(reopened_state["auto_check_updates"], false);
+
+    reopened.set_auto_check_updates(true).unwrap();
+    assert_eq!(reopened.state()["auto_check_updates"], true);
 
     reopened
         .set_preferences(false, Some("default"), Some("tr"), Some(false))
         .unwrap();
     assert_eq!(reopened.state()["language"], "tr");
     assert_eq!(reopened.state()["read_only_guard"], false);
+}
+
+#[test]
+fn nvme_nguid_and_identify_controller_serial_map_reliably() {
+    let mut nguid_only = disk();
+    nguid_only.nvme_eui64.clear();
+    let inv = json!({
+        "disks": [{
+            "number": 1,
+            "serial": "e823_8fa6_bf53_0001_001b_448b_4f81_c123.",
+            "nvme_serial": nguid_only.serial,
+            "model": nguid_only.model,
+            "unique_ids": ["e8238fa6bf530001001b448b4f81c123"],
+            "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut disks = vec![nguid_only];
+    platform::attach_volumes(&mut disks, &inv);
+    assert_eq!(disks[0].os_disk_number, Some(1));
+    assert_eq!(
+        disks[0].os_serial.as_deref(),
+        Some("e823_8fa6_bf53_0001_001b_448b_4f81_c123.")
+    );
+    assert_eq!(disks[0].volumes.len(), 1);
+
+    let mut raw: Value = serde_json::from_str(include_str!("fixtures/smart-1.json")).unwrap();
+    raw["nvme_namespaces"] = json!([{
+        "id": 1,
+        "nguid": "e8238fa6bf530001001b448b4f81c123"
+    }]);
+    let d_nguid = model::normalise(&raw);
+    assert_eq!(
+        d_nguid.nvme_nguid,
+        vec!["e8238fa6bf530001001b448b4f81c123".to_owned()]
+    );
+    let inv_vpd = json!({
+        "disks": [{
+            "number": 2,
+            "serial": "",
+            "model": d_nguid.model,
+            "unique_ids": ["e8238fa6bf530001001b448b4f81c123"],
+            "volumes": [{"letter": "E", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut disks = vec![d_nguid.clone()];
+    platform::attach_volumes(&mut disks, &inv_vpd);
+    assert_eq!(disks[0].os_disk_number, Some(2));
+    assert_eq!(
+        disks[0].os_serial.as_deref(),
+        Some("e8238fa6bf530001001b448b4f81c123")
+    );
+
+    let mut dup = d_nguid.clone();
+    dup.id = "dup-id".into();
+    dup.serial = Some("OTHER-SERIAL".into());
+    let mut colliding = vec![d_nguid, dup];
+    platform::attach_volumes(&mut colliding, &inv_vpd);
+    assert!(colliding.iter().all(|d| d.os_disk_number.is_none()));
+}
+
+#[test]
+fn dual_identical_budget_nvmes_with_colliding_dummy_eui_map_via_nvme_serial() {
+    let raw: Value = serde_json::from_str(include_str!("fixtures/smart-2.json")).unwrap();
+    let mut d1 = model::normalise(&raw);
+    d1.id = "budget-1".into();
+    d1.serial = Some("BUDGET-SN-001".into());
+    d1.nvme_eui64 = vec!["0000000000000001".into()];
+
+    let mut d2 = model::normalise(&raw);
+    d2.id = "budget-2".into();
+    d2.serial = Some("BUDGET-SN-002".into());
+    d2.nvme_eui64 = vec!["0000000000000001".into()];
+
+    let inv_with_identify = json!({
+        "disks": [
+            {
+                "number": 2,
+                "serial": "0000_0000_0000_0001.",
+                "nvme_serial": "BUDGET-SN-001",
+                "model": d1.model,
+                "disk_bytes": 1024209543168u64,
+                "unique_ids": ["0000000000000001"],
+                "volumes": [{"letter": "D", "filesystem": "NTFS"}]
+            },
+            {
+                "number": 3,
+                "serial": "0000_0000_0000_0001.",
+                "nvme_serial": "BUDGET-SN-002",
+                "model": d2.model,
+                "disk_bytes": 1024209543168u64,
+                "unique_ids": ["0000000000000001"],
+                "volumes": [{"letter": "E", "filesystem": "NTFS"}]
+            }
+        ]
+    });
+    let mut pair = vec![d1.clone(), d2.clone()];
+    platform::attach_volumes(&mut pair, &inv_with_identify);
+    assert_eq!(pair[0].os_disk_number, Some(2));
+    assert_eq!(pair[0].volumes[0]["letter"], "D");
+    assert_eq!(pair[1].os_disk_number, Some(3));
+    assert_eq!(pair[1].volumes[0]["letter"], "E");
+
+    let inv_without_identify = json!({
+        "disks": [
+            {
+                "number": 2,
+                "serial": "0000_0000_0000_0001.",
+                "model": d1.model,
+                "disk_bytes": 1024209543168u64,
+                "unique_ids": ["0000000000000001"],
+                "volumes": [{"letter": "D", "filesystem": "NTFS"}]
+            },
+            {
+                "number": 3,
+                "serial": "0000_0000_0000_0001.",
+                "model": d2.model,
+                "disk_bytes": 1024209543168u64,
+                "unique_ids": ["0000000000000001"],
+                "volumes": [{"letter": "E", "filesystem": "NTFS"}]
+            }
+        ]
+    });
+    let mut ambiguous = vec![d1, d2];
+    platform::attach_volumes(&mut ambiguous, &inv_without_identify);
+    assert!(ambiguous.iter().all(|d| d.os_disk_number.is_none()));
+}
+
+#[test]
+fn model_prefix_suffix_and_scsi_truncation_map_without_allowing_unrelated_models() {
+    let mut d = disk();
+    d.model = "Samsung SSD 980 PRO 1TB".into();
+    d.serial = Some("S6B0NG0T123456A".into());
+    d.nvme_eui64.clear();
+
+    let inv_nvme_prefix = json!({
+        "disks": [{
+            "number": 0,
+            "serial": "S6B0NG0T123456A",
+            "model": "NVMe Samsung SSD 980 PRO 1TB",
+            "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut disks = vec![d.clone()];
+    platform::attach_volumes(&mut disks, &inv_nvme_prefix);
+    assert_eq!(disks[0].os_disk_number, Some(0));
+
+    let mut hdd = model::normalise(
+        &serde_json::from_str::<Value>(include_str!("fixtures/smart-0.json")).unwrap(),
+    );
+    let inv_ata_suffix = json!({
+        "disks": [{
+            "number": 1,
+            "serial": hdd.serial,
+            "model": "ATA  WDC WD10EZEX-21M2NA0 SCSI Disk Device",
+            "volumes": [{"letter": "D", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut hdds = vec![hdd.clone()];
+    platform::attach_volumes(&mut hdds, &inv_ata_suffix);
+    assert_eq!(hdds[0].os_disk_number, Some(1));
+
+    d.model = "SAMSUNG MZVL4512HBLU-00BH1".into();
+    let inv_truncated = json!({
+        "disks": [{
+            "number": 4,
+            "serial": "S6B0NG0T123456A",
+            "model": "NVMe SAMSUNG MZVL4512",
+            "volumes": [{"letter": "F", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut trunc_disks = vec![d.clone()];
+    platform::attach_volumes(&mut trunc_disks, &inv_truncated);
+    assert_eq!(trunc_disks[0].os_disk_number, Some(4));
+
+    let inv_unrelated = json!({
+        "disks": [{
+            "number": 5,
+            "serial": "S6B0NG0T123456A",
+            "model": "Other Brand 512G",
+            "volumes": [{"letter": "G", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut unrelated = vec![d];
+    platform::attach_volumes(&mut unrelated, &inv_unrelated);
+    assert_eq!(unrelated[0].os_disk_number, None);
+
+    hdd.model = "WDC WD10EZEX-21M2NA0".into();
+    let inv_wrong_model = json!({
+        "disks": [{
+            "number": 6,
+            "serial": hdd.serial,
+            "model": "Seagate Barracuda 1TB",
+            "volumes": []
+        }]
+    });
+    let mut bad_hdds = vec![hdd];
+    platform::attach_volumes(&mut bad_hdds, &inv_wrong_model);
+    assert_eq!(bad_hdds[0].os_disk_number, None);
+}
+
+#[test]
+fn sata_hex_encoded_byte_swapped_serial_and_wwn_map_reliably() {
+    let hdd = model::normalise(
+        &serde_json::from_str::<Value>(include_str!("fixtures/smart-0.json")).unwrap(),
+    );
+    assert_eq!(hdd.wwn.as_deref(), Some("50014ee2540be401"));
+
+    for encoded in [
+        "2020202057442d44454d4f2d484444303031",
+        "202020204457442d4d452d4f444830443130",
+        "DW-DMEO-DH0D10",
+        "DEMO-HDD001",
+    ] {
+        let inv = json!({
+            "disks": [{
+                "number": 0,
+                "serial": encoded,
+                "model": hdd.model,
+                "volumes": [{"letter": "D", "filesystem": "NTFS"}]
+            }]
+        });
+        let mut disks = vec![hdd.clone()];
+        platform::attach_volumes(&mut disks, &inv);
+        assert_eq!(
+            disks[0].os_disk_number,
+            Some(0),
+            "expected serial variant {encoded} to map"
+        );
+    }
+
+    let inv_wwn = json!({
+        "disks": [{
+            "number": 2,
+            "serial": "",
+            "model": hdd.model,
+            "unique_ids": ["50014ee2540be401"],
+            "volumes": [{"letter": "H", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut disks = vec![hdd];
+    platform::attach_volumes(&mut disks, &inv_wwn);
+    assert_eq!(disks[0].os_disk_number, Some(2));
+    assert_eq!(disks[0].os_serial.as_deref(), Some("50014ee2540be401"));
+}
+
+#[test]
+fn tier3_unique_capacity_fallback_handles_unexposed_nguid_and_blocks_duplicates_and_contradictions()
+{
+    let mut nvme = disk();
+    nvme.nvme_eui64.clear();
+
+    let inv_ok = json!({
+        "disks": [{
+            "number": 1,
+            "serial": "e823_8fa6_bf53_0001_001b_448b_4f81_c123.",
+            "model": nvme.model,
+            "bus_type": 17,
+            "disk_bytes": 512110190592u64,
+            "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut single = vec![nvme.clone()];
+    platform::attach_volumes(&mut single, &inv_ok);
+    assert_eq!(single[0].os_disk_number, Some(1));
+
+    let mut nvme2 = nvme.clone();
+    nvme2.id = "second-nvme".into();
+    nvme2.serial = Some("GB-DEMO-NVME02".into());
+    let inv_two = json!({
+        "disks": [
+            {
+                "number": 1,
+                "serial": "e823_8fa6_bf53_0001_001b_448b_4f81_c123.",
+                "model": nvme.model,
+                "bus_type": 17,
+                "disk_bytes": 512110190592u64,
+                "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+            },
+            {
+                "number": 2,
+                "serial": "e823_8fa6_bf53_0001_001b_448b_4f81_c456.",
+                "model": nvme.model,
+                "bus_type": 17,
+                "disk_bytes": 512110190592u64,
+                "volumes": [{"letter": "D", "filesystem": "NTFS"}]
+            }
+        ]
+    });
+    let mut pair = vec![nvme.clone(), nvme2];
+    platform::attach_volumes(&mut pair, &inv_two);
+    assert!(pair.iter().all(|d| d.os_disk_number.is_none()));
+
+    let inv_contradiction = json!({
+        "disks": [{
+            "number": 1,
+            "serial": "TOTALLY-DIFFERENT-SN",
+            "model": nvme.model,
+            "bus_type": 17,
+            "disk_bytes": 512110190592u64,
+            "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut bad_ser = vec![nvme.clone()];
+    platform::attach_volumes(&mut bad_ser, &inv_contradiction);
+    assert_eq!(bad_ser[0].os_disk_number, None);
+
+    let inv_wrong_bus = json!({
+        "disks": [{
+            "number": 1,
+            "serial": "e823_8fa6_bf53_0001_001b_448b_4f81_c123.",
+            "model": nvme.model,
+            "bus_type": 11,
+            "disk_bytes": 512110190592u64,
+            "volumes": [{"letter": "C", "filesystem": "NTFS"}]
+        }]
+    });
+    let mut bad_bus = vec![nvme];
+    platform::attach_volumes(&mut bad_bus, &inv_wrong_bus);
+    assert_eq!(bad_bus[0].os_disk_number, None);
 }

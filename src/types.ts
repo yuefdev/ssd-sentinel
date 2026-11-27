@@ -595,6 +595,7 @@ export interface AppState {
   profiles: Record<string, ProfileRow[]>;
   minimise_to_tray: boolean;
   read_only_guard?: boolean;
+  auto_check_updates?: boolean;
   health_mode?: string;
   language?: "tr" | "en";
   optimizations?: OptimizationRecord[];

@@ -3331,7 +3331,8 @@ dialog pre {
     bottom: 20px;
   }
   .replay-banner,
-  .warning-banner {
+  .warning-banner,
+  .update-banner {
     font-size: 9px;
     padding: 10px;
     gap: 8px;
@@ -4821,6 +4822,42 @@ dialog:has(.preview-modal) {
   line-height: 1.5;
   color: var(--secondary);
   white-space: pre-line;
+}
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  margin-bottom: 12px;
+}
+.update-banner-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.update-banner-main > .icon {
+  color: var(--accent);
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.update-banner-main strong {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+}
+.update-banner-main p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--secondary);
 }
 
 /* Precision Storage Lab · Write Guard & Dry-Run Impact Preview */

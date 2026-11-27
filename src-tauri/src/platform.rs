@@ -104,7 +104,7 @@ pub fn smart(exe: &Path, args: &[String], cancel: &AtomicBool) -> Result<Value, 
 #[cfg(windows)]
 mod win32 {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     use std::ptr::{null, null_mut};
     use windows_sys::core::GUID;
     use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -115,18 +115,24 @@ mod win32 {
     };
     use windows_sys::Win32::Devices::Properties::DEVPROP_TYPE_UINT32;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, LocalFree, DEVPROPKEY, HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, GetLastError, LocalFree, DEVPROPKEY, ERROR_MORE_DATA, GENERIC_READ, HANDLE,
+        INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
         FILE_SHARE_READ, FILE_SHARE_WRITE, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Ioctl::{
-        DISK_PERFORMANCE, DRIVE_LAYOUT_INFORMATION_EX, GUID_DEVINTERFACE_DISK,
-        IOCTL_DISK_GET_DRIVE_LAYOUT_EX, IOCTL_DISK_PERFORMANCE, IOCTL_STORAGE_GET_DEVICE_NUMBER,
-        IOCTL_STORAGE_QUERY_PROPERTY, PARTITION_INFORMATION_EX, STORAGE_DEVICE_DESCRIPTOR,
-        STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY, STORAGE_WRITE_CACHE_PROPERTY,
-        VOLUME_DISK_EXTENTS,
+        NVMeDataTypeIdentify, ProtocolTypeNvme, StorageAdapterProtocolSpecificProperty,
+        StorageDeviceIdProperty, StorageDeviceProtocolSpecificProperty, StorageIdAssocDevice,
+        StorageIdCodeSetAscii, StorageIdCodeSetBinary, StorageIdCodeSetUtf8, StorageIdTypeEUI64,
+        StorageIdTypeFCPHName, StorageIdTypeScsiNameString, DISK_EXTENT, DISK_PERFORMANCE,
+        DRIVE_LAYOUT_INFORMATION_EX, GUID_DEVINTERFACE_DISK, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+        IOCTL_DISK_PERFORMANCE, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
+        PARTITION_INFORMATION_EX, STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_ID_DESCRIPTOR,
+        STORAGE_DEVICE_NUMBER, STORAGE_IDENTIFIER, STORAGE_PROPERTY_QUERY,
+        STORAGE_PROTOCOL_DATA_DESCRIPTOR, STORAGE_PROTOCOL_SPECIFIC_DATA,
+        STORAGE_WRITE_CACHE_PROPERTY, VOLUME_DISK_EXTENTS,
     };
     use windows_sys::Win32::System::Power::{
         GetPwrCapabilities, PowerGetActiveScheme, PowerReadACValueIndex, SYSTEM_POWER_CAPABILITIES,
@@ -458,6 +464,410 @@ mod win32 {
         })
     }
 
+    fn hex_bytes(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            let _ = write!(out, "{b:02x}");
+        }
+        out
+    }
+
+    fn clean_ascii(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len());
+        for &b in bytes {
+            if b == 0 {
+                break;
+            }
+            if (0x20..=0x7E).contains(&b) {
+                out.push(b as char);
+            } else {
+                out.push(' ');
+            }
+        }
+        out.trim().to_owned()
+    }
+
+    fn push_unique_id(out: &mut Vec<String>, id: String) {
+        if !out.iter().any(|existing| existing == &id) {
+            out.push(id);
+        }
+    }
+
+    fn query_device_ids(h: HANDLE) -> Vec<String> {
+        let query = STORAGE_PROPERTY_QUERY {
+            PropertyId: StorageDeviceIdProperty,
+            QueryType: 0,
+            AdditionalParameters: [0],
+        };
+        let mut buf = vec![0u8; 4096];
+        let mut ret = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                h,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                (&query as *const STORAGE_PROPERTY_QUERY).cast(),
+                std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+                &mut ret,
+                null_mut(),
+            )
+        };
+        if ok == 0 || (ret as usize) < std::mem::size_of::<STORAGE_DEVICE_ID_DESCRIPTOR>() {
+            return Vec::new();
+        }
+        let desc: STORAGE_DEVICE_ID_DESCRIPTOR =
+            unsafe { std::ptr::read_unaligned(buf.as_ptr().cast()) };
+        let usable = (ret as usize).min(desc.Size as usize).min(buf.len());
+        let mut offset = std::mem::offset_of!(STORAGE_DEVICE_ID_DESCRIPTOR, Identifiers);
+        let hdr_sz = std::mem::size_of::<STORAGE_IDENTIFIER>();
+        let id_field_off = std::mem::offset_of!(STORAGE_IDENTIFIER, Identifier);
+        let mut ids = Vec::new();
+        for _ in 0..desc.NumberOfIdentifiers.min(64) {
+            if offset + hdr_sz > usable {
+                break;
+            }
+            let id: STORAGE_IDENTIFIER =
+                unsafe { std::ptr::read_unaligned(buf[offset..].as_ptr().cast()) };
+            let id_start = offset + id_field_off;
+            let id_len = id.IdentifierSize as usize;
+            if id_start.saturating_add(id_len) > usable {
+                break;
+            }
+            let slice = &buf[id_start..id_start + id_len];
+            if id.Association == StorageIdAssocDevice {
+                if id.CodeSet == StorageIdCodeSetBinary
+                    && (id.Type == StorageIdTypeEUI64 || id.Type == StorageIdTypeFCPHName)
+                    && matches!(id_len, 8 | 16)
+                {
+                    if slice.iter().any(|&b| b != 0) {
+                        push_unique_id(&mut ids, hex_bytes(slice));
+                    }
+                } else if (id.CodeSet == StorageIdCodeSetAscii
+                    || id.CodeSet == StorageIdCodeSetUtf8)
+                    && id.Type == StorageIdTypeScsiNameString
+                {
+                    if let Ok(text) = std::str::from_utf8(slice) {
+                        let low = text
+                            .trim_matches(|c: char| c == '\0' || c.is_ascii_whitespace())
+                            .to_ascii_lowercase();
+                        let stripped = low
+                            .strip_prefix("eui.")
+                            .or_else(|| low.strip_prefix("naa."))
+                            .or_else(|| low.strip_prefix("nguid."))
+                            .unwrap_or(&low);
+                        let hex: String = stripped
+                            .chars()
+                            .filter(|c| !matches!(c, '_' | '-' | '.') && !c.is_ascii_whitespace())
+                            .collect();
+                        if matches!(hex.len(), 16 | 32)
+                            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                            && hex.bytes().any(|b| b != b'0')
+                        {
+                            push_unique_id(&mut ids, hex);
+                        }
+                    }
+                }
+            }
+            if id.NextOffset == 0 {
+                break;
+            }
+            offset = offset.saturating_add(id.NextOffset as usize);
+        }
+        ids
+    }
+
+    fn query_nvme_identify_raw(h: HANDLE, cns: u32, nsid: u32) -> Option<Vec<u8>> {
+        let hdr_off = std::mem::offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+        let proto_size = std::mem::size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+        let total_size = hdr_off + proto_size + 4096;
+        let desc_off = std::mem::offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData);
+        for prop_id in [
+            StorageAdapterProtocolSpecificProperty,
+            StorageDeviceProtocolSpecificProperty,
+        ] {
+            let mut in_buf = vec![0u8; total_size];
+            in_buf[0..4].copy_from_slice(&prop_id.to_ne_bytes());
+            in_buf[4..8].copy_from_slice(&0i32.to_ne_bytes());
+            let spec = STORAGE_PROTOCOL_SPECIFIC_DATA {
+                ProtocolType: ProtocolTypeNvme,
+                DataType: NVMeDataTypeIdentify as u32,
+                ProtocolDataRequestValue: cns,
+                ProtocolDataRequestSubValue: nsid,
+                ProtocolDataOffset: proto_size as u32,
+                ProtocolDataLength: 4096,
+                FixedProtocolReturnData: 0,
+                ProtocolDataRequestSubValue2: 0,
+                ProtocolDataRequestSubValue3: 0,
+                ProtocolDataRequestSubValue4: 0,
+            };
+            unsafe {
+                std::ptr::write_unaligned(in_buf[hdr_off..].as_mut_ptr().cast(), spec);
+            }
+            let mut out_buf = vec![0u8; total_size];
+            let mut ret = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    h,
+                    IOCTL_STORAGE_QUERY_PROPERTY,
+                    in_buf.as_ptr().cast(),
+                    in_buf.len() as u32,
+                    out_buf.as_mut_ptr().cast(),
+                    out_buf.len() as u32,
+                    &mut ret,
+                    null_mut(),
+                )
+            };
+            if ok == 0 || (ret as usize) < std::mem::size_of::<STORAGE_PROTOCOL_DATA_DESCRIPTOR>() {
+                continue;
+            }
+            let desc: STORAGE_PROTOCOL_DATA_DESCRIPTOR =
+                unsafe { std::ptr::read_unaligned(out_buf.as_ptr().cast()) };
+            let pd = desc.ProtocolSpecificData;
+            if pd.ProtocolDataOffset < proto_size as u32 || pd.ProtocolDataLength < 128 {
+                continue;
+            }
+            let data_start = desc_off.saturating_add(pd.ProtocolDataOffset as usize);
+            let data_end = data_start.saturating_add(pd.ProtocolDataLength as usize);
+            if data_end <= (ret as usize).min(out_buf.len()) {
+                return Some(out_buf[data_start..data_end].to_vec());
+            }
+        }
+        None
+    }
+
+    fn query_nvme_identify(h: HANDLE) -> (Option<String>, Option<String>, Vec<String>) {
+        let mut nvme_serial = None;
+        let mut nvme_model = None;
+        let mut extra_ids = Vec::new();
+        if let Some(ctrl) = query_nvme_identify_raw(h, 1, 0) {
+            if ctrl.len() >= 64 {
+                let sn = clean_ascii(&ctrl[4..24]);
+                if !sn.is_empty() {
+                    nvme_serial = Some(sn);
+                }
+                let mn = clean_ascii(&ctrl[24..64]);
+                if !mn.is_empty() {
+                    nvme_model = Some(mn);
+                }
+            }
+        }
+        if let Some(ns) = query_nvme_identify_raw(h, 0, 1) {
+            if ns.len() >= 128 {
+                let nguid = &ns[104..120];
+                if nguid.iter().any(|&b| b != 0) {
+                    push_unique_id(&mut extra_ids, hex_bytes(nguid));
+                }
+                let eui64 = &ns[120..128];
+                if eui64.iter().any(|&b| b != 0) {
+                    push_unique_id(&mut extra_ids, hex_bytes(eui64));
+                }
+            }
+        }
+        (nvme_serial, nvme_model, extra_ids)
+    }
+
+    fn query_volume_disk_extents(h: HANDLE) -> Option<(u32, bool)> {
+        let hdr_sz = std::mem::offset_of!(VOLUME_DISK_EXTENTS, Extents);
+        let ext_sz = std::mem::size_of::<DISK_EXTENT>();
+        for attempt in 0..2 {
+            let cap = if attempt == 0 {
+                512
+            } else {
+                hdr_sz + 64 * ext_sz
+            };
+            let mut buf = vec![0u8; cap];
+            let mut ret = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    h,
+                    IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                    null(),
+                    0,
+                    buf.as_mut_ptr().cast(),
+                    buf.len() as u32,
+                    &mut ret,
+                    null_mut(),
+                )
+            };
+            if ok == 0 {
+                if attempt == 0 && unsafe { GetLastError() } == ERROR_MORE_DATA {
+                    continue;
+                }
+                return None;
+            }
+            if (ret as usize) < hdr_sz {
+                return None;
+            }
+            let count = u32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+            if count == 0 {
+                return None;
+            }
+            let mut disk_num: Option<u32> = None;
+            for i in 0..count {
+                let off = hdr_sz + i * ext_sz;
+                if off + ext_sz > ret as usize {
+                    return None;
+                }
+                let ext: DISK_EXTENT =
+                    unsafe { std::ptr::read_unaligned(buf[off..].as_ptr().cast()) };
+                match disk_num {
+                    None => disk_num = Some(ext.DiskNumber),
+                    Some(d) if d != ext.DiskNumber => return None,
+                    Some(_) => {}
+                }
+            }
+            return disk_num.map(|d| (d, count > 1));
+        }
+        None
+    }
+
+    fn query_length_bytes(h: HANDLE) -> Option<u64> {
+        let mut len_val: i64 = 0;
+        let mut len_ret = 0u32;
+        if unsafe {
+            DeviceIoControl(
+                h,
+                IOCTL_DISK_GET_LENGTH_INFO,
+                null(),
+                0,
+                (&mut len_val as *mut i64).cast(),
+                std::mem::size_of::<i64>() as u32,
+                &mut len_ret,
+                null_mut(),
+            )
+        } != 0
+            && len_val > 0
+        {
+            Some(len_val as u64)
+        } else {
+            None
+        }
+    }
+
+    fn inspect_disk_device(
+        dev_path: &str,
+        dev_inst: Option<u32>,
+        volumes_by_disk: &mut BTreeMap<u32, Vec<Value>>,
+    ) -> Option<(u32, Value)> {
+        let dh = open_device(dev_path, 0)?;
+        let mut sdn: STORAGE_DEVICE_NUMBER = unsafe { std::mem::zeroed() };
+        let mut ret = 0u32;
+        let sdn_ok = unsafe {
+            DeviceIoControl(
+                dh.0,
+                IOCTL_STORAGE_GET_DEVICE_NUMBER,
+                null(),
+                0,
+                (&mut sdn as *mut STORAGE_DEVICE_NUMBER).cast(),
+                std::mem::size_of::<STORAGE_DEVICE_NUMBER>() as u32,
+                &mut ret,
+                null_mut(),
+            )
+        };
+        if sdn_ok == 0 || sdn.DeviceType != FILE_DEVICE_DISK {
+            return None;
+        }
+        let query = STORAGE_PROPERTY_QUERY {
+            PropertyId: 0, // StorageDeviceProperty
+            QueryType: 0,
+            AdditionalParameters: [0],
+        };
+        let mut desc_buf = vec![0u8; 2048];
+        let mut desc_ret = 0u32;
+        let desc_ok = unsafe {
+            DeviceIoControl(
+                dh.0,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                (&query as *const STORAGE_PROPERTY_QUERY).cast(),
+                std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+                desc_buf.as_mut_ptr().cast(),
+                desc_buf.len() as u32,
+                &mut desc_ret,
+                null_mut(),
+            )
+        };
+        if desc_ok == 0 || (desc_ret as usize) < std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
+            return None;
+        }
+        let desc: STORAGE_DEVICE_DESCRIPTOR =
+            unsafe { std::ptr::read_unaligned(desc_buf.as_ptr().cast()) };
+        let desc_slice = &desc_buf[..desc_ret as usize];
+        let vendor = c_str(desc_slice, desc.VendorIdOffset);
+        let product = c_str(desc_slice, desc.ProductIdOffset);
+        let serial = c_str(desc_slice, desc.SerialNumberOffset);
+        let model = if !vendor.is_empty()
+            && !product
+                .to_ascii_lowercase()
+                .starts_with(&vendor.to_ascii_lowercase())
+        {
+            format!("{vendor} {product}")
+        } else {
+            product
+        }
+        .trim()
+        .to_owned();
+        let bus_type = desc.BusType;
+        let mut disk_bytes = query_length_bytes(dh.0);
+        let mut layout = query_layout(dh.0);
+        let write_cache = query_write_cache(dh.0);
+        let mut unique_ids = query_device_ids(dh.0);
+        let probe_nvme = matches!(bus_type, 17 | 8 | 1 | 7);
+        let (mut nvme_serial, mut nvme_model, nvme_ids) = if probe_nvme {
+            query_nvme_identify(dh.0)
+        } else {
+            (None, None, Vec::new())
+        };
+        for id in nvme_ids {
+            push_unique_id(&mut unique_ids, id);
+        }
+        let need_read_retry = disk_bytes.is_none()
+            || layout.is_null()
+            || (probe_nvme && nvme_serial.is_none() && nvme_model.is_none());
+        if need_read_retry {
+            if let Some(rh) = open_device(dev_path, GENERIC_READ) {
+                if disk_bytes.is_none() {
+                    disk_bytes = query_length_bytes(rh.0);
+                }
+                if layout.is_null() {
+                    layout = query_layout(rh.0);
+                }
+                if probe_nvme && nvme_serial.is_none() && nvme_model.is_none() {
+                    let (sn, mn, ids) = query_nvme_identify(rh.0);
+                    nvme_serial = sn;
+                    nvme_model = mn;
+                    for id in ids {
+                        push_unique_id(&mut unique_ids, id);
+                    }
+                }
+            }
+        }
+        let pcie = if bus_type == 17 {
+            dev_inst.and_then(query_pcie_parent).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let vols = volumes_by_disk
+            .remove(&sdn.DeviceNumber)
+            .unwrap_or_default();
+        let entry = json!({
+            "number": sdn.DeviceNumber,
+            "serial": serial,
+            "model": model,
+            "nvme_serial": nvme_serial,
+            "nvme_model": nvme_model,
+            "unique_ids": unique_ids,
+            "bus_type": bus_type,
+            "disk_bytes": disk_bytes,
+            "volumes": vols,
+            "pcie": pcie,
+            "write_cache": write_cache,
+            "layout": layout
+        });
+        Some((sdn.DeviceNumber, entry))
+    }
+
     pub fn inventory(cancel: &AtomicBool) -> Result<Value, String> {
         if cancel.load(Ordering::SeqCst) {
             return Err(process::CANCELLED.into());
@@ -470,7 +880,7 @@ mod win32 {
             }
             let letter = ((b'A' + i as u8) as char).to_string();
             let root_w = wide(&format!("{letter}:\\"));
-            if unsafe { GetDriveTypeW(root_w.as_ptr()) } != 3 {
+            if !matches!(unsafe { GetDriveTypeW(root_w.as_ptr()) }, 2 | 3) {
                 continue;
             }
             let mut label_buf = [0u16; 256];
@@ -516,29 +926,9 @@ mod win32 {
             let Some(vh) = open_device(&format!("\\\\.\\{letter}:"), 0) else {
                 continue;
             };
-            let mut ext_buf = [0u8; 512];
-            let mut ext_ret = 0u32;
-            let ext_ok = unsafe {
-                DeviceIoControl(
-                    vh.0,
-                    IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-                    null(),
-                    0,
-                    ext_buf.as_mut_ptr().cast(),
-                    ext_buf.len() as u32,
-                    &mut ext_ret,
-                    null_mut(),
-                )
+            let Some((disk_num, _)) = query_volume_disk_extents(vh.0) else {
+                continue;
             };
-            if ext_ok == 0 || (ext_ret as usize) < std::mem::size_of::<VOLUME_DISK_EXTENTS>() {
-                continue;
-            }
-            let ext: VOLUME_DISK_EXTENTS =
-                unsafe { std::ptr::read_unaligned(ext_buf.as_ptr().cast()) };
-            if ext.NumberOfDiskExtents != 1 {
-                continue;
-            }
-            let disk_num = ext.Extents[0].DiskNumber;
             volumes_by_disk.entry(disk_num).or_default().push(json!({
                 "letter": letter,
                 "label": label,
@@ -561,6 +951,7 @@ mod win32 {
         }
         let _dev_info = OwnedDevInfo(dev_info);
         let mut disks = Vec::new();
+        let mut seen_numbers = HashSet::new();
         let mut index = 0u32;
         loop {
             if cancel.load(Ordering::SeqCst) {
@@ -622,108 +1013,30 @@ mod win32 {
                 .take_while(|&ch| ch != 0)
                 .collect();
             let dev_path = String::from_utf16_lossy(&u16_slice);
-            let Some(dh) = open_device(&dev_path, 0) else {
-                continue;
-            };
-            let mut sdn: STORAGE_DEVICE_NUMBER = unsafe { std::mem::zeroed() };
-            let mut ret = 0u32;
-            let sdn_ok = unsafe {
-                DeviceIoControl(
-                    dh.0,
-                    IOCTL_STORAGE_GET_DEVICE_NUMBER,
-                    null(),
-                    0,
-                    (&mut sdn as *mut STORAGE_DEVICE_NUMBER).cast(),
-                    std::mem::size_of::<STORAGE_DEVICE_NUMBER>() as u32,
-                    &mut ret,
-                    null_mut(),
-                )
-            };
-            if sdn_ok == 0 || sdn.DeviceType != FILE_DEVICE_DISK {
+            if let Some((num, entry)) =
+                inspect_disk_device(&dev_path, Some(dev_data.DevInst), &mut volumes_by_disk)
+            {
+                if seen_numbers.insert(num) {
+                    disks.push(entry);
+                }
+            }
+        }
+        for n in 0..32u32 {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(process::CANCELLED.into());
+            }
+            if seen_numbers.contains(&n) {
                 continue;
             }
-            let query = STORAGE_PROPERTY_QUERY {
-                PropertyId: 0, // StorageDeviceProperty
-                QueryType: 0,
-                AdditionalParameters: [0],
-            };
-            let mut desc_buf = vec![0u8; 2048];
-            let mut desc_ret = 0u32;
-            let desc_ok = unsafe {
-                DeviceIoControl(
-                    dh.0,
-                    IOCTL_STORAGE_QUERY_PROPERTY,
-                    (&query as *const STORAGE_PROPERTY_QUERY).cast(),
-                    std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
-                    desc_buf.as_mut_ptr().cast(),
-                    desc_buf.len() as u32,
-                    &mut desc_ret,
-                    null_mut(),
-                )
-            };
-            if desc_ok == 0
-                || (desc_ret as usize) < std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>()
-            {
-                continue;
+            if let Some((num, entry)) = inspect_disk_device(
+                &format!("\\\\.\\PhysicalDrive{n}"),
+                None,
+                &mut volumes_by_disk,
+            ) {
+                if seen_numbers.insert(num) {
+                    disks.push(entry);
+                }
             }
-            let desc: STORAGE_DEVICE_DESCRIPTOR =
-                unsafe { std::ptr::read_unaligned(desc_buf.as_ptr().cast()) };
-            let desc_slice = &desc_buf[..desc_ret as usize];
-            let vendor = c_str(desc_slice, desc.VendorIdOffset);
-            let product = c_str(desc_slice, desc.ProductIdOffset);
-            let serial = c_str(desc_slice, desc.SerialNumberOffset);
-            let model = if !vendor.is_empty()
-                && !product
-                    .to_ascii_lowercase()
-                    .starts_with(&vendor.to_ascii_lowercase())
-            {
-                format!("{vendor} {product}")
-            } else {
-                product
-            }
-            .trim()
-            .to_owned();
-            let bus_type = desc.BusType;
-            let mut disk_bytes: Option<u64> = None;
-            let mut len_val: i64 = 0;
-            let mut len_ret = 0u32;
-            if unsafe {
-                DeviceIoControl(
-                    dh.0,
-                    IOCTL_DISK_GET_LENGTH_INFO,
-                    null(),
-                    0,
-                    (&mut len_val as *mut i64).cast(),
-                    std::mem::size_of::<i64>() as u32,
-                    &mut len_ret,
-                    null_mut(),
-                )
-            } != 0
-                && len_val > 0
-            {
-                disk_bytes = Some(len_val as u64);
-            }
-            let pcie = if bus_type == 17 {
-                query_pcie_parent(dev_data.DevInst).unwrap_or(Value::Null)
-            } else {
-                Value::Null
-            };
-            let write_cache = query_write_cache(dh.0);
-            let layout = query_layout(dh.0);
-            let vols = volumes_by_disk
-                .remove(&sdn.DeviceNumber)
-                .unwrap_or_default();
-            disks.push(json!({
-                "number": sdn.DeviceNumber,
-                "serial": serial,
-                "model": model,
-                "bus_type": bus_type,
-                "disk_bytes": disk_bytes,
-                "volumes": vols,
-                "pcie": pcie,
-                "write_cache": write_cache,
-                "layout": layout
-            }));
         }
         disks.sort_by_key(|d| d["number"].as_u64().unwrap_or(u64::MAX));
 
@@ -925,21 +1238,344 @@ fn canonical(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
-fn matches(disk: &Disk, item: &Value) -> bool {
-    let serial = canonical(disk.serial.as_deref().unwrap_or(""));
-    let reported = canonical(item["serial"].as_str().unwrap_or(""));
-    if canonical(&disk.model) != canonical(item["model"].as_str().unwrap_or("")) {
+fn normalize_model(s: &str) -> String {
+    let mut cur: String = s
+        .trim()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    loop {
+        let mut changed = false;
+        for prefix in [
+            "nvme ", "ata ", "scsi ", "sata ", "usb ", "raid ", "nvme-", "ata-",
+        ] {
+            if let Some(rest) = cur.strip_prefix(prefix) {
+                cur = rest.trim().to_owned();
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            continue;
+        }
+        for suffix in [
+            " scsi disk device",
+            " ata device",
+            " usb device",
+            " disk device",
+        ] {
+            if let Some(rest) = cur.strip_suffix(suffix) {
+                cur = rest.trim().to_owned();
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    cur
+}
+
+fn compact_alnum(s: &str) -> String {
+    normalize_model(s)
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn model_strings_compatible(a: &str, b: &str) -> bool {
+    let na = normalize_model(a);
+    let nb = normalize_model(b);
+    if na.is_empty() || nb.is_empty() {
         return false;
     }
-    if !serial.is_empty() && serial == reported {
+    if na == nb {
         return true;
     }
-    let eui = reported
-        .trim_start_matches("eui.")
-        .replace('_', "")
-        .trim_end_matches('.')
-        .to_string();
-    eui.len() == 16 && eui.bytes().all(|b| b.is_ascii_hexdigit()) && disk.nvme_eui64.contains(&eui)
+    let ca = compact_alnum(&na);
+    let cb = compact_alnum(&nb);
+    if ca.is_empty() || cb.is_empty() {
+        return false;
+    }
+    if ca == cb {
+        return true;
+    }
+    let (short, long) = if ca.len() <= cb.len() {
+        (&ca, &cb)
+    } else {
+        (&cb, &ca)
+    };
+    short.len() >= 8 && (long.starts_with(short.as_str()) || long.ends_with(short.as_str()))
+}
+
+fn models_compatible(disk: &Disk, item: &Value) -> bool {
+    item["nvme_model"]
+        .as_str()
+        .is_some_and(|m| model_strings_compatible(&disk.model, m))
+        || item["model"]
+            .as_str()
+            .is_some_and(|m| model_strings_compatible(&disk.model, m))
+}
+
+fn swap_byte_pairs(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for chunk in bytes.chunks(2) {
+        if chunk.len() == 2 {
+            out.push(chunk[1]);
+            out.push(chunk[0]);
+        } else {
+            out.push(chunk[0]);
+        }
+    }
+    out
+}
+
+fn bytes_to_clean_ascii(bs: &[u8]) -> Option<String> {
+    if !bs.iter().all(|&b| b == 0 || (0x20..=0x7E).contains(&b)) {
+        return None;
+    }
+    let text: String = bs.iter().filter(|&&b| b != 0).map(|&b| b as char).collect();
+    let trimmed = text.trim().to_owned();
+    (trimmed.len() >= 4 && trimmed.chars().any(|c| c.is_ascii_alphanumeric())).then_some(trimmed)
+}
+
+fn push_unique_str(out: &mut Vec<String>, val: String) {
+    if !val.is_empty() && !out.iter().any(|existing| existing == &val) {
+        out.push(val);
+    }
+}
+
+fn decode_serial_variants(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim().trim_end_matches('.').trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![trimmed.to_owned()];
+    let no_ws: String = trimmed
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if (12..=80).contains(&no_ws.len())
+        && no_ws.len().is_multiple_of(2)
+        && no_ws.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        let mut raw_bytes = Vec::with_capacity(no_ws.len() / 2);
+        let bytes = no_ws.as_bytes();
+        let mut valid = true;
+        for pair in bytes.as_chunks::<2>().0 {
+            let Ok(s) = std::str::from_utf8(pair) else {
+                valid = false;
+                break;
+            };
+            let Ok(b) = u8::from_str_radix(s, 16) else {
+                valid = false;
+                break;
+            };
+            raw_bytes.push(b);
+        }
+        if valid {
+            if let Some(s) = bytes_to_clean_ascii(&raw_bytes) {
+                push_unique_str(&mut out, s);
+            }
+            if let Some(s) = bytes_to_clean_ascii(&swap_byte_pairs(&raw_bytes)) {
+                push_unique_str(&mut out, s);
+            }
+        }
+    }
+    if trimmed.len() >= 8 && trimmed.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        if trimmed.len().is_multiple_of(2) {
+            let swapped = String::from_utf8_lossy(&swap_byte_pairs(trimmed.as_bytes()))
+                .trim()
+                .to_owned();
+            push_unique_str(&mut out, swapped);
+        } else {
+            for padded in [format!("{trimmed} "), format!(" {trimmed}")] {
+                let swapped = String::from_utf8_lossy(&swap_byte_pairs(padded.as_bytes()))
+                    .trim()
+                    .to_owned();
+                push_unique_str(&mut out, swapped);
+            }
+        }
+    }
+    out
+}
+
+fn canon_serial_forms(s: &str) -> Vec<String> {
+    let low = canonical(s);
+    let base = low.trim_end_matches('.').trim();
+    if base.is_empty() {
+        return Vec::new();
+    }
+    let mut forms = vec![base.to_owned()];
+    let compact: String = base
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-' | '.'))
+        .collect();
+    push_unique_str(&mut forms, compact);
+    if let Some(rest) = base.strip_prefix("wd-") {
+        if rest.len() >= 8 {
+            push_unique_str(&mut forms, rest.to_owned());
+            let rest_compact: String = rest
+                .chars()
+                .filter(|c| !matches!(c, ' ' | '_' | '-' | '.'))
+                .collect();
+            push_unique_str(&mut forms, rest_compact);
+        }
+    }
+    forms
+}
+
+fn serials_match(disk_serial: &str, os_raw: &str) -> bool {
+    if disk_serial.trim().is_empty() || os_raw.trim().is_empty() {
+        return false;
+    }
+    let disk_forms = canon_serial_forms(disk_serial);
+    if disk_forms.is_empty() {
+        return false;
+    }
+    for variant in decode_serial_variants(os_raw) {
+        for vf in canon_serial_forms(&variant) {
+            if vf.len() >= 4 && disk_forms.iter().any(|df| df == &vf) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn normalize_hex_id(raw: &str) -> Option<String> {
+    let low = raw.trim().to_ascii_lowercase();
+    let stripped = low
+        .strip_prefix("eui.")
+        .or_else(|| low.strip_prefix("naa."))
+        .or_else(|| low.strip_prefix("nguid."))
+        .unwrap_or(&low);
+    let hex: String = stripped
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-' | '.') && !c.is_ascii_whitespace())
+        .collect();
+    (matches!(hex.len(), 16 | 32)
+        && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        && hex.bytes().any(|b| b != b'0'))
+    .then_some(hex)
+}
+
+fn disk_unique_ids(disk: &Disk) -> Vec<String> {
+    let mut ids = Vec::new();
+    for raw in disk
+        .nvme_eui64
+        .iter()
+        .chain(disk.nvme_nguid.iter())
+        .chain(disk.wwn.iter())
+    {
+        if let Some(id) = normalize_hex_id(raw) {
+            push_unique_str(&mut ids, id);
+        }
+    }
+    ids
+}
+
+fn os_unique_ids(item: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    for raw in item["unique_ids"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain(item["serial"].as_str())
+    {
+        if let Some(id) = normalize_hex_id(raw) {
+            push_unique_str(&mut ids, id);
+        }
+    }
+    ids
+}
+
+fn unique_id_matches(disk: &Disk, item: &Value) -> bool {
+    if !models_compatible(disk, item) {
+        return false;
+    }
+    let d_ids = disk_unique_ids(disk);
+    if d_ids.is_empty() {
+        return false;
+    }
+    let o_ids = os_unique_ids(item);
+    d_ids.iter().any(|d| o_ids.iter().any(|o| o == d))
+}
+
+fn tier1_matches(disk: &Disk, item: &Value) -> bool {
+    if !models_compatible(disk, item) {
+        return false;
+    }
+    let disk_serial = disk.serial.as_deref().unwrap_or("");
+    item["nvme_serial"]
+        .as_str()
+        .is_some_and(|s| serials_match(disk_serial, s))
+        || item["serial"]
+            .as_str()
+            .is_some_and(|s| serials_match(disk_serial, s))
+}
+
+fn looks_like_synthesized_os_id(raw: &str) -> bool {
+    let t = raw.trim();
+    if t.is_empty() || normalize_hex_id(t).is_some() {
+        return true;
+    }
+    let stripped: String = t
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-' | '.'))
+        .collect();
+    !stripped.is_empty() && stripped.bytes().all(|b| b == b'0')
+}
+
+fn tier3_compatible(disk: &Disk, item: &Value) -> bool {
+    if !disk.stable_identity || !models_compatible(disk, item) {
+        return false;
+    }
+    let has_os_id = item["serial"]
+        .as_str()
+        .is_some_and(|s| !s.trim().is_empty())
+        || item["nvme_serial"]
+            .as_str()
+            .is_some_and(|s| !s.trim().is_empty())
+        || item["unique_ids"].as_array().is_some_and(|a| !a.is_empty());
+    if !has_os_id {
+        return false;
+    }
+    let disk_serial = disk.serial.as_deref().unwrap_or("");
+    if let Some(nvme_ser) = item["nvme_serial"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+    {
+        if !serials_match(disk_serial, nvme_ser) {
+            return false;
+        }
+    }
+    if let Some(os_ser) = item["serial"].as_str().filter(|s| !s.trim().is_empty()) {
+        if !looks_like_synthesized_os_id(os_ser) && !serials_match(disk_serial, os_ser) {
+            return false;
+        }
+    }
+    let Some(d_cap) = metric_u64(&disk.metrics["capacity_bytes"]).filter(|&c| c > 0) else {
+        return false;
+    };
+    let Some(o_cap) = item["disk_bytes"].as_u64().filter(|&c| c > 0) else {
+        return false;
+    };
+    if d_cap != o_cap {
+        return false;
+    }
+    if let Some(bt) = item["bus_type"].as_u64() {
+        if disk.protocol.as_deref() == Some("NVMe") && matches!(bt, 3 | 11) {
+            return false;
+        }
+        if disk.protocol.as_deref() == Some("ATA") && bt == 17 {
+            return false;
+        }
+    }
+    true
 }
 
 fn pcie_ceiling_mb_s(gen: u64, width: u64) -> Option<u64> {
@@ -965,33 +1601,101 @@ pub fn attach_volumes(disks: &mut [Disk], inventory: &Value) {
         .into_iter()
         .flatten()
         .collect();
-    let mappings: Vec<Option<usize>> = disks
+    let unique_serial_ok: Vec<bool> = disks
         .iter()
         .map(|disk| {
-            if !disk.stable_identity {
-                return None;
-            }
-            let candidates: Vec<_> = os
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| matches(disk, item))
-                .collect();
-            if candidates.len() != 1 {
-                return None;
-            }
-            let (index, candidate) = candidates[0];
-            (disks.iter().filter(|d| matches(d, candidate)).count() == 1
+            let ser = canonical(disk.serial.as_deref().unwrap_or(""));
+            disk.stable_identity
+                && !ser.is_empty()
                 && disks
                     .iter()
-                    .filter(|d| {
-                        canonical(d.serial.as_deref().unwrap_or(""))
-                            == canonical(disk.serial.as_deref().unwrap_or(""))
-                    })
+                    .filter(|d| canonical(d.serial.as_deref().unwrap_or("")) == ser)
                     .count()
-                    == 1)
-                .then_some(index)
+                    == 1
         })
         .collect();
+    let mut mappings: Vec<Option<usize>> = vec![None; disks.len()];
+    let mut used_os = vec![false; os.len()];
+
+    let tier1_pairs: Vec<(usize, usize)> = (0..disks.len())
+        .filter(|&di| unique_serial_ok[di])
+        .filter_map(|di| {
+            let cands: Vec<usize> = (0..os.len())
+                .filter(|&oi| tier1_matches(&disks[di], os[oi]))
+                .collect();
+            if cands.len() != 1 {
+                return None;
+            }
+            let oi = cands[0];
+            (disks.iter().filter(|d| tier1_matches(d, os[oi])).count() == 1).then_some((di, oi))
+        })
+        .collect();
+    for (di, oi) in tier1_pairs {
+        if mappings[di].is_none() && !used_os[oi] {
+            mappings[di] = Some(oi);
+            used_os[oi] = true;
+        }
+    }
+
+    let tier2_pairs: Vec<(usize, usize)> = (0..disks.len())
+        .filter(|&di| mappings[di].is_none() && unique_serial_ok[di])
+        .filter_map(|di| {
+            let cands: Vec<usize> = (0..os.len())
+                .filter(|&oi| !used_os[oi] && unique_id_matches(&disks[di], os[oi]))
+                .collect();
+            if cands.len() != 1 {
+                return None;
+            }
+            let oi = cands[0];
+            let disk_hits = (0..disks.len())
+                .filter(|&k| mappings[k].is_none() && unique_id_matches(&disks[k], os[oi]))
+                .count();
+            (disk_hits == 1).then_some((di, oi))
+        })
+        .collect();
+    for (di, oi) in tier2_pairs {
+        if mappings[di].is_none() && !used_os[oi] {
+            mappings[di] = Some(oi);
+            used_os[oi] = true;
+        }
+    }
+
+    let tier3_pairs: Vec<(usize, usize)> = (0..disks.len())
+        .filter(|&di| mappings[di].is_none() && unique_serial_ok[di])
+        .filter_map(|di| {
+            let cands: Vec<usize> = (0..os.len())
+                .filter(|&oi| !used_os[oi] && tier3_compatible(&disks[di], os[oi]))
+                .collect();
+            if cands.len() != 1 {
+                return None;
+            }
+            let oi = cands[0];
+            let d_cap = metric_u64(&disks[di].metrics["capacity_bytes"]).filter(|&c| c > 0)?;
+            let o_cap = os[oi]["disk_bytes"].as_u64().filter(|&c| c > 0)?;
+            let os_model_cap_hits = os
+                .iter()
+                .filter(|item| {
+                    models_compatible(&disks[di], item)
+                        && item["disk_bytes"].as_u64() == Some(d_cap)
+                })
+                .count();
+            let disk_model_cap_hits = disks
+                .iter()
+                .filter(|d| {
+                    models_compatible(d, os[oi])
+                        && metric_u64(&d.metrics["capacity_bytes"]) == Some(o_cap)
+                })
+                .count();
+            (os_model_cap_hits == 1 && disk_model_cap_hits == 1).then_some((di, oi))
+        })
+        .collect();
+    for (di, oi) in tier3_pairs {
+        if mappings[di].is_none() && !used_os[oi] {
+            mappings[di] = Some(oi);
+            used_os[oi] = true;
+        }
+    }
+
     for (disk, index) in disks.iter_mut().zip(mappings) {
         disk.alerts.retain(|a| {
             !a.code.starts_with("space-")
@@ -1009,8 +1713,27 @@ pub fn attach_volumes(disks: &mut [Disk], inventory: &Value) {
         if let Some(index) = index {
             let item = os[index];
             disk.os_disk_number = item["number"].as_u64();
-            disk.os_serial = item["serial"].as_str().map(str::to_owned);
-            disk.os_model = item["model"].as_str().map(str::to_owned);
+            disk.os_serial = item["serial"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    item["nvme_serial"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                })
+                .or_else(|| {
+                    item["unique_ids"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                })
+                .map(str::to_owned);
+            disk.os_model = item["model"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| item["nvme_model"].as_str().filter(|s| !s.trim().is_empty()))
+                .map(str::to_owned);
             disk.volumes = item["volumes"].as_array().cloned().unwrap_or_default();
             for volume in &disk.volumes {
                 if let (Some(size), Some(free)) =
@@ -1223,8 +1946,11 @@ pub fn volume_root(letter: &str) -> Result<PathBuf, String> {
     {
         let root = format!("{letter}:\\");
         let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
-        if unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) } != 3 {
-            return Err("Yalnız yerel sabit sürücü test edilebilir.".into());
+        if !matches!(
+            unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) },
+            2 | 3
+        ) {
+            return Err("Yalnız yerel disk bölümleri test edilebilir.".into());
         }
         Ok(root.into())
     }

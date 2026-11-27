@@ -141,7 +141,7 @@ npm run tauri -- build --bundles nsis
 
 Looking for a **free, open-source alternative to CrystalDiskInfo or Hard Disk Sentinel** on Windows 10/11? **SSD Sentinel** unifies live SMART monitoring, endurance forecasting, raw Win32 IOCP benchmarking, LBA surface diagnostics, and read-only NTFS recovery behind a hardware-protective **Default Read-Only Guard**.
 
-| Capability | SSD Sentinel (`v1.10.1`) | CrystalDiskInfo | Hard Disk Sentinel |
+| Capability | SSD Sentinel (`v1.10.2`) | CrystalDiskInfo | Hard Disk Sentinel |
 |---|---|---|---|
 | **License & Cost** | **MIT** (Free & Open Source; `smartctl` GPLv2+) | **MIT** (Freeware / Open Source) | Commercial (Limited Free Trial; Paid Standard/Pro) |
 | **Ads & Hidden Telemetry** | **Zero ads, zero telemetry, offline-first** | Clean open-source (themed editions available) | No telemetry |
@@ -169,7 +169,7 @@ Install SSD Sentinel, leave the **Write Guard** locked for pure read-only inspec
 Yes. Every fresh install boots with `read_only_guard = true` enforced in Rust (`src-tauri/src/core.rs`), blocking benchmarks, repairs, tiering, and system policy writes until you explicitly unlock the guard and approve a structured Dry-Run execution manifest. You can also test the full interface with zero physical disk access using `--snapshot-dir .\src-tauri\tests\fixtures`.
 
 **Why does Windows SmartScreen warn on the installer?**
-Community installers do not currently use a paid commercial Authenticode certificate. Always verify the downloaded `.exe` against `SHA256SUMS.txt` or `gh attestation verify "SSD-Sentinel_1.10.1_x64-setup.exe" --owner yuefdev` before running, or read the full [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/).
+Community installers do not currently use a paid commercial Authenticode certificate. Always verify the downloaded `.exe` against `SHA256SUMS.txt` or `gh attestation verify "SSD-Sentinel_1.10.2_x64-setup.exe" --owner yuefdev` before running, or read the full [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/).
 
 ---
 

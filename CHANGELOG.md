@@ -2,6 +2,16 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## [v1.10.2] — 2026-11-27
+
+### Fixed
+- **Reliable Windows disk & volume mapping:** Added Win32 `StorageDeviceIdProperty` (VPD Page 0x83 EUI-64/WWN/NGUID/SCSI Name String) and NVMe `Identify Controller` / `Identify Namespace` (`StorageAdapterProtocolSpecificProperty` / `StorageDeviceProtocolSpecificProperty`) queries alongside `\\.\PhysicalDrive0..31` fallback discovery, `DRIVE_REMOVABLE` USB SSD support, and same-disk multi-extent handling.
+- **3-tier deterministic S3 physical matching:** Added normalized model matching (stripping `"NVMe "`/`"ATA "`/`"SCSI "` prefixes, device suffixes, and 16-char SCSI truncation), SATA hex-encoded and 16-bit byte-swapped serial decoding, `nvme_nguid` + `wwn` support, and a non-contradictory unique model + exact byte-capacity + bus fallback while still rejecting collisions and duplicate identities.
+- **ReTrim alignment, serial redaction & granular diagnostics:** Aligned `ReTrim` validation (`os_model`, `-ExpectedDiskNumber`, normalized matching), redacted `nvme_serial` in diagnostic exports, and surfaced distinct messages for missing identity, matched disks without drive letters, non-admin access, and RAID/VMD collisions.
+
+### Added
+- **Startup auto-update check & banner:** Live sessions check GitHub Releases once on launch (disabled in snapshot replay, toggleable via Settings → `auto_check_updates`, default `true`) and display a dismissible top banner with one-click SHA-256 verified install.
+
 ## [v1.10.1] — 2026-11-26
 
 ### Fixed

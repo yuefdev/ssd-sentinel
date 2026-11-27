@@ -67,7 +67,7 @@ This document defines the enforceable safety invariants, crash-consistency guara
 ## 3. Supply-Chain & Binary Verification Guarantees
 
 1. **In-App Updater Allowlist (`desktop.rs`):**
-   - Strictly user-initiated (zero background polling).
+   - Optional once-per-launch version check in live mode (disabled in replay mode; toggleable in Settings; zero periodic background polling). Downloads and installer launches remain strictly user-confirmed and SHA-256 verified.
    - Accepts HTTPS redirects **only** within `github.com`, `api.github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, and `github-releases.githubusercontent.com`.
    - Enforces cryptographic verification against release `SHA256SUMS.txt` before `ShellExecuteW`; any hash mismatch or missing checksum deletes the temporary download and aborts.
 2. **Build Provenance & Audit:**

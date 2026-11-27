@@ -2,7 +2,8 @@ param(
     [ValidateSet('Inventory', 'Performance', 'ReTrim')][string]$Mode = 'Inventory',
     [ValidatePattern('^[A-Za-z]$')][string]$DriveLetter,
     [string]$ExpectedSerial,
-    [string]$ExpectedModel
+    [string]$ExpectedModel,
+    [string]$ExpectedDiskNumber = ''
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -32,9 +33,17 @@ if ($Mode -eq 'ReTrim') {
     if (-not $DriveLetter -or -not $ExpectedSerial -or -not $ExpectedModel) { throw 'Missing target identity' }
     $partitions = @(Get-Partition -DriveLetter $DriveLetter)
     if ($partitions.Count -ne 1) { throw 'Ambiguous volume mapping' }
+    if ($ExpectedDiskNumber -match '^\d+$' -and $partitions[0].DiskNumber -ne [int]$ExpectedDiskNumber) { throw 'Disk number changed' }
     $disk = Get-CimInstance Win32_DiskDrive -Filter "Index=$($partitions[0].DiskNumber)"
-    if (-not $disk.SerialNumber -or $disk.SerialNumber.Trim() -ine $ExpectedSerial.Trim()) { throw 'Disk identity changed' }
-    if ($disk.Model.Trim() -ine $ExpectedModel.Trim()) { throw 'Disk model changed' }
+    $normSer = { param([string]$s) (($s -replace '[\s_.-]+', '').ToLowerInvariant()) }
+    $normModel = { param([string]$s) (((($s.Trim().ToLowerInvariant() -replace '\s+', ' ') -replace '^(nvme|ata|scsi|sata|usb|raid)[\s-]+', '') -replace '\s+(scsi disk device|ata device|usb device|disk device)$', '').Trim()) }
+    if (-not $disk.SerialNumber) { throw 'Disk identity changed' }
+    $actualSer = (& $normSer $disk.SerialNumber)
+    $wantSer = (& $normSer $ExpectedSerial)
+    if (-not $actualSer -or $actualSer -ne $wantSer) { throw 'Disk identity changed' }
+    $actualMod = (& $normModel ([string]$disk.Model))
+    $wantMod = (& $normModel $ExpectedModel)
+    if (-not $actualMod -or ($actualMod -ne $wantMod -and -not ($actualMod.Length -ge 8 -and $wantMod.Length -ge 8 -and ($actualMod.StartsWith($wantMod) -or $wantMod.StartsWith($actualMod))))) { throw 'Disk model changed' }
     $volume = Get-Volume -DriveLetter $DriveLetter
     if ($volume.FileSystemType -notin @('NTFS', 'ReFS')) { throw 'Unsupported filesystem for ReTrim' }
     Optimize-Volume -DriveLetter $DriveLetter -ReTrim -ErrorAction Stop

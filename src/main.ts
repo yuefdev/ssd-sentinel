@@ -45,6 +45,7 @@ import {
   isRecoverableRow,
   isUnopenableMedia,
   isWriteLocked,
+  mappingDisabledReason,
   mediaStatusBadge,
   ntfs8dot3Label,
   slcPressureBadge,
@@ -173,6 +174,8 @@ let updateStatus: {
   message: string;
   message_en?: string;
 } | null = null;
+let autoUpdateChecked = false;
+let updateBannerDismissed = false;
 let pending = false,
   polling = false,
   detailKey = "",
@@ -477,7 +480,17 @@ function overview(d: Disk): string {
               return `<div class="volume"><span class="volume-letter">${e(v.letter)}:</span><div><strong>${e(v.label || L("Yerel Disk", "Local Disk"))}<small>${e(v.filesystem)}</small></strong><div class="volume-track"><span style="width:${used ?? 0}%" class="${used !== null && used > 90 ? "warning" : ""}"></span></div><p>${fmtBytes(v.free_bytes)} ${L("boş", "free")} <span>/ ${fmtBytes(v.size_bytes)}</span></p></div><b>${used === null ? "—" : used + "%"}</b></div>`;
             })
             .join("")}</div>`
-        : `<div class="inline-empty">${icon("info")}${L("Bu kaynakta güvenilir bölüm eşlemesi yok. Kapasite ve doluluk tahmin edilmiyor.", "No verified Windows volume mapping available on this source.")}</div>`
+        : `<div class="inline-empty">${icon("info")}${
+            state?.source === "live" && d.os_disk_number != null
+              ? L(
+                  `Disk Windows Disk ${d.os_disk_number} ile eşleşti, ancak harf atanmış bir Windows bölümü bulunamadı (harfsiz, biçimlendirilmemiş veya çok diskli dinamik/RAID birim olabilir).`,
+                  `Matched to Windows Disk ${d.os_disk_number}, but no mounted Windows volume with a drive letter was found (unmounted, raw, or multi-disk dynamic/RAID volume).`,
+                )
+              : L(
+                  "Bu kaynakta güvenilir bölüm eşlemesi yok. Kapasite ve doluluk tahmin edilmiyor.",
+                  "No verified Windows volume mapping available on this source.",
+                )
+          }</div>`
     }<div class="device-facts"><div>${L("Seri numarası", "Serial number")}<strong>${e(d.serial ?? L("Bilinmiyor", "Unknown"))}</strong></div><div>Firmware<strong>${e(d.firmware ?? L("Bilinmiyor", "Unknown"))}</strong></div><div>${L("Bağlantı hattı", "Bus link")}<strong>${e(linkLabel)}${d.bus_link?.bottleneck ? ` · ${L("Darboğaz", "Bottleneck")}` : ""}</strong></div><div>${L("Hizalama / Önbellek", "Alignment / Write cache")}<strong>${d.optimization?.aligned_4k === true ? L("4K Hizalı", "4K Aligned") : d.optimization?.aligned_4k === false ? L("Hizasız", "Misaligned") : "—"} · ${d.optimization?.write_cache?.enabled === true ? L("Önbellek açık", "Cache on") : d.optimization?.write_cache?.enabled === false ? L("Önbellek kapalı", "Cache off") : "—"}</strong></div><div>${L("Aygıt yolu", "Device path")}<strong>${e(d.device)}</strong></div><div>${L("TRIM desteği", "TRIM support")}<strong>${d.capabilities.trim === null ? L("Bilinmiyor", "Unknown") : d.capabilities.trim ? L("Destekleniyor", "Supported") : L("Bildirilmedi", "Not reported")}</strong></div></div></article>`;
 }
 
@@ -647,7 +660,7 @@ function disabledReason(d: Disk): string {
   if (d.read_incomplete)
     return L("Bu disk için SMART okuma tamamlanamadı (yönetici izni veya denetleyici erişimi gerekli).", "SMART read for this disk was incomplete (administrator rights or controller access required).");
   if (!canStart(state, d))
-    return L("Güvenilir Windows bölüm eşlemesi gerekli.", "A verified Windows volume mapping is required.");
+    return mappingDisabledReason(state, d, getLang());
   return "";
 }
 
@@ -2306,13 +2319,20 @@ function toolsView(d: Disk): string {
   const live = canMaintain(state, d) && !pending;
   const autostart = !!state?.windows?.system_tuning?.autostart_enabled;
   const healthMode = state?.health_mode === "strict" ? "strict" : "default";
+  const autoUpdateOn = state?.auto_check_updates !== false;
   const updateMsg = updateStatus
     ? translateUpdateMessage(updateStatus, lang)
-    : L(
-        `Yüklü sürüm v${state?.version ?? "1.10.1"} · arka planda otomatik ağ bağlantısı yapılmaz.`,
-        `Installed v${state?.version ?? "1.10.1"} · no background network traffic is sent.`,
-        lang,
-      );
+    : autoUpdateOn
+      ? L(
+          `Yüklü sürüm v${state?.version ?? "1.10.2"} · canlı modda açılışta yeni sürümler kontrol edilir.`,
+          `Installed v${state?.version ?? "1.10.2"} · checks for new releases once on launch in live mode.`,
+          lang,
+        )
+      : L(
+          `Yüklü sürüm v${state?.version ?? "1.10.2"} · otomatik denetim kapalı (yalnız elle kontrol).`,
+          `Installed v${state?.version ?? "1.10.2"} · automatic checks off (manual check only).`,
+          lang,
+        );
   return `${heading(d, L("BAKIM & AYARLAR", "TOOLS & SETTINGS", lang), L("Bakım araçları ve uygulama ayarları", "Maintenance tools &amp; preferences", lang), L("Her işlem başlamadan önce onay ister.", "Every write or firmware command prompts for confirmation before running.", lang))}
     <div class="scope-note">${icon("shield")}<div><strong>${L("Yedeğiniz her zaman ilk adım.", "Keep backups first.", lang)}</strong> ${L("SMART testleri ve dosya sistemi kontrolleri fiziksel hasarı iyileştirme garantisi vermez.", "Hardware self-tests and filesystem scans help diagnose drives but cannot fix failing flash or platters.", lang)}</div></div>
     <div class="tool-grid">${toolCard("smart", L("SMART günlükleri", "SMART device logs", lang), L("Aygıtın kaydettiği hata ve dahili test sonuçlarını okuyun. Test başlatmaz.", "Inspect hardware error & self-test logs read-only without starting a new test.", lang), "logs", L("Günlükleri oku", "Read logs", lang), pending)}${toolCard("activity", L("Kısa dahili test", "Short self-test", lang), L("Disk firmware’inin desteklediği kısa öz testi başlatır. İlerleme ve sonuç günlükte izlenir.", "Triggers the firmware short self-test (typically 1–2 min). Results appear in logs.", lang), "short_test", L("Kısa testi başlat", "Run short test", lang), !live || !state?.admin || !d.capabilities.self_test)}${toolCard("clock", L("Uzun dahili test", "Extended self-test", lang), L("Kapsamlı firmware öz testi. İş yükünü etkileyebilir ve uzun sürebilir.", "Runs a full surface firmware self-test. May affect I/O throughput while active.", lang), "long_test", L("Uzun testi başlat", "Run extended test", lang), !live || !state?.admin || !d.capabilities.self_test)}${toolCard("refresh", "SSD ReTrim", L("Windows’a boş blokları yeniden bildirmesini söyler. Seçilen NTFS / ReFS bölümü doğrulanır.", "Asks Windows to re-trim free blocks on the selected NTFS / ReFS volume.", lang), "retrim", L("ReTrim iste", "Run ReTrim", lang), !live || !state?.admin || d.type === "HDD" || !canStart(state, d))}</div>
@@ -2324,6 +2344,7 @@ function toolsView(d: Disk): string {
       <label class="setting-row"><span>${icon("lock")}<span><strong>${L("Salt-okunur koruma kilidi (Write Guard)", "Read-Only Guard (Write Protection)", lang)}</strong><small>${L("Etkin olduğunda disklere yazan hız testi, onarım, optimize ve taşıma işlemleri Rust çekirdeğinde engellenir.", "When enabled, mutating operations (benchmarks, repairs, tuning, tiering) are blocked at the Rust core boundary.", lang)}</small></span></span><input type="checkbox" role="switch" id="write-guard-setting" ${isWriteLocked(state) ? "checked" : ""} ${state?.source !== "live" || pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("temperature")}<span><strong>${L("Yüksek sıcaklık uyarısı", "Thermal alert threshold", lang)}</strong><small>${L("55 °C’de tek bildirim; 50 °C’ye düşünce yeniden etkinleşir.", "Single notification at 55 °C with hysteresis reset below 50 °C.", lang)}</small></span></span>${pill(state?.source === "replay" ? L("Kayıt modunda kapalı", "Off in replay", lang) : L("Etkin", "Active", lang), state?.source === "replay" ? "" : "ok")}</div>
       <div class="setting-row"><span>${icon("lock")}<span><strong>${L("Çalışma yetkisi", "Privilege level", lang)}</strong><small>${L("Bakım ve optimizasyon işlemleri için yönetici olarak açmak gerekir.", "Raw SMART I/O, benchmarks, and tuning require administrator elevation.", lang)}</small></span></span><div class="inline-actions">${pill(state?.admin ? L("Yönetici", "Administrator", lang) : L("Standart kullanıcı", "Standard user", lang))}${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact quiet", pending) : ""}</div></div>
+      <label class="setting-row"><span>${icon("refresh")}<span><strong>${L("Açılışta otomatik güncelleme denetimi", "Check for updates automatically on startup", lang)}</strong><small>${L("Canlı modda açılışta GitHub Releases bir kez kontrol edilir; indirme ve kurulum her zaman SHA-256 ve onayınızla başlar.", "Checks GitHub Releases once on launch in live mode; download and install always require SHA-256 verification and your confirmation.", lang)}</small></span></span><input type="checkbox" role="switch" id="auto-update-setting" ${autoUpdateOn ? "checked" : ""} ${pending ? "disabled" : ""}></label>
       <div class="setting-row"><span>${icon("info")}<span><strong>${L("Sürüm ve güncelleme", "Version &amp; updates", lang)}</strong><small>${e(updateMsg)}</small></span></span><div class="inline-actions">${updateStatus?.status === "up_to_date" && updateStatus.url ? button("open-release", L("GitHub Sürümleri", "GitHub Releases", lang), "arrow", "compact quiet", pending) : ""}${button("check-updates", L("Güncellemeleri kontrol et", "Check for updates", lang), "refresh", "compact quiet", pending)}</div></div>
       ${
         updateStatus?.status === "update_available"
@@ -2412,7 +2433,13 @@ function render() {
   const partialBanner = partialWarnings.length
     ? `<div class="warning-banner" role="status"><div class="warning-banner-main">${icon("alert")}<div class="warning-banner-text"><strong>${L("Kısmi SMART okuma uyarısı", "Partial SMART read warning", lang)}</strong><ul>${partialWarnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></div></div>${!state?.admin && state?.source === "live" ? button("elevate", L("Yönetici olarak aç", "Run as Admin", lang), "lock", "compact primary warning-elevate", pending) : ""}</div>`
     : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.1")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  const updateBanner =
+    updateStatus?.status === "update_available" &&
+    !updateBannerDismissed &&
+    page !== "tools"
+      ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang)}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
+      : "";
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(connectionError)}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(state.error)}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.10.2")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(state.job.phase)}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;
@@ -2558,6 +2585,7 @@ async function poll() {
     ) {
       render();
     }
+    void maybeAutoCheckUpdates();
     await loadDetails();
   } catch (error) {
     connectionError = L(
@@ -2571,6 +2599,22 @@ async function poll() {
     render();
   } finally {
     polling = false;
+  }
+}
+
+async function maybeAutoCheckUpdates() {
+  if (autoUpdateChecked || !state || state.source !== "live") return;
+  if (state.auto_check_updates === false) return;
+  autoUpdateChecked = true;
+  try {
+    const res = await invoke<typeof updateStatus>("check_updates");
+    if (res?.status === "update_available") {
+      updateStatus = res;
+      updateBannerDismissed = false;
+      render();
+    }
+  } catch {
+    // Stay silent on offline/startup network failure.
   }
 }
 
@@ -4096,7 +4140,8 @@ root.addEventListener("click", (event) => {
         );
       else toast(L("Yönetici yükseltme isteği iptal edildi.", "Elevation prompt was cancelled."), true);
     });
-  else if (action === "check-updates")
+  else if (action === "check-updates") {
+    updateBannerDismissed = false;
     void run(async () => {
       updateStatus = await invoke<typeof updateStatus>("check_updates");
       toast(
@@ -4105,7 +4150,10 @@ root.addEventListener("click", (event) => {
           : L("Sürüm durumu kontrol edildi.", "Version check finished."),
       );
     });
-  else if (action === "open-release" && updateStatus?.url)
+  } else if (action === "dismiss-update-banner") {
+    updateBannerDismissed = true;
+    render();
+  } else if (action === "open-release" && updateStatus?.url)
     void invoke("open_release_url", { url: updateStatus.url }).catch((error) =>
       toast(String(error), true),
     );
@@ -4413,7 +4461,34 @@ root.addEventListener("change", (event) => {
     } else {
       toggleWriteGuard(false);
     }
-  } else if (t.id === "autostart-setting" && state)
+  } else if (t.id === "auto-update-setting" && state)
+    void run(async () => {
+      await invoke("set_preferences", {
+        minimiseToTray: state!.minimise_to_tray,
+        theme: document.documentElement.dataset.theme,
+        healthMode: state!.health_mode,
+        language: getLang(),
+        readOnlyGuard: state!.read_only_guard ?? true,
+        autoCheckUpdates: t.checked,
+      });
+      state!.auto_check_updates = t.checked;
+      if (t.checked && state!.source === "live") {
+        autoUpdateChecked = false;
+        void maybeAutoCheckUpdates();
+      }
+      toast(
+        t.checked
+          ? L(
+              "Açılışta otomatik güncelleme denetimi etkinleştirildi.",
+              "Automatic startup update check enabled.",
+            )
+          : L(
+              "Açılışta otomatik güncelleme denetimi kapatıldı.",
+              "Automatic startup update check disabled.",
+            ),
+      );
+    });
+  else if (t.id === "autostart-setting" && state)
     void run(async () => {
       const res = await invoke<{ message?: string }>("optimize_action", {
         request: {

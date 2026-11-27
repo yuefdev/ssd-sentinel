@@ -38,7 +38,12 @@ pub fn redact_value(value: &mut Value) {
             for (k, v) in map.iter_mut() {
                 if matches!(
                     k.as_str(),
-                    "serial" | "os_serial" | "serial_number" | "api_key" | "ai_api_key"
+                    "serial"
+                        | "os_serial"
+                        | "nvme_serial"
+                        | "serial_number"
+                        | "api_key"
+                        | "ai_api_key"
                 ) {
                     if let Some(s) = v.as_str() {
                         if !s.is_empty() {
@@ -268,12 +273,14 @@ mod tests {
             "disks": [{
                 "model": "Test SSD",
                 "serial": "ABCDEF123456",
-                "os_serial": "XYZ987654321"
+                "os_serial": "XYZ987654321",
+                "nvme_serial": "NVME12349876"
             }]
         });
         redact_value(&mut val);
         assert_eq!(val["disks"][0]["serial"], "AB••••••••56");
         assert_eq!(val["disks"][0]["os_serial"], "XY••••••••21");
+        assert_eq!(val["disks"][0]["nvme_serial"], "NV••••••••76");
     }
 
     #[test]

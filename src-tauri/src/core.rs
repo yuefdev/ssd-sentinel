@@ -59,6 +59,7 @@ pub struct Core {
     pub minimise_to_tray: AtomicBool,
     pub strict_health: AtomicBool,
     pub read_only_guard: AtomicBool,
+    pub auto_check_updates: AtomicBool,
     pub language: Mutex<String>,
     busy: Arc<(Mutex<bool>, Condvar)>,
     source_key: String,
@@ -94,6 +95,7 @@ impl Core {
         let minimise = prefs["minimise_to_tray"].as_bool().unwrap_or(false);
         let strict = prefs["health_mode"].as_str() == Some("strict");
         let read_only_guard = prefs["read_only_guard"].as_bool().unwrap_or(true);
+        let auto_check_updates = prefs["auto_check_updates"].as_bool().unwrap_or(true);
         let lang = match prefs["language"].as_str() {
             Some("en") => "en".to_owned(),
             Some("tr") => "tr".to_owned(),
@@ -111,6 +113,7 @@ impl Core {
             minimise_to_tray: AtomicBool::new(minimise),
             strict_health: AtomicBool::new(strict),
             read_only_guard: AtomicBool::new(read_only_guard),
+            auto_check_updates: AtomicBool::new(auto_check_updates),
             language: Mutex::new(lang),
             busy: Arc::new((Mutex::new(false), Condvar::new())),
             source_key,
@@ -145,6 +148,7 @@ impl Core {
             "default"
         });
         data["read_only_guard"] = json!(self.read_only_guard.load(Ordering::SeqCst));
+        data["auto_check_updates"] = json!(self.auto_check_updates.load(Ordering::SeqCst));
         data["language"] = json!(lock(&self.language).clone());
         data["optimizations"] = lock(&self.store)
             .list_optimizations()
@@ -647,19 +651,19 @@ impl Core {
             }
             let letter = letter.ok_or("Bölüm seçin.")?;
             jobs::validate_target(self, &disk, letter, 0, false, false)?;
-            return platform::powershell(
-                "ReTrim",
-                &[
-                    "-DriveLetter".into(),
-                    letter.into(),
-                    "-ExpectedSerial".into(),
-                    disk.os_serial.unwrap_or_default(),
-                    "-ExpectedModel".into(),
-                    disk.model,
-                ],
-                &self.stop,
-                180,
-            );
+            let mut args = vec![
+                "-DriveLetter".into(),
+                letter.into(),
+                "-ExpectedSerial".into(),
+                disk.os_serial.unwrap_or_default(),
+                "-ExpectedModel".into(),
+                disk.os_model.unwrap_or(disk.model),
+            ];
+            if let Some(num) = disk.os_disk_number {
+                args.push("-ExpectedDiskNumber".into());
+                args.push(num.to_string());
+            }
+            return platform::powershell("ReTrim", &args, &self.stop, 180);
         }
         if disk.capabilities["self_test"] != true {
             return Err("Aygıt dahili test desteği bildirmiyor.".into());
@@ -714,6 +718,7 @@ impl Core {
         };
         let minimise = self.minimise_to_tray.load(Ordering::SeqCst);
         let read_only_guard = self.read_only_guard.load(Ordering::SeqCst);
+        let auto_check_updates = self.auto_check_updates.load(Ordering::SeqCst);
         let lang = lock(&self.language).clone();
         std::fs::create_dir_all(&self.config.data_dir).map_err(|e| e.to_string())?;
         let temp = self.config.data_dir.join("preferences.json.tmp");
@@ -723,6 +728,7 @@ impl Core {
                 "minimise_to_tray": minimise,
                 "health_mode": mode,
                 "read_only_guard": read_only_guard,
+                "auto_check_updates": auto_check_updates,
                 "language": lang
             })
             .to_string(),
@@ -766,6 +772,11 @@ impl Core {
             self.refresh();
         }
         Ok(())
+    }
+
+    pub fn set_auto_check_updates(&self, enabled: bool) -> Result<(), String> {
+        self.auto_check_updates.store(enabled, Ordering::SeqCst);
+        self.write_preferences()
     }
 
     pub fn find_recovery_item(

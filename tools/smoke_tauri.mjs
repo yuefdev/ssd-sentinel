@@ -166,6 +166,8 @@ try {
             window.__fixture.state.minimise_to_tray = args.minimiseToTray;
           if (typeof args.readOnlyGuard === "boolean")
             window.__fixture.state.read_only_guard = args.readOnlyGuard;
+          if (typeof args.autoCheckUpdates === "boolean")
+            window.__fixture.state.auto_check_updates = args.autoCheckUpdates;
           return null;
         }
         if (cmd === "save_report") return { saved: true };
@@ -179,10 +181,10 @@ try {
           return structuredClone(
             window.__fixture.mockUpdate || {
               repo: "yuefdev/ssd-sentinel",
-              current: "1.10.1",
+              current: "1.10.2",
               status: "up_to_date",
-              latest: "v1.10.1",
-              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.1",
+              latest: "v1.10.2",
+              url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v1.10.2",
               download_url: null,
               asset_name: null,
               asset_size: null,
@@ -1927,7 +1929,7 @@ try {
   await page.evaluate(() => {
     window.__fixture.mockUpdate = {
       repo: "yuefdev/ssd-sentinel",
-      current: "1.10.1",
+      current: "1.10.2",
       status: "update_available",
       latest: "v2.0.0",
       url: "https://github.com/yuefdev/ssd-sentinel/releases/tag/v2.0.0",

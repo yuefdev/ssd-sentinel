@@ -1939,6 +1939,8 @@ mod tests {
             physical_block_size: Some(4096),
             rotation_rate: (kind == "HDD").then_some(7200),
             nvme_eui64: Vec::new(),
+            nvme_nguid: Vec::new(),
+            wwn: None,
             source_time: None,
             os_disk_number: Some(0),
             os_serial: Some("SER123".into()),

@@ -1,6 +1,6 @@
 [package]
 name = "ssd-sentinel"
-version = "1.10.1"
+version = "1.10.2"
 edition = "2021"
 description = "Windows disk health and diagnostics desktop application"
 license = "MIT"

@@ -28,6 +28,7 @@ import {
   isRecoverableRow,
   isUnopenableMedia,
   isWriteLocked,
+  mappingDisabledReason,
   maskSerial,
   mediaStatusBadge,
   ntfs8dot3Label,
@@ -706,4 +707,74 @@ test("resolveLangFromLocale maps Turkish locales to tr and all other locales to 
   assert.equal(resolveLangFromLocale(""), "en");
   assert.equal(resolveLangFromLocale(null), "en");
   assert.equal(resolveLangFromLocale(undefined), "en");
+});
+
+test("mappingDisabledReason differentiates unstable identity, missing letter, non-admin, and admin mismatch", () => {
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: false, os_disk_number: null, volumes: [] },
+      "tr",
+    ),
+    /benzersiz model\/seri kimliği bildirmedi/,
+  );
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: false, os_disk_number: null, volumes: [] },
+      "en",
+    ),
+    /unique model\/serial identity/,
+  );
+
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: true, os_disk_number: 2, volumes: [] },
+      "tr",
+    ),
+    /Disk 2.*harf atanmış/,
+  );
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: true, os_disk_number: 2, volumes: [] },
+      "en",
+    ),
+    /Disk 2.*no mounted Windows volume/,
+  );
+
+  assert.match(
+    mappingDisabledReason(
+      { admin: false },
+      { stable_identity: true, os_disk_number: null, volumes: [] },
+      "tr",
+    ),
+    /Yönetici olarak aç/,
+  );
+  assert.match(
+    mappingDisabledReason(
+      { admin: false },
+      { stable_identity: true, os_disk_number: null, volumes: [] },
+      "en",
+    ),
+    /Run as Admin/,
+  );
+
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: true, os_disk_number: null, volumes: [] },
+      "tr",
+    ),
+    /RAID\/VMD/,
+  );
+  assert.match(
+    mappingDisabledReason(
+      { admin: true },
+      { stable_identity: true, os_disk_number: null, volumes: [] },
+      "en",
+    ),
+    /RAID\/VMD/,
+  );
 });

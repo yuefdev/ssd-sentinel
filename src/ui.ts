@@ -63,6 +63,37 @@ export function canStart(state: unknown, disk: unknown): boolean {
   );
 }
 
+export function mappingDisabledReason(
+  state: unknown,
+  disk: unknown,
+  lang: Lang = "tr",
+): string {
+  const s = state as { admin?: boolean } | null;
+  const d = disk as {
+    stable_identity?: boolean;
+    os_disk_number?: number | null;
+    volumes?: unknown[];
+  } | null;
+  if (!d?.stable_identity) {
+    return lang === "en"
+      ? "This drive did not report a unique model/serial identity (USB bridge or controller limitation)."
+      : "Bu disk benzersiz model/seri kimliği bildirmedi (USB köprüsü veya denetleyici kısıtı).";
+  }
+  if (d.os_disk_number != null && (!d.volumes || d.volumes.length === 0)) {
+    return lang === "en"
+      ? `Drive matched (Disk ${d.os_disk_number}), but no mounted Windows volume with a drive letter was found.`
+      : `Disk eşleşti (Disk ${d.os_disk_number}), ancak harf atanmış uyumlu Windows bölümü bulunamadı.`;
+  }
+  if (!s?.admin) {
+    return lang === "en"
+      ? "Could not verify Windows volume mapping. Try clicking “Run as Admin” in the top bar."
+      : "Windows bölüm eşlemesi kurulamadı. Sağ üstten “Yönetici olarak aç” ile tekrar deneyin.";
+  }
+  return lang === "en"
+    ? "A verified Windows volume mapping is required (possible RAID/VMD controller or duplicate disk identity)."
+    : "Güvenilir Windows bölüm eşlemesi gerekli (RAID/VMD denetleyici veya çakışan disk kimliği olabilir).";
+}
+
 export function isWriteLocked(state: unknown): boolean {
   const s = state as { read_only_guard?: boolean } | null;
   return s?.read_only_guard === true;
@@ -933,6 +964,7 @@ export function computePollSignature(
     partial_warnings: s.partial_warnings,
     minimise_to_tray: s.minimise_to_tray,
     read_only_guard: s.read_only_guard,
+    auto_check_updates: s.auto_check_updates,
     health_mode: s.health_mode,
     language: s.language,
     version: s.version,
