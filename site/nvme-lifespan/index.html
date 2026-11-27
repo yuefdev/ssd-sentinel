@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How to Check NVMe SSD Lifespan, TBW &amp; Remaining Endurance</title>
+  <meta name="description" content="Learn how to check your NVMe SSD lifespan on Windows: read Percentage Used, Available Spare, Data Units Written (TBW), and track multi-day write-rate forecasts locally with SSD Sentinel." />
+  <link rel="canonical" href="https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="How to Check NVMe SSD Lifespan, TBW &amp; Remaining Endurance" />
+  <meta property="og:description" content="Understand NVMe SMART Percentage Used, TBW calculations, Available Spare, and how SSD Sentinel projects remaining drive lifespan locally." />
+  <meta property="og:url" content="https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/" />
+  <meta property="og:image" content="https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="../favicon.ico" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://yuefdev.github.io/ssd-sentinel/" },
+          { "@type": "ListItem", "position": 2, "name": "NVMe SSD Lifespan", "item": "https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/" }
+        ]
+      },
+      {
+        "@type": "HowTo",
+        "name": "How to Check Your NVMe SSD Lifespan",
+        "description": "Read NVMe Percentage Used, Available Spare, and Data Units Written (TBW) to estimate remaining NAND flash endurance.",
+        "step": [
+          {
+            "@type": "HowToStep",
+            "name": "Read NVMe Percentage Used and Available Spare",
+            "text": "Open SSD Sentinel (or another SMART viewer) and inspect Percentage Used (0% = brand new, 100% = rated endurance reached) alongside Available Spare."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Compare Total Terabytes Written (TBW) Against Spec",
+            "text": "Convert NVMe Data Units Written (1 unit = 512,000 bytes) into TBW and compare it against your SSD datasheet rating."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Track Daily Write Rates Over Time",
+            "text": "Keep SSD Sentinel collecting periodic local SQLite samples (up to 720 samples per disk) to calculate your real daily GB written and years-left forecast."
+          }
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "How can I check my NVMe SSD lifespan?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Check two standardized NVMe SMART attributes: Percentage Used (how much of the manufacturer's rated erase-cycle budget is consumed) and Available Spare (remaining reserve blocks). Free tools like SSD Sentinel read both metrics via smartctl and combine historical write-rate samples in SQLite to project remaining years."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does reaching 0% remaining health or 100% Percentage Used mean my NVMe SSD dies immediately?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. Percentage Used tracks the manufacturer's warranty endurance specification rather than physical failure. Many SSDs continue working well beyond 100% Percentage Used as long as Available Spare stays healthy and Media Errors remain zero, though you should back up and plan replacement."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="../">
+        <img src="../assets/sentinel.svg" alt="SSD Sentinel logo" width="30" height="30" />
+        <span>SSD Sentinel</span>
+      </a>
+      <nav id="site-nav" class="nav-links" aria-label="Primary navigation">
+        <a href="../">Home</a>
+        <a href="../crystaldiskinfo-alternative/">vs CrystalDiskInfo</a>
+        <a href="../hard-disk-sentinel-alternative/">vs Hard Disk Sentinel</a>
+        <a href="../ssd-health-check/">Health Check</a>
+        <a href="./" aria-current="page">NVMe Lifespan</a>
+        <a href="../benchmark/">Benchmark</a>
+        <a href="../faq/">FAQ</a>
+      </nav>
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn btn-sm" type="button">Light Theme</button>
+        <button id="nav-toggle" class="icon-btn btn-sm nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="prose-container">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span>/</span> <span>NVMe SSD Lifespan</span>
+    </nav>
+
+    <h1>How to Check NVMe SSD Lifespan, TBW &amp; Remaining Endurance</h1>
+
+    <div class="answer-box">
+      <p><strong>Direct Answer:</strong> To check your NVMe SSD lifespan on Windows, look at three standardized NVMe SMART Health Log fields: <strong>Percentage Used</strong> (consumed endurance vs. rated spec), <strong>Available Spare</strong> (remaining reserve blocks), and <strong>Data Units Written</strong> (total Terabytes Written, or TBW). <strong>SSD Sentinel</strong> reads these live via <code>smartctl</code> and tracks up to 720 local SQLite telemetry samples to calculate your actual daily write rate and remaining years.</p>
+    </div>
+
+    <section>
+      <h2>Key NVMe SMART Lifespan Metrics Explained</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>NVMe Attribute</th>
+              <th>What It Measures</th>
+              <th>Healthy Range / Action Threshold</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Percentage Used</td>
+              <td>Firmware estimate of rated NAND program/erase endurance consumed</td>
+              <td><code>0%</code> = new; <code>100%</code> = rated TBW reached (monitor closely above 85%)</td>
+            </tr>
+            <tr>
+              <td>Available Spare</td>
+              <td>Normalized percentage of reserve spare blocks still healthy</td>
+              <td>Ideally <code>100%</code>; investigate immediately if declining toward threshold</td>
+            </tr>
+            <tr>
+              <td>Data Units Written</td>
+              <td>Total logical writes in 512 KB units (convert to TBW to compare datasheet spec)</td>
+              <td>Compare against drive's official TBW warranty rating (e.g., 600 TBW per 1 TB drive)</td>
+            </tr>
+            <tr>
+              <td>Media &amp; Data Integrity Errors</td>
+              <td>Uncorrected read/write ECC failures detected by the controller</td>
+              <td>Should remain <code>0</code>; non-zero growth calls for backup &amp; replacement</td>
+            </tr>
+            <tr>
+              <td>Unsafe Shutdowns</td>
+              <td>Unexpected power losses without clean NVMe shutdown notification</td>
+              <td>Avoid hard power-offs; harmless in moderation, risky during active heavy writes</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>How SSD Sentinel Forecasts Years Left Locally</h2>
+      <p>Static wear numbers only tell half the story: an SSD at <code>15%</code> used could last 12 years for a web-browsing laptop or 18 months on a heavy build/video scratch disk. SSD Sentinel records local SMART snapshots inside <code>%LOCALAPPDATA%\SSD Sentinel\history.sqlite3</code> (up to 720 queried samples per disk, 90-day retention) to compute:</p>
+      <ul>
+        <li><strong>Observed Daily Write Rate (GB/day):</strong> Derived directly from host write deltas across real sessions.</li>
+        <li><strong>Endurance Projection:</strong> Combines remaining rated life percentage with measured write velocity — completely offline with zero cloud sync.</li>
+        <li><strong>Per-Disk Fault Isolation:</strong> If one secondary disk refuses SMART access without elevation, SSD Sentinel isolates it with <code>read_incomplete</code> instead of synthesizing fake <code>100%</code> health.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Practical Ways to Extend NVMe Lifespan</h2>
+      <ol>
+        <li><strong>Never run classic HDD defrag on SSDs:</strong> Defragmenting flash wastes erase cycles for zero seek benefit. SSD Sentinel explicitly blocks <code>defrag</code> jobs on non-HDD drives in Rust.</li>
+        <li><strong>Keep free space / Over-Provisioning healthy:</strong> Leaving at least 10%–15% breathing room helps the SSD controller run TRIM and wear-leveling efficiently without heavy write amplification.</li>
+        <li><strong>Offload cold multi-gigabyte caches to secondary HDDs:</strong> SSD Sentinel's Storage Tiering and Developer Workspace tools move heavy media archives, package caches, or local AI model directories to a secondary drive behind SHA-256 verified native NTFS Directory Junctions.</li>
+      </ol>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Check Your NVMe Lifespan with SSD Sentinel</a>
+        <a class="btn" href="../benchmark/">Next: Win32 IOCP Disk Benchmark</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <span><a href="../">SSD Sentinel</a> · MIT License · Zero Telemetry</span>
+        <span><a href="https://github.com/yuefdev/ssd-sentinel">GitHub</a> · <a href="../faq/">FAQ</a> · <a href="../llms.txt">llms.txt</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../site.js" defer></script>
+</body>
+</html>

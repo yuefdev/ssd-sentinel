@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How to Check SSD Health on Windows 10 &amp; Windows 11 (Complete Guide)</title>
+  <meta name="description" content="Learn how to check SSD health on Windows 10 and Windows 11 using built-in Storage Settings, PowerShell Get-PhysicalDisk, and free open-source SMART diagnostics with SSD Sentinel." />
+  <link rel="canonical" href="https://yuefdev.github.io/ssd-sentinel/ssd-health-check/" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="How to Check SSD Health on Windows 10 &amp; Windows 11" />
+  <meta property="og:description" content="Step-by-step instructions to inspect NVMe and SATA SSD health, temperature, SMART errors, and PCIe link speed on Windows 10 and 11." />
+  <meta property="og:url" content="https://yuefdev.github.io/ssd-sentinel/ssd-health-check/" />
+  <meta property="og:image" content="https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-en.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="../favicon.ico" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://yuefdev.github.io/ssd-sentinel/" },
+          { "@type": "ListItem", "position": 2, "name": "Check SSD Health", "item": "https://yuefdev.github.io/ssd-sentinel/ssd-health-check/" }
+        ]
+      },
+      {
+        "@type": "HowTo",
+        "name": "How to Check SSD Health on Windows 10 and Windows 11",
+        "description": "Check basic drive status with Windows Settings and PowerShell, then inspect detailed SMART counters, temperature, and endurance safely in read-only mode.",
+        "step": [
+          {
+            "@type": "HowToStep",
+            "name": "Check Windows 11 Storage Settings",
+            "text": "Open Settings -> System -> Storage -> Advanced storage settings -> Disks & volumes, select your SSD, and click Properties to view basic Windows estimated life and temperature."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Run PowerShell Storage Reliability Query",
+            "text": "Run Get-PhysicalDisk and Get-StorageReliabilityCounter in PowerShell to verify OperationalStatus, HealthStatus, Temperature, Wear, and ReadErrorsUncorrected."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Inspect Full SMART Telemetry Read-Only with SSD Sentinel",
+            "text": "Install and open SSD Sentinel with Default Read-Only Guard enabled to read complete NVMe/SATA SMART attributes, PCIe link speed, endurance trends, and non-destructive LBA latency."
+          }
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is the best free way to check SSD health on Windows 11?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Windows 11 Settings and PowerShell Get-StorageReliabilityCounter show basic health flags, while free open-source tools like SSD Sentinel expose full NVMe/SATA SMART logs, temperature history, endurance trends, and PCIe link bottleneck checks in read-only mode."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does checking SSD health write data or wear down my SSD?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Reading SMART telemetry and running read-only scans do not write user payload data to NAND flash. SSD Sentinel defaults to Read-Only Guard enabled on install so write-intensive benchmarks and repairs stay locked."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="../">
+        <img src="../assets/sentinel.svg" alt="SSD Sentinel logo" width="30" height="30" />
+        <span>SSD Sentinel</span>
+      </a>
+      <nav id="site-nav" class="nav-links" aria-label="Primary navigation">
+        <a href="../">Home</a>
+        <a href="../crystaldiskinfo-alternative/">vs CrystalDiskInfo</a>
+        <a href="../hard-disk-sentinel-alternative/">vs Hard Disk Sentinel</a>
+        <a href="./" aria-current="page">Health Check</a>
+        <a href="../nvme-lifespan/">NVMe Lifespan</a>
+        <a href="../benchmark/">Benchmark</a>
+        <a href="../faq/">FAQ</a>
+      </nav>
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn btn-sm" type="button">Light Theme</button>
+        <button id="nav-toggle" class="icon-btn btn-sm nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="prose-container">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span>/</span> <span>Check SSD Health on Windows</span>
+    </nav>
+
+    <h1>How to Check SSD Health on Windows 10 &amp; Windows 11</h1>
+
+    <div class="answer-box">
+      <p><strong>Quick Summary:</strong> For a fast sanity check, use <strong>Windows Settings</strong> or PowerShell <code>Get-PhysicalDisk</code>. For full SMART error counters, NAND wear percentage, thermal tracking, PCIe link speed verification, and multi-month lifespan projections, use a dedicated open-source monitor like <strong>SSD Sentinel</strong> (which boots with Read-Only Guard enabled so nothing writes to your drive).</p>
+    </div>
+
+    <section>
+      <h2>Step 1: Check Built-In Windows 11 Storage Properties</h2>
+      <p>Windows 11 exposes basic NVMe health estimation natively without installing third-party software:</p>
+      <ol>
+        <li>Open <strong>Settings</strong> → <strong>System</strong> → <strong>Storage</strong> → <strong>Advanced storage settings</strong> → <strong>Disks &amp; volumes</strong>.</li>
+        <li>Expand your physical drive and click <strong>Properties</strong>.</li>
+        <li>Inspect <strong>Estimated remaining life</strong>, <strong>Available spare</strong>, and <strong>Temperature</strong> if supported by the storage driver.</li>
+      </ol>
+      <p><em>Limitation:</em> Many SATA drives, dual-NVMe setups, and external USB enclosures hide detailed error logs or show incomplete metrics in the simplified Windows Settings view.</p>
+    </section>
+
+    <section>
+      <h2>Step 2: Query Storage Reliability Counters in PowerShell</h2>
+      <p>Open Windows Terminal or PowerShell (Administrator gives complete reliability counters across all buses) and run:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="ps-health">Copy</button>
+        <pre><code id="ps-health">Get-PhysicalDisk | Select-Object FriendlyName, MediaType, HealthStatus, OperationalStatus, Size
+Get-PhysicalDisk | Get-StorageReliabilityCounter | Select-Object DeviceId, Temperature, Wear, ReadErrorsUncorrected, WriteErrorsTotal</code></pre>
+      </div>
+      <p>Healthy drives report <code>HealthStatus : Healthy</code>, <code>Wear</code> comfortably below <code>80</code>–<code>90</code>, and <code>0</code> uncorrected read errors.</p>
+    </section>
+
+    <section>
+      <h2>Step 3: Inspect Complete SMART Telemetry &amp; Trends with SSD Sentinel</h2>
+      <p>To inspect vendor-level SMART logs, PCIe link negotiation, and wear trends over time without risking accidental writes:</p>
+      <ol>
+        <li>Download and install <a href="https://github.com/yuefdev/ssd-sentinel/releases/latest">SSD Sentinel</a> (keep <strong>Write Guard</strong> locked in the top toolbar).</li>
+        <li>Select your NVMe SSD, SATA SSD, or HDD in the Drive Overview to view live health %, temperature, power-on hours, and SMART logs queried via bundled <code>smartctl.exe</code>.</li>
+        <li>Check the <strong>PCIe / SATA link status</strong> to confirm an NVMe PCIe 4.0 x4 SSD isn't silently running at x1 or Gen 2 speeds.</li>
+        <li>Export a redacted HTML or JSON diagnostic report from the UI whenever you want a shareable snapshot for troubleshooting.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Warning Signs You Should Back Up Immediately</h2>
+      <ul>
+        <li><strong>NVMe Critical Warning bitmask non-zero:</strong> Firmware has flagged spare depletion, thermal excursion, reliability degradation, or read-only mode.</li>
+        <li><strong>Media and Data Integrity Errors &gt; 0 (NVMe) or Reallocated / Pending Sectors climbing (SATA):</strong> Indicates unreadable NAND pages or failing blocks.</li>
+        <li><strong>Available Spare dropping toward Available Spare Threshold:</strong> The drive's reserve flash pool is nearly exhausted.</li>
+        <li><strong>Sustained temperatures above 70 °C under normal load:</strong> Drives thermal throttle first and accumulate retention errors faster under extreme heat.</li>
+      </ul>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="../nvme-lifespan/">Next: Check NVMe SSD Lifespan &amp; TBW</a>
+        <a class="btn" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Download SSD Sentinel</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <span><a href="../">SSD Sentinel</a> · MIT License · Zero Telemetry</span>
+        <span><a href="https://github.com/yuefdev/ssd-sentinel">GitHub</a> · <a href="../faq/">FAQ</a> · <a href="../llms.txt">llms.txt</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../site.js" defer></script>
+</body>
+</html>

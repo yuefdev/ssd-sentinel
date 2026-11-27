@@ -4,6 +4,7 @@ _archive/
 _target-keep-*/
 data/
 results/
+_site/
 tools/smartmontools/
 tools/smartmontools-*.exe
 graphify-out/

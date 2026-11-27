@@ -2,10 +2,11 @@
 
 <img src="src-tauri/icons/128x128@2x.png" width="116" height="116" alt="SSD Sentinel logo" />
 
-# SSD Sentinel
+# SSD Sentinel — Free & Open-Source SSD Health Monitor for Windows
 
-**The local-first Windows storage diagnostics & safety suite built with Rust & Tauri 2.**<br/>
-**SMART health & endurance forecasting · Win32 IOCP Direct-I/O benchmark · Deterministic LBA surface triage & repair · Read-only NTFS forensic recovery · SHA-256 NTFS Junction tiering — all in a ~3.5 MB offline-first installer.**
+**Free, open-source SSD & HDD health monitoring, SMART diagnostics, disk benchmarking, LBA surface scanning, and read-only NTFS file recovery for Windows 10 and Windows 11.**<br/>
+Built from scratch in **Rust & Tauri 2** as a transparent, ad-free, offline-first alternative to **CrystalDiskInfo** and **Hard Disk Sentinel**.<br/>
+<sub>SMART wear &amp; endurance forecasting · Win32 IOCP Direct-I/O benchmark · Deterministic LBA surface triage &amp; repair · Read-only NTFS forensic recovery · SHA-256 NTFS Junction tiering — all in a ~3.7 MB installer.</sub>
 
 [![Latest Release](https://img.shields.io/github/v/release/yuefdev/ssd-sentinel?style=flat-square&color=4da6ff&label=Release)](https://github.com/yuefdev/ssd-sentinel/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/yuefdev/ssd-sentinel/total?style=flat-square&color=1b5ea8&label=Downloads)](https://github.com/yuefdev/ssd-sentinel/releases)
@@ -14,7 +15,7 @@
 [![Platform: Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20(x64)-0c0f14?style=flat-square)](https://github.com/yuefdev/ssd-sentinel/releases/latest)
 [![UI: EN / TR](https://img.shields.io/badge/UI%20%26%20Tray-EN%20%7C%20TR-4da6ff?style=flat-square)](#türkçe-özet)
 
-### [Architecture Spec](docs/ARCHITECTURE.md) · [Safety & Crash Spec](docs/SAFETY_SPEC.md) · [Download Installer (`.exe`)](https://github.com/yuefdev/ssd-sentinel/releases/latest) · [Releases & `SHA256SUMS.txt`](https://github.com/yuefdev/ssd-sentinel/releases) · [Türkçe Özet](#türkçe-özet)
+### [Website](https://yuefdev.github.io/ssd-sentinel/) · [vs CrystalDiskInfo](https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/) · [Hard Disk Sentinel Alternative](https://yuefdev.github.io/ssd-sentinel/hard-disk-sentinel-alternative/) · [Architecture Spec](docs/ARCHITECTURE.md) · [Safety & Crash Spec](docs/SAFETY_SPEC.md) · [Download Installer (`.exe`)](https://github.com/yuefdev/ssd-sentinel/releases/latest) · [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/) · [Türkçe Özet](#türkçe-özet)
 
 </div>
 
@@ -133,6 +134,42 @@ npm run tauri -- build --bundles nsis
 - Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SAFETY_SPEC.md`](docs/SAFETY_SPEC.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Browse or open [Bug Reports & Feature Requests](https://github.com/yuefdev/ssd-sentinel/issues)
 - Review our [Security Policy](SECURITY.md) & [Changelog](CHANGELOG.md)
+
+---
+
+## Why SSD Sentinel? (Quick Comparison)
+
+Looking for a **free, open-source alternative to CrystalDiskInfo or Hard Disk Sentinel** on Windows 10/11? **SSD Sentinel** unifies live SMART monitoring, endurance forecasting, raw Win32 IOCP benchmarking, LBA surface diagnostics, and read-only NTFS recovery behind a hardware-protective **Default Read-Only Guard**.
+
+| Capability | SSD Sentinel (`v1.10.1`) | CrystalDiskInfo | Hard Disk Sentinel |
+|---|---|---|---|
+| **License & Cost** | **MIT** (Free & Open Source; `smartctl` GPLv2+) | **MIT** (Freeware / Open Source) | Commercial (Limited Free Trial; Paid Standard/Pro) |
+| **Ads & Hidden Telemetry** | **Zero ads, zero telemetry, offline-first** | Clean open-source (themed editions available) | No telemetry |
+| **NVMe, SATA SSD & HDD SMART** | Live via `smartctl` + per-disk fault isolation | Broad SMART & legacy USB bridge support | Deep SMART + RAID/Enterprise controller support |
+| **Endurance & Lifespan Forecast** | **720-sample local SQLite write-rate & years-left projection** | Basic remaining health % | Wear & estimated lifetime projections |
+| **Built-in Disk Benchmark** | **Win32 IOCP Direct-I/O** (`SEQ`, `RND 4K`, IOPS, µs, PCIe/SATA link check) | Separate app (CrystalDiskMark) | Included in paid Pro editions |
+| **Surface Scan & Bad Sectors** | **200-zone raw LBA read-only scan**, `53 °C` thermal & `+8` cascade watchdogs, `FSCTL_MOVE_FILE` repair | Not included | Surface tests & reinitialization (Pro) |
+| **NTFS File Recovery** | **Read-only `$MFT`, `$UsnJrnl`, `$I30`, VSS, carving & media repair** | Not included | Not included |
+| **Default Write Protection** | **Read-Only Guard (`true` on boot)** + Dry-Run IPC tokens | Read-only SMART viewer | Configuration-driven |
+| **Code Signing & Maturity** | Unsigned community builds (`SHA256SUMS.txt` + SLSA attestation) | Long-established & Authenticode-signed | Long-established & Authenticode-signed |
+
+Full breakdowns: [SSD Sentinel vs CrystalDiskInfo](https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/) · [Free Hard Disk Sentinel Alternative](https://yuefdev.github.io/ssd-sentinel/hard-disk-sentinel-alternative/)
+
+---
+
+## Frequently Asked Questions
+
+**Is SSD Sentinel completely free and open-source?**
+Yes. SSD Sentinel's Rust, TypeScript, CSS, and PowerShell source code is MIT-licensed with zero paid Pro tiers, ads, or telemetry. Windows builds bundle upstream `smartmontools 7.5` (`smartctl.exe`, GNU GPL-2.0-or-later) alongside its matching source archive on GitHub Releases.
+
+**How do I check NVMe SSD health and lifespan on Windows 11?**
+Install SSD Sentinel, leave the **Write Guard** locked for pure read-only inspection, and check the Drive Overview for SMART health %, `Percentage Used`, `Available Spare`, temperature, Data Units Written (TBW), and the SQLite endurance projection. See our full [NVMe SSD Lifespan Guide](https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/) and [Windows SSD Health Check Guide](https://yuefdev.github.io/ssd-sentinel/ssd-health-check/).
+
+**Is SSD Sentinel safe to run on my OS drive?**
+Yes. Every fresh install boots with `read_only_guard = true` enforced in Rust (`src-tauri/src/core.rs`), blocking benchmarks, repairs, tiering, and system policy writes until you explicitly unlock the guard and approve a structured Dry-Run execution manifest. You can also test the full interface with zero physical disk access using `--snapshot-dir .\src-tauri\tests\fixtures`.
+
+**Why does Windows SmartScreen warn on the installer?**
+Community installers do not currently use a paid commercial Authenticode certificate. Always verify the downloaded `.exe` against `SHA256SUMS.txt` or `gh attestation verify "SSD-Sentinel_1.10.1_x64-setup.exe" --owner yuefdev` before running, or read the full [FAQ](https://yuefdev.github.io/ssd-sentinel/faq/).
 
 ---
 

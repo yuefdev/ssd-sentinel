@@ -1,0 +1,26 @@
+# SSD Sentinel
+
+> Free, open-source (MIT) SSD & HDD health monitor, SMART diagnostics, Win32 IOCP Direct-I/O disk benchmark, deterministic LBA surface scanner, SHA-256 NTFS tiering manager, and strictly read-only NTFS forensic file recovery suite for Windows 10 and Windows 11 (x64).
+
+- Latest Release: v1.10.1 (`SSD-Sentinel_1.10.1_x64-setup.exe`, ~3.7 MB NSIS installer)
+- SHA-256 (`SSD-Sentinel_1.10.1_x64-setup.exe`): `59F702BF91135EB1A64A9B8A5732BB4651D7EBA719C87D359E29C6A1806015BC`
+- Tech Stack: Rust + Tauri 2 + TypeScript + Win32/NTFS Kernel APIs + bundled `smartmontools 7.5` (`smartctl.exe`, GNU GPL-2.0-or-later)
+- Safety Model: Default Read-Only Guard (`read_only_guard = true` on fresh installs), structured Dry-Run Execution Manifest with deterministic IPC confirmation tokens, zero hidden telemetry, zero AI/ML models, SLSA Build Provenance attestations, and `SHA256SUMS.txt` verification.
+
+## Website Pages
+
+- [Home — SSD Sentinel Free SSD Health Monitor](https://yuefdev.github.io/ssd-sentinel/): Overview, core features, screenshots, and verified release download.
+- [SSD Sentinel vs CrystalDiskInfo](https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/): Honest open-source comparison with CrystalDiskInfo.
+- [Free Hard Disk Sentinel Alternative](https://yuefdev.github.io/ssd-sentinel/hard-disk-sentinel-alternative/): Feature-by-feature comparison with Hard Disk Sentinel.
+- [How to Check SSD Health on Windows 10 & 11](https://yuefdev.github.io/ssd-sentinel/ssd-health-check/): Step-by-step SMART, PowerShell, and physical warning-sign guide.
+- [How to Check NVMe SSD Lifespan & TBW](https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/): Interpreting NVMe Percentage Used, Available Spare, and 720-sample endurance forecasts.
+- [Free SSD Benchmark Tool (Win32 IOCP Direct-I/O)](https://yuefdev.github.io/ssd-sentinel/benchmark/): Unbuffered Direct-I/O throughput, IOPS, latency, and PCIe/SATA link bottleneck detection.
+- [Frequently Asked Questions](https://yuefdev.github.io/ssd-sentinel/faq/): Answers on safety, SmartScreen unsigned notices, Read-Only Guard, licensing, and Snapshot Replay Mode.
+
+## Source & Engineering Documentation
+
+- [GitHub Repository](https://github.com/yuefdev/ssd-sentinel)
+- [GitHub Releases & SHA256SUMS.txt](https://github.com/yuefdev/ssd-sentinel/releases)
+- [Architecture Specification](https://github.com/yuefdev/ssd-sentinel/blob/main/docs/ARCHITECTURE.md)
+- [Safety & Crash-Consistency Spec](https://github.com/yuefdev/ssd-sentinel/blob/main/docs/SAFETY_SPEC.md)
+- [Security Policy](https://github.com/yuefdev/ssd-sentinel/blob/main/SECURITY.md)

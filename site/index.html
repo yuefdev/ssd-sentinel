@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSD Sentinel — Free &amp; Open-Source SSD Health Monitor for Windows</title>
+  <meta name="description" content="Free, open-source (MIT) SSD &amp; HDD health monitor, SMART diagnostics, Win32 IOCP benchmark, LBA surface scanner, and read-only NTFS file recovery for Windows 10/11. An alternative to CrystalDiskInfo and Hard Disk Sentinel." />
+  <link rel="canonical" href="https://yuefdev.github.io/ssd-sentinel/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="SSD Sentinel — Free &amp; Open-Source SSD Health Monitor for Windows" />
+  <meta property="og:description" content="Local-first Windows storage diagnostics &amp; safety suite in Rust &amp; Tauri 2: SMART forecasting, Win32 IOCP Direct-I/O benchmark, LBA surface repair, SHA-256 NTFS tiering, and read-only recovery." />
+  <meta property="og:url" content="https://yuefdev.github.io/ssd-sentinel/" />
+  <meta property="og:image" content="https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SSD Sentinel — Free &amp; Open-Source SSD Health Monitor for Windows" />
+  <meta name="twitter:description" content="Open-source Windows alternative to CrystalDiskInfo and Hard Disk Sentinel with Default Read-Only Guard, Win32 IOCP benchmark, and NTFS forensic recovery." />
+  <meta name="twitter:image" content="https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png" />
+  <link rel="icon" href="./favicon.ico" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "name": "SSD Sentinel",
+        "url": "https://yuefdev.github.io/ssd-sentinel/",
+        "description": "Free, open-source Windows storage diagnostics, SMART monitoring, disk benchmarking, and read-only NTFS file recovery."
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "SSD Sentinel",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows 10, Windows 11 (x64)",
+        "softwareVersion": "1.10.1",
+        "datePublished": "2026-11-26",
+        "license": "https://github.com/yuefdev/ssd-sentinel/blob/main/LICENSE",
+        "url": "https://yuefdev.github.io/ssd-sentinel/",
+        "downloadUrl": "https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe",
+        "screenshot": "https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png",
+        "author": {
+          "@type": "Person",
+          "name": "yuefdev",
+          "url": "https://github.com/yuefdev"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "featureList": [
+          "Live NVMe, SATA SSD, and HDD SMART monitoring with 720-sample endurance forecasting",
+          "Default Read-Only Guard (read_only_guard = true) and Dry-Run Execution Manifests",
+          "Win32 IOCP Direct-I/O SEQ and RND 4K disk benchmark with PCIe/SATA link bottleneck detection",
+          "200-zone raw LBA read-only surface scan with thermal and SMART cascade watchdogs",
+          "SHA-256 verified NTFS Directory Junction storage tiering and one-click rollback",
+          "Strictly read-only NTFS forensic recovery ($MFT, $UsnJrnl, $I30, VSS, carving, media repair)"
+        ]
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="./">
+        <img src="./assets/sentinel.svg" alt="SSD Sentinel logo" width="30" height="30" />
+        <span>SSD Sentinel</span>
+      </a>
+      <nav id="site-nav" class="nav-links" aria-label="Primary navigation">
+        <a href="./" aria-current="page">Home</a>
+        <a href="./crystaldiskinfo-alternative/">vs CrystalDiskInfo</a>
+        <a href="./hard-disk-sentinel-alternative/">vs Hard Disk Sentinel</a>
+        <a href="./ssd-health-check/">Health Check</a>
+        <a href="./nvme-lifespan/">NVMe Lifespan</a>
+        <a href="./benchmark/">Benchmark</a>
+        <a href="./faq/">FAQ</a>
+      </nav>
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn btn-sm" type="button">Light Theme</button>
+        <button id="nav-toggle" class="icon-btn btn-sm nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <div class="pill-row">
+          <span class="pill pill-ok">MIT Open Source</span>
+          <span class="pill pill-accent">Windows 10 / 11 x64</span>
+          <span class="pill">v1.10.1 · ~3.7 MB</span>
+        </div>
+        <h1>SSD Sentinel — Free &amp; Open-Source SSD Health Monitor for Windows</h1>
+        <p class="lead">
+          Monitor NVMe &amp; SATA SMART health, project drive lifespan, run Win32 IOCP Direct-I/O benchmarks, inspect raw LBA surfaces, and recover deleted NTFS files read-only — with <strong>zero ads</strong>, <strong>zero hidden telemetry</strong>, and a hardware-safe <strong>Default Read-Only Guard</strong>.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Download Installer (v1.10.1)</a>
+          <a class="btn" href="https://github.com/yuefdev/ssd-sentinel">View Source on GitHub</a>
+          <a class="btn" href="./crystaldiskinfo-alternative/">Compare Alternatives</a>
+        </div>
+        <p class="meta-note">
+          Built with Rust &amp; Tauri 2 against documented Win32/NTFS APIs and bundled <code>smartmontools 7.5</code> (GPLv2+). Bilingual English &amp; Turkish UI.
+        </p>
+      </div>
+      <figure class="shot-frame">
+        <img src="./assets/screenshots/overview-dark-en.png" alt="SSD Sentinel overview showing NVMe SMART health percentage, temperature, Write Guard, and endurance forecast" width="1280" height="860" />
+        <figcaption class="shot-caption">Precision Storage Lab interface — live SMART telemetry, Read-Only Write Guard lock, and SQLite write-rate endurance projection.</figcaption>
+      </figure>
+    </section>
+
+    <section class="stat-strip" aria-label="Key technical specifications">
+      <div class="stat-box">
+        <div class="stat-value">100% Free</div>
+        <div class="stat-label">MIT license · no Pro paywalls</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">Read-Only Boot</div>
+        <div class="stat-label">Mutating ops locked in Rust by default</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">Zero Telemetry</div>
+        <div class="stat-label">Offline-first local SQLite history</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">SLSA + SHA-256</div>
+        <div class="stat-label">Verifiable GitHub Releases provenance</div>
+      </div>
+    </section>
+
+    <div class="answer-box">
+      <p><strong>What is SSD Sentinel?</strong> SSD Sentinel is a clean-room Windows 10/11 storage diagnostics and safety suite written in Rust and TypeScript. Designed as a free, open-source alternative to <a href="./crystaldiskinfo-alternative/">CrystalDiskInfo</a> and <a href="./hard-disk-sentinel-alternative/">Hard Disk Sentinel</a>, it combines SMART health tracking, wear forecasting, raw Win32 IOCP benchmarking, 200-zone LBA surface diagnostics, SHA-256 NTFS Junction tiering, and strictly read-only forensic file recovery in a single ~3.7 MB installer.</p>
+    </div>
+
+    <section>
+      <h2>Core Capabilities Built for Drive Safety</h2>
+      <div class="grid-3">
+        <article class="card">
+          <h3>SMART &amp; Endurance Forecasting</h3>
+          <p>Reads live NVMe, SATA SSD, and HDD SMART counters via <code>smartctl</code> with per-disk fault isolation (<code>read_incomplete</code>). Logs up to 720 samples locally in SQLite to project daily write rates and remaining years.</p>
+        </article>
+        <article class="card">
+          <h3>Win32 IOCP Direct-I/O Benchmark</h3>
+          <p>Measures true unbuffered storage throughput (SEQ &amp; RND 4K MB/s, IOPS, µs latency) using <code>FILE_FLAG_NO_BUFFERING | OVERLAPPED</code> and checks PCIe/SATA link speeds for hardware bottlenecks.</p>
+        </article>
+        <article class="card">
+          <h3>200-Zone Surface Scan &amp; Repair</h3>
+          <p>Performs read-only raw LBA latency mapping with resumable checkpoints, a <code>53 °C</code> thermal cooldown pause, a <code>+8</code> reallocated sector cascade abort, and atomic <code>FSCTL_MOVE_FILE</code> cluster relocation.</p>
+        </article>
+        <article class="card">
+          <h3>Read-Only NTFS Recovery</h3>
+          <p>Scans <code>$MFT</code>, <code>$UsnJrnl</code>, <code>$I30</code> slack, VSS Shadow Copies, and file signatures strictly read-only, reconstructs deleted apps, and repairs JPEG/PNG/MP4 headers into a separate destination folder.</p>
+        </article>
+        <article class="card">
+          <h3>SHA-256 NTFS Storage Tiering</h3>
+          <p>Blocks classic SSD defrag while offloading cold folders or developer/LLM caches across volumes using streaming SHA-256 verification and native <code>FSCTL_SET_REPARSE_POINT</code> junctions with one-click rollback.</p>
+        </article>
+        <article class="card">
+          <h3>Default Read-Only Write Guard</h3>
+          <p>Every fresh install boots with <code>read_only_guard = true</code> in Rust. Benchmarks, surface repairs, tier moves, and policy changes stay locked until explicitly unlocked and confirmed via Dry-Run Execution Manifests.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Visual Tour</h2>
+      <div class="grid-2">
+        <figure class="shot-frame">
+          <img src="./assets/screenshots/overview-en.png" alt="SSD Sentinel light theme overview with NVMe SMART metrics" loading="lazy" />
+          <figcaption class="shot-caption">Light &amp; dark storage lab themes with tabular monospace SMART telemetry.</figcaption>
+        </figure>
+        <figure class="shot-frame">
+          <img src="./assets/screenshots/surface-diagnosis.png" alt="200-Zone LBA Surface Map and deterministic diagnosis view" loading="lazy" />
+          <figcaption class="shot-caption">200-Zone LBA Surface Map and deterministic statistical triage (zero AI/ML guessing).</figcaption>
+        </figure>
+        <figure class="shot-frame">
+          <img src="./assets/screenshots/optimize-tiering.png" alt="Storage policy optimization and SHA-256 NTFS tiering screen" loading="lazy" />
+          <figcaption class="shot-caption">Storage policy controls (TRIM, write cache, PCIe ASPM, Over-Provisioning) and NTFS Junction offloading.</figcaption>
+        </figure>
+        <figure class="shot-frame">
+          <img src="./assets/screenshots/recovery-center.png" alt="Read-only Recovery Center showing deleted apps and recoverable files" loading="lazy" />
+          <figcaption class="shot-caption">Strictly read-only Forensic Recovery Center for files, media headers, and deleted applications.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section>
+      <h2>Inspect Safely &amp; Verify Every Release Binary</h2>
+      <div class="notice-amber">
+        <p><strong>Code Signing Transparency (SmartScreen):</strong> Community installers are currently open-source unsigned builds (no commercial EV Authenticode certificate), so Windows Defender SmartScreen may show an "Unknown Publisher" prompt on first launch. Verify every download cryptographically before running:</p>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="verify-cmd">Copy</button>
+        <pre><code id="verify-cmd">gh attestation verify "SSD-Sentinel_1.10.1_x64-setup.exe" --owner yuefdev
+# Expected SHA-256 for v1.10.1 installer:
+# 59F702BF91135EB1A64A9B8A5732BB4651D7EBA719C87D359E29C6A1806015BC</code></pre>
+      </div>
+      <p>Want to explore the interface with <strong>zero physical disk access</strong>? Launch Snapshot Replay Mode against anonymized repo fixtures:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="snapshot-cmd">Copy</button>
+        <pre><code id="snapshot-cmd">.\ssd-sentinel.exe --snapshot-dir .\src-tauri\tests\fixtures</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>Guides &amp; Comparisons</h2>
+      <div class="grid-3">
+        <article class="card">
+          <h3><a href="./crystaldiskinfo-alternative/">SSD Sentinel vs CrystalDiskInfo</a></h3>
+          <p>Side-by-side look at SMART monitoring, benchmarking, surface scans, recovery, and signed-binary maturity.</p>
+        </article>
+        <article class="card">
+          <h3><a href="./hard-disk-sentinel-alternative/">Free Hard Disk Sentinel Alternative</a></h3>
+          <p>How MIT-licensed SSD Sentinel compares to Hard Disk Sentinel Free &amp; Pro on Windows 10 and 11.</p>
+        </article>
+        <article class="card">
+          <h3><a href="./ssd-health-check/">Check SSD Health on Windows 11</a></h3>
+          <p>Step-by-step guide using built-in Windows tools and full SMART attribute diagnostics.</p>
+        </article>
+        <article class="card">
+          <h3><a href="./nvme-lifespan/">Check NVMe SSD Lifespan &amp; TBW</a></h3>
+          <p>Understand Percentage Used, Available Spare, Data Units Written, and write-rate projections.</p>
+        </article>
+        <article class="card">
+          <h3><a href="./benchmark/">Win32 IOCP Disk Benchmark</a></h3>
+          <p>Why unbuffered Direct-I/O measurements matter and how PCIe/SATA link checks spot bottlenecks.</p>
+        </article>
+        <article class="card">
+          <h3><a href="./faq/">Frequently Asked Questions</a></h3>
+          <p>Answers on Read-Only Guard, licensing, smartmontools bundling, privacy, and building from source.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-col">
+          <h4>SSD Sentinel</h4>
+          <p>Clean-room Windows 10/11 storage diagnostics &amp; data-safety suite built with Rust and Tauri 2. Zero ads, zero telemetry.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Comparisons</h4>
+          <ul>
+            <li><a href="./crystaldiskinfo-alternative/">vs CrystalDiskInfo</a></li>
+            <li><a href="./hard-disk-sentinel-alternative/">vs Hard Disk Sentinel</a></li>
+            <li><a href="./benchmark/">IOCP Benchmark</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Guides</h4>
+          <ul>
+            <li><a href="./ssd-health-check/">Check SSD Health</a></li>
+            <li><a href="./nvme-lifespan/">NVMe SSD Lifespan</a></li>
+            <li><a href="./faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Project &amp; Specs</h4>
+          <ul>
+            <li><a href="https://github.com/yuefdev/ssd-sentinel">GitHub Repository</a></li>
+            <li><a href="https://github.com/yuefdev/ssd-sentinel/releases">Releases &amp; Checksums</a></li>
+            <li><a href="https://github.com/yuefdev/ssd-sentinel/blob/main/docs/ARCHITECTURE.md">Architecture Spec</a></li>
+            <li><a href="https://github.com/yuefdev/ssd-sentinel/blob/main/docs/SAFETY_SPEC.md">Safety &amp; Crash Spec</a></li>
+            <li><a href="./llms.txt">llms.txt</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>Original code: MIT License · Bundled smartmontools 7.5: GNU GPL-2.0-or-later</span>
+        <span>Updated 2026-11-27 · yuefdev/ssd-sentinel</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./site.js" defer></script>
+</body>
+</html>

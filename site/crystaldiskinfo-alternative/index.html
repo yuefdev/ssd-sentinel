@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSD Sentinel vs CrystalDiskInfo: Open-Source Windows Comparison</title>
+  <meta name="description" content="Compare SSD Sentinel and CrystalDiskInfo for Windows 10/11: open-source licensing, SMART monitoring, endurance forecasting, Win32 IOCP benchmarking, LBA surface scans, NTFS recovery, and safety." />
+  <link rel="canonical" href="https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="SSD Sentinel vs CrystalDiskInfo: Open-Source Windows Comparison" />
+  <meta property="og:description" content="A factual comparison of SSD Sentinel and CrystalDiskInfo for Windows 10 and 11 SSD health monitoring, benchmarking, surface repair, and file recovery." />
+  <meta property="og:url" content="https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/" />
+  <meta property="og:image" content="https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" href="../favicon.ico" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://yuefdev.github.io/ssd-sentinel/" },
+          { "@type": "ListItem", "position": 2, "name": "vs CrystalDiskInfo", "item": "https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/" }
+        ]
+      },
+      {
+        "@type": "Article",
+        "headline": "SSD Sentinel vs CrystalDiskInfo: Open-Source Windows Comparison",
+        "datePublished": "2026-11-27",
+        "dateModified": "2026-11-27",
+        "author": { "@type": "Person", "name": "yuefdev" },
+        "mainEntityOfPage": "https://yuefdev.github.io/ssd-sentinel/crystaldiskinfo-alternative/"
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Is SSD Sentinel a good open-source alternative to CrystalDiskInfo?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. Both are MIT-licensed and free on Windows. CrystalDiskInfo excels as a lightweight, signed SMART viewer with broad legacy USB bridge support, while SSD Sentinel combines SMART monitoring and 720-sample endurance forecasting with a built-in Win32 IOCP benchmark, 200-zone LBA surface scan, SHA-256 NTFS tiering, and read-only NTFS file recovery."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does SSD Sentinel replace both CrystalDiskInfo and CrystalDiskMark?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "For many Windows 10 and 11 users, yes. SSD Sentinel pairs live SMART diagnostics with a built-in Win32 IOCP Direct-I/O benchmark (SEQ, RND 4K, IOPS, latency, and PCIe/SATA link checks), avoiding the need to install separate utilities."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "When should I still choose CrystalDiskInfo over SSD Sentinel?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Choose CrystalDiskInfo if you strictly need a commercial Authenticode-signed installer to avoid SmartScreen prompts, or if you diagnose older external USB-to-SATA bridge enclosures that require CrystalDiskInfo's long-standing custom pass-through tables."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="../">
+        <img src="../assets/sentinel.svg" alt="SSD Sentinel logo" width="30" height="30" />
+        <span>SSD Sentinel</span>
+      </a>
+      <nav id="site-nav" class="nav-links" aria-label="Primary navigation">
+        <a href="../">Home</a>
+        <a href="./" aria-current="page">vs CrystalDiskInfo</a>
+        <a href="../hard-disk-sentinel-alternative/">vs Hard Disk Sentinel</a>
+        <a href="../ssd-health-check/">Health Check</a>
+        <a href="../nvme-lifespan/">NVMe Lifespan</a>
+        <a href="../benchmark/">Benchmark</a>
+        <a href="../faq/">FAQ</a>
+      </nav>
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn btn-sm" type="button">Light Theme</button>
+        <button id="nav-toggle" class="icon-btn btn-sm nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="prose-container">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span>/</span> <span>vs CrystalDiskInfo</span>
+    </nav>
+
+    <h1>SSD Sentinel vs CrystalDiskInfo: Open-Source Windows Comparison</h1>
+
+    <div class="answer-box">
+      <p><strong>Direct Answer:</strong> Both <strong>SSD Sentinel</strong> and <strong>CrystalDiskInfo</strong> are free, MIT-licensed Windows storage tools. Choose <strong>CrystalDiskInfo</strong> when you want a minimal, Authenticode-signed SMART reader with deep legacy USB enclosure coverage. Choose <strong>SSD Sentinel</strong> when you want an all-in-one Rust/Tauri workspace combining SMART health &amp; SQLite lifespan forecasting, a Win32 IOCP disk benchmark, 200-zone raw LBA surface scanning, SHA-256 NTFS tiering, and read-only NTFS file recovery protected by a Default Read-Only Guard.</p>
+    </div>
+
+    <section>
+      <h2>Feature-by-Feature Comparison</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>SSD Sentinel (v1.10.1)</th>
+              <th>CrystalDiskInfo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>License &amp; Cost</td>
+              <td>MIT (free, open-source; <code>smartmontools 7.5</code> GPLv2+ bundled)</td>
+              <td>MIT (freeware / open-source)</td>
+            </tr>
+            <tr>
+              <td>Architecture &amp; Stack</td>
+              <td>Rust + Tauri 2 + TypeScript + Win32/NTFS kernel APIs</td>
+              <td>C++ / MFC native Windows desktop application</td>
+            </tr>
+            <tr>
+              <td>SMART Monitoring</td>
+              <td>Live NVMe, SATA SSD &amp; HDD via <code>smartctl</code> + per-disk fault isolation</td>
+              <td>Broad SMART coverage plus extensive legacy USB-SATA bridge workarounds</td>
+            </tr>
+            <tr>
+              <td>Endurance &amp; Lifespan Trend</td>
+              <td>720-sample local SQLite history, daily write-rate &amp; years-left forecast</td>
+              <td>Current remaining health % and power-on counters</td>
+            </tr>
+            <tr>
+              <td>Disk Benchmark</td>
+              <td>Built-in Win32 IOCP Direct-I/O (SEQ, RND 4K, IOPS, µs, link speed check)</td>
+              <td>Separate download (CrystalDiskMark)</td>
+            </tr>
+            <tr>
+              <td>LBA Surface Scan &amp; Repair</td>
+              <td>200-zone read-only LBA map, <code>53 °C</code> thermal &amp; <code>+8</code> cascade watchdogs, <code>FSCTL_MOVE_FILE</code> relocation</td>
+              <td>Not included</td>
+            </tr>
+            <tr>
+              <td>Read-Only File Recovery</td>
+              <td>Built-in <code>$MFT</code>, <code>$UsnJrnl</code>, <code>$I30</code>, VSS, carving, deleted app &amp; media header repair</td>
+              <td>Not included</td>
+            </tr>
+            <tr>
+              <td>Storage Tiering &amp; Dev Tools</td>
+              <td>SHA-256 NTFS Directory Junction offloading + WSL2/Docker <code>.vhdx</code> compaction</td>
+              <td>Not included</td>
+            </tr>
+            <tr>
+              <td>Write Protection</td>
+              <td>Default <code>read_only_guard = true</code> in Rust + Dry-Run IPC confirmation manifests</td>
+              <td>Read-only SMART reader by nature</td>
+            </tr>
+            <tr>
+              <td>Code Signing &amp; Maturity</td>
+              <td>Unsigned open-source builds (verify via <code>SHA256SUMS.txt</code> &amp; SLSA attestation)</td>
+              <td>Years of ecosystem maturity &amp; Authenticode-signed installers</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>When to Pick SSD Sentinel</h2>
+      <ul>
+        <li><strong>One suite instead of three tools:</strong> You want SMART health monitoring, an unbuffered <a href="../benchmark/">IOCP disk benchmark</a>, surface latency inspection, and read-only NTFS file recovery in a single ~3.7 MB install.</li>
+        <li><strong>Longitudinal NVMe wear tracking:</strong> SSD Sentinel stores up to 720 local SQLite telemetry samples per disk to turn raw <a href="../nvme-lifespan/">TBW and Percentage Used</a> readings into write-rate projections.</li>
+        <li><strong>Auditable safety boundaries:</strong> Every mutating workflow is locked behind <code>read_only_guard = true</code> on fresh installs, requires a structured Dry-Run execution manifest, and is verified in CI against real NTFS VHDX disks.</li>
+        <li><strong>Developer &amp; Windows 11 workflows:</strong> Built-in WSL2/Docker <code>.vhdx</code> compaction, rebuildable artifact discovery, and SHA-256 NTFS junction offloading keep OS SSDs lean without touching <code>.git</code> or <code>.env</code>.</li>
+      </ul>
+
+      <h2>When CrystalDiskInfo Is Still Better</h2>
+      <ul>
+        <li><strong>Locked-down corporate machines:</strong> CrystalDiskInfo distributes Authenticode-signed binaries that bypass Windows SmartScreen "Unknown Publisher" warnings.</li>
+        <li><strong>Exotic external USB enclosures:</strong> CrystalDiskInfo maintains years of vendor-specific USB bridge pass-through heuristics; if a specific bridge blocks standard <code>smartctl</code> pass-through, CrystalDiskInfo may still recognize it.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Frequently Asked Questions</h2>
+      <div class="faq-list">
+        <article class="faq-item">
+          <h3>Is SSD Sentinel a good open-source alternative to CrystalDiskInfo?</h3>
+          <p>Yes. Both are MIT-licensed and free on Windows. CrystalDiskInfo shines as a lightweight, signed SMART viewer with broad legacy USB bridge support, while SSD Sentinel expands into endurance forecasting, Win32 IOCP benchmarking, 200-zone LBA surface diagnostics, NTFS tiering, and read-only recovery.</p>
+        </article>
+        <article class="faq-item">
+          <h3>Does SSD Sentinel replace both CrystalDiskInfo and CrystalDiskMark?</h3>
+          <p>For most Windows 10 and 11 users, yes. SSD Sentinel pairs SMART diagnostics with a built-in Direct-I/O IOCP benchmark and PCIe/SATA link bottleneck detection in one application.</p>
+        </article>
+        <article class="faq-item">
+          <h3>Can I inspect SSD Sentinel safely before unlocking writes?</h3>
+          <p>Yes. Fresh installs enforce <code>read_only_guard = true</code> in Rust so all benchmarks, repairs, tier moves, and policy writes remain disabled until unlocked, and <code>--snapshot-dir</code> mode runs completely offline against repo fixtures.</p>
+        </article>
+      </div>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Download SSD Sentinel v1.10.1</a>
+        <a class="btn" href="../hard-disk-sentinel-alternative/">Compare vs Hard Disk Sentinel</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <span><a href="../">SSD Sentinel</a> · MIT License · Zero Telemetry</span>
+        <span><a href="https://github.com/yuefdev/ssd-sentinel">GitHub</a> · <a href="../faq/">FAQ</a> · <a href="../llms.txt">llms.txt</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="../site.js" defer></script>
+</body>
+</html>
