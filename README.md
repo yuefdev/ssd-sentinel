@@ -24,7 +24,7 @@ Built from scratch in **Rust & Tauri 2** as a transparent, ad-free, offline-firs
 <br/>
 
 <p align="center">
-  <img src="docs/screenshots/overview-dark-en.png" alt="SSD Sentinel dark overview showing NVMe SMART health, Read-Only guard, telemetry, and endurance forecast" width="920" />
+  <img src="docs/screenshots/overview-dark-en.png" alt="SSD Sentinel overview with sample SMART readings, temperature, and SSD endurance" width="920" />
 </p>
 
 ---
@@ -51,21 +51,23 @@ Disk utilities carry real data-loss risk. **SSD Sentinel** is built from scratch
 
 ## Visual Tour
 
+Screenshots use sample data.
+
 <table align="center">
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/overview-en.png" alt="SSD Sentinel English light theme overview and endurance forecast" /><br/>
-      <sub><b>Precision Storage Lab UI &amp; EN/TR Localization</b> — Light &amp; dark themes, tabular monospace telemetry, and endurance forecast.</sub>
+      <sub><b>Drive overview</b> — SMART readings, temperature, and SSD wear in the light theme.</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/optimize-tiering.png" alt="Storage policies and SHA-256 NTFS tiering" /><br/>
-      <sub><b>Policy Profiles &amp; SHA-256 NTFS Tiering</b> — Hardware cache, TRIM, PCIe ASPM, Over-Provisioning &amp; Junction offloading.</sub>
+      <sub><b>Storage tiering</b> — See which files can move from SSD to HDD and how much space that frees.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
       <img src="docs/screenshots/surface-diagnosis.png" alt="200-Zone Surface Map and Deterministic Surface Diagnosis" /><br/>
-      <sub><b>200-Zone LBA Surface &amp; Pinpoint Repair</b> — Deterministic adaptive threshold triage, ZBR speed curve &amp; live task bar.</sub>
+      <sub><b>Surface scan</b> — Inspect slow zones and read errors on the 200-zone map.</sub>
     </td>
     <td width="50%" align="center">
       <img src="docs/screenshots/recovery-center.png" alt="File recovery sample with screenshots and project files first" /><br/>
