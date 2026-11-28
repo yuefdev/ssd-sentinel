@@ -1,5 +1,5 @@
 [Desktop Entry]
-Version=1.5
+Version=1.0
 Type=Application
 Name=SSD Sentinel
 GenericName=Storage Diagnostics & Recovery
@@ -9,7 +9,7 @@ Comment[tr]=NVMe/SATA sağlığını izleyin, hız testi yapın, yüzey onarın 
 Exec=ssd-sentinel %U
 Icon=com.ssdsentinel.desktop
 Terminal=false
-Categories=System;Utility;Monitor;HardwareSettings;
+Categories=System;Monitor;
 Keywords=ssd;nvme;hdd;smart;health;benchmark;recovery;disk;io_uring;
 StartupNotify=true
 StartupWMClass=com.ssdsentinel.desktop

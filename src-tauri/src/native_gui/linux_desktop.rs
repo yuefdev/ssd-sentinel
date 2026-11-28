@@ -309,7 +309,11 @@ pub fn check_github_updates(current_version: &str, en: bool) -> Result<Value, St
     let asset = body["assets"].as_array().and_then(|arr| {
         arr.iter().find(|a| {
             let n = a["name"].as_str().unwrap_or("").to_ascii_lowercase();
-            n.ends_with(".appimage") || n.ends_with(".deb") || n.ends_with(".tar.gz")
+            n.contains("ssd-sentinel")
+                && (n.ends_with(".appimage")
+                    || n.ends_with(".deb")
+                    || n.ends_with(".rpm")
+                    || (n.contains("linux") && n.ends_with(".tar.gz")))
         })
     });
     Ok(json!({

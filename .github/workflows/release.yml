@@ -10,6 +10,15 @@ on:
         description: "Optional staging label when triggered manually"
         required: false
         default: "staging"
+      attach_linux_to_release:
+        description: "Optional existing release tag (e.g. v1.11.0) to upload Linux assets to"
+        required: false
+        default: ""
+      linux_only:
+        description: "Skip Windows build when manually dispatching Linux release assets"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -26,6 +35,7 @@ env:
 
 jobs:
   build-release:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_only != true }}
     name: Build Windows NSIS Release & Attest Provenance
     runs-on: windows-latest
     steps:
@@ -203,3 +213,175 @@ jobs:
             release-assets/*-portable.zip
             release-assets/smartmontools-7.5-RELEASE_7_5-source.tar.gz
             release-assets/SHA256SUMS.txt
+
+  build-linux-release:
+    name: Build Linux Packages (.deb, .rpm, AppImage, tar.gz) & Attest Provenance
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release channel (Production vs Staging RC vs Existing Tag Attach)
+        id: channel
+        run: |
+          is_tag="false"
+          prerelease="false"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            is_tag="true"
+            if [[ "${{ github.ref_name }}" =~ -(rc|beta|alpha)([.-]|$) ]]; then
+              prerelease="true"
+            fi
+          fi
+          echo "is_tag=${is_tag}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "attach_tag=${{ inputs.attach_linux_to_release }}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux packaging tools (rpm, desktop-file-utils, appimagetool)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm desktop-file-utils file zsync
+          curl -fsSL https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -o /tmp/appimagetool
+          chmod +x /tmp/appimagetool
+          sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
+
+      - name: Install npm dependencies and verify frontend/i18n
+        run: |
+          npm ci
+          npm run check:i18n
+          npm test
+          npm run build
+
+      - name: Verify Rust formatting, Clippy, and test suites (Linux)
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features --features native-gui --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --no-fail-fast
+          cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features native-gui --no-fail-fast
+
+      - name: Build Linux native release binary
+        env:
+          SSD_SENTINEL_UPDATE_REPO: ${{ github.repository }}
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --release --locked --no-default-features --features native-gui
+
+      - name: Verify zero forbidden C UI/SSL/D-Bus shared-library links & CLI smoke
+        run: |
+          ldd src-tauri/target/release/ssd-sentinel
+          if ldd src-tauri/target/release/ssd-sentinel | grep -Eiq "webkit|gtk|adwaita|qt|ssl|dbus|ayatana"; then
+            echo "Forbidden runtime library link detected"
+            exit 1
+          fi
+          ./src-tauri/target/release/ssd-sentinel --version
+          ./src-tauri/target/release/ssd-sentinel --cli status --snapshot-dir src-tauri/tests/fixtures --json >/dev/null
+
+      - name: Package .deb, .rpm, AppImage, portable .tar.gz and SHA256SUMS-linux.txt
+        run: |
+          set -euo pipefail
+          VERSION="$(grep '^version' src-tauri/Cargo.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          mkdir -p release-assets-linux
+
+          ./packaging/linux/build-deb.sh
+          cp dist/ssd-sentinel_*_amd64.deb release-assets-linux/
+
+          ./packaging/linux/build-rpm.sh
+          cp dist/ssd-sentinel-*.rpm release-assets-linux/
+
+          APPIMAGE_EXTRACT_AND_RUN=1 ./packaging/linux/build-appimage.sh
+          cp dist/SSD-Sentinel-*-x86_64.AppImage release-assets-linux/
+
+          PORTABLE_NAME="ssd-sentinel-${VERSION}-linux-x86_64"
+          STAGE_DIR="/tmp/${PORTABLE_NAME}"
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR/icons" "$STAGE_DIR/packaging/linux" "$STAGE_DIR/docs"
+          install -m755 src-tauri/target/release/ssd-sentinel "$STAGE_DIR/ssd-sentinel"
+          cp LICENSE "$STAGE_DIR/"
+          [[ -f THIRD_PARTY.md ]] && cp THIRD_PARTY.md "$STAGE_DIR/" || true
+          cp docs/LINUX.md "$STAGE_DIR/docs/"
+          cp packaging/linux/com.ssdsentinel.desktop.desktop \
+             packaging/linux/com.ssdsentinel.desktop.metainfo.xml \
+             packaging/linux/com.ssdsentinel.desktop.policy \
+             packaging/linux/99-ssd-sentinel.rules \
+             packaging/linux/uninstall.sh \
+             "$STAGE_DIR/packaging/linux/"
+          cp src-tauri/icons/32x32.png "$STAGE_DIR/icons/32x32.png"
+          cp src-tauri/icons/128x128.png "$STAGE_DIR/icons/128x128.png"
+          cp src-tauri/icons/icon.png "$STAGE_DIR/icons/256x256.png"
+
+          cat <<'EOF' > "$STAGE_DIR/install-portable.sh"
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          MODE="${1:---user}"
+          if [[ "$MODE" == "--system" ]]; then
+            [[ "$EUID" -eq 0 ]] || { echo "--system requires root (use sudo)." >&2; exit 1; }
+            install -Dm755 "$HERE/ssd-sentinel" /usr/local/bin/ssd-sentinel
+            install -Dm644 "$HERE/packaging/linux/com.ssdsentinel.desktop.desktop" /usr/share/applications/com.ssdsentinel.desktop.desktop
+            install -Dm644 "$HERE/packaging/linux/com.ssdsentinel.desktop.metainfo.xml" /usr/share/metainfo/com.ssdsentinel.desktop.metainfo.xml
+            install -Dm644 "$HERE/packaging/linux/com.ssdsentinel.desktop.policy" /usr/share/polkit-1/actions/com.ssdsentinel.desktop.policy
+            install -Dm644 "$HERE/icons/32x32.png" /usr/share/icons/hicolor/32x32/apps/com.ssdsentinel.desktop.png
+            install -Dm644 "$HERE/icons/128x128.png" /usr/share/icons/hicolor/128x128/apps/com.ssdsentinel.desktop.png
+            install -Dm644 "$HERE/icons/256x256.png" /usr/share/icons/hicolor/256x256/apps/com.ssdsentinel.desktop.png
+            echo "Installed SSD Sentinel into /usr/local/bin/ssd-sentinel"
+          else
+            DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+            install -Dm755 "$HERE/ssd-sentinel" "$HOME/.local/bin/ssd-sentinel"
+            install -Dm644 "$HERE/packaging/linux/com.ssdsentinel.desktop.desktop" "$DATA_HOME/applications/com.ssdsentinel.desktop.desktop"
+            install -Dm644 "$HERE/packaging/linux/com.ssdsentinel.desktop.metainfo.xml" "$DATA_HOME/metainfo/com.ssdsentinel.desktop.metainfo.xml"
+            install -Dm644 "$HERE/icons/32x32.png" "$DATA_HOME/icons/hicolor/32x32/apps/com.ssdsentinel.desktop.png"
+            install -Dm644 "$HERE/icons/128x128.png" "$DATA_HOME/icons/hicolor/128x128/apps/com.ssdsentinel.desktop.png"
+            install -Dm644 "$HERE/icons/256x256.png" "$DATA_HOME/icons/hicolor/256x256/apps/com.ssdsentinel.desktop.png"
+            echo "Installed SSD Sentinel into $HOME/.local/bin/ssd-sentinel"
+          fi
+          EOF
+          chmod +x "$STAGE_DIR/install-portable.sh"
+          tar -C /tmp -czf "release-assets-linux/${PORTABLE_NAME}.tar.gz" "${PORTABLE_NAME}"
+          rm -rf "$STAGE_DIR"
+
+          (cd release-assets-linux && sha256sum * > SHA256SUMS-linux.txt)
+          ls -lh release-assets-linux/
+          cat release-assets-linux/SHA256SUMS-linux.txt
+
+      - name: Upload Linux staging artifact (manual workflow_dispatch without target release)
+        if: github.event_name == 'workflow_dispatch' && inputs.attach_linux_to_release == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssd-sentinel-linux-staging-${{ inputs.tag }}
+          path: release-assets-linux/*
+
+      - name: Generate SLSA / GitHub Build Provenance Attestation (Linux)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.attach_linux_to_release != '')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets-linux/*
+
+      - name: Publish Linux Assets to Tag GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ steps.channel.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            release-assets-linux/*
+
+      - name: Attach Linux Assets to Existing GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.attach_linux_to_release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.attach_linux_to_release }}" release-assets-linux/* --clobber
