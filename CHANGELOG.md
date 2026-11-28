@@ -2,6 +2,11 @@
 
 All notable changes to **SSD Sentinel** are documented in this file.
 
+## Unreleased
+
+- File recovery results are paginated. Search by name, folder, or extension and keep selections across pages.
+- Screenshots and editable project files sort ahead of caches and build output. Both have their own filters.
+
 ## [v1.11.0] — 2026-11-28
 
 ### Added

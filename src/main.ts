@@ -2,6 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import brandLogo from "../assets/sentinel.svg";
 import { icon } from "./icons";
 import {
+  defaultRecoveryFileFilters,
+  filteredRecoveryFiles,
+  recoveryFileDetails,
+  recoveryFileName,
+  recoveryFileTable,
+  recoveryPager,
+  recoveryPageWindow,
+  type RecoveryTab,
+} from "./recovery-files";
+import {
   L,
   detectInitialLang,
   getLang,
@@ -29,7 +39,6 @@ import {
   type Lang,
 } from "./i18n";
 import {
-  aiNaturalFilter,
   alignmentDescription,
   bytes,
   canStart,
@@ -53,10 +62,8 @@ import {
   hasNormalizedSmart,
   inferAppRecoveryStatus,
   isRecoverableRow,
-  isUnopenableMedia,
   isWriteLocked,
   mappingDisabledReason,
-  mediaStatusBadge,
   ntfs8dot3Label,
   slcPressureBadge,
   tierCategoryBadge,
@@ -67,7 +74,6 @@ import type {
   AppState,
   BatchRestoreResult,
   Block,
-  DeletedAppBundle,
   DevWorkspaceAnalysis,
   Disk,
   Event,
@@ -88,6 +94,7 @@ import type {
   TierMoveRecord,
 } from "./types";
 import "./style.css";
+import "./recovery.css";
 
 type Page =
   | "overview"
@@ -147,18 +154,16 @@ let history: History[] = [],
   devCustomRoot = "",
   devFilter: "all" | "stale" = "all",
   viewedJob: Job | null = null;
-let recoverySearch = "",
-  recoveryCat = "all",
-  recoverySort: "best" | "size" | "recent" | "name" = "best",
-  recoveryTab: "apps" | "files" = "apps",
+let recoveryFilters = { ...defaultRecoveryFileFilters };
+let recoveryTab: RecoveryTab = "files",
   recoveryTabManual = false,
   lastRecoveryJobId = "",
   appSearch = "",
-  appFilter: AppFilter = "all",
-  showUnopenableMedia = false;
+  appFilter: AppFilter = "all";
+const recoveryPages = { files: 1, apps: 1 };
 const selectedRecoveryIds = new Set<string>();
 // Budgets are always "auto": the Rust core picks the most thorough safe value.
-const recConfig: { mode: string; size_mib: number | "auto" } = {
+const recConfig: { mode: "quick" | "deep" | "dev"; size_mib: number | "auto" } = {
   mode: "quick",
   size_mib: "auto",
 };
@@ -243,14 +248,14 @@ const isPortableEdition = () =>
 const recoverySourceLabel = (src: string, lang: Lang): string =>
   (
     {
-      vss_shadow: L("VSS Gölge Kopya (%100)", "VSS Shadow Copy (100%)", lang),
-      installer_cache: L("MSI Önbelleği", "MSI Cache", lang),
-      recycle_bin: L("Geri Dönüşüm", "Recycle Bin", lang),
-      mft_resident: L("$MFT Yerleşik", "$MFT Resident", lang),
-      mft_nonresident: L("$MFT Küme", "$MFT Clusters", lang),
-      usn_journal: L("$UsnJrnl İzi", "$UsnJrnl Trace", lang),
-      indx_slack: "$I30 Slack",
-      carved: L("İmza Kazıma", "Header Carving", lang),
+      vss_shadow: L("Gölge kopya (VSS)", "VSS shadow copy", lang),
+      installer_cache: L("Kurulum önbelleği", "Installer cache", lang),
+      recycle_bin: L("Geri Dönüşüm Kutusu", "Recycle Bin", lang),
+      mft_resident: L("Dosya tablosu ($MFT)", "File table ($MFT)", lang),
+      mft_nonresident: L("Dosya kümeleri ($MFT)", "File clusters ($MFT)", lang),
+      usn_journal: L("Silinme günlüğü ($UsnJrnl)", "Deletion journal ($UsnJrnl)", lang),
+      indx_slack: L("Klasör kaydı ($I30)", "Directory record ($I30)", lang),
+      carved: L("Derin tarama", "Deep scan", lang),
     } as Record<string, string>
   )[src] ?? src;
 const active = (job: Job | null | undefined) =>
@@ -284,6 +289,7 @@ const currentJob = (kind: string) =>
     : state?.job?.kind === kind && state.job.disk_id === selected
       ? state.job
       : null;
+const recoveryJob = () => currentJob("recovery") ?? recoveryHistory.find((job) => job.disk_id === selected) ?? null;
 const empty = (title: string, detail: string, ico = "info") =>
   `<div class="empty-state">${icon(ico)}<h3>${e(title)}</h3><p>${e(detail)}</p></div>`;
 
@@ -605,14 +611,14 @@ function fullScanEstimate(d: Disk): string {
 
 function deepRecoveryEstimate(d: Disk): string {
   const free = selectedVolume(d)?.free_bytes;
-  if (!free) return L("Tüm boş alan taranır.", "Carves all unallocated free space.");
+  if (!free) return L("Boş alan dosya imzalarına göre taranır.", "Scans unallocated space for file signatures.");
   const scanBytes = Math.min(free, 512 * 1024 ** 3);
   const isHdd = d.type.includes("HDD");
   const nvme = /nvme/i.test(`${d.type} ${d.interface ?? ""}`);
   const mbps = isHdd ? 120 : nvme ? 900 : 400;
   return L(
-    `${fmtBytes(scanBytes)} boş alanın tamamı taranır · tahmini ${durationText(scanBytes / 1e6 / mbps / 60)}`,
-    `Scans ${fmtBytes(scanBytes)} of unallocated space · est. ${durationText(scanBytes / 1e6 / mbps / 60)}`,
+    `En fazla ${fmtBytes(scanBytes)} boş alan taranır · tahmini ${durationText(scanBytes / 1e6 / mbps / 60)}`,
+    `Scans up to ${fmtBytes(scanBytes)} of unallocated space · est. ${durationText(scanBytes / 1e6 / mbps / 60)}`,
   );
 }
 
@@ -1959,76 +1965,12 @@ const blockStatus = (b: Block) =>
 
 function jobHistory(jobs: Job[], kind: string): string {
   const lang = getLang();
-  return `<article class="card saved-jobs"><div class="section-title"><div><h2>${kind === "benchmark" ? L("Önceki hız testleri", "Previous benchmarks", lang) : L("Önceki doğrulamalar", "Previous surface scans", lang)}</h2><p>${L("Son 20 yerel sonuç", "Latest 20 local runs", lang)}</p></div>${button(`export-${kind}`, L("Dışa aktar", "Export", lang), "export", "compact", !jobs.length)}</div>${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>${L("Tarih", "Date", lang)}</th><th>${L("Hedef", "Target", lang)}</th><th>${L("Durum", "Status", lang)}</th><th>${L("Mod", "Mode", lang)}</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${date(j.started_at)}</td><td>${e(j.letter)}: · ${e(j.model)}</td><td>${pill(statusText(j.status), j.status === "completed" ? "ok" : j.status === "failed" ? "warning" : "")}</td><td>${e(j.options?.mode)}</td><td><button class="text-button" data-view-job="${j.id}" data-kind="${kind}">${L("İncele", "Inspect", lang)} ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="inline-empty">${icon("history")}${L("Henüz kaydedilmiş bir test yok.", "No recorded runs yet.", lang)}</div>`}</article>`;
+  return `<article class="card saved-jobs"><div class="section-title"><div><h2>${kind === "benchmark" ? L("Önceki hız testleri", "Previous benchmarks", lang) : L("Önceki doğrulamalar", "Previous surface scans", lang)}</h2><p>${L("Son 20 yerel sonuç", "Latest 20 local runs", lang)}</p></div>${button(`export-${kind}`, L("Dışa aktar", "Export", lang), "export", "compact", !jobs.length)}</div>${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>${L("Tarih", "Date", lang)}</th><th>${L("Hedef", "Target", lang)}</th><th>${L("Durum", "Status", lang)}</th><th>${L("Mod", "Mode", lang)}</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${date(j.started_at)}</td><td>${e(j.letter)}: · ${e(j.model)}</td><td>${pill(statusText(j.status), j.status === "completed" ? "ok" : j.status === "failed" ? "warning" : "")}</td><td>${j.options?.profile === "slc" ? `SLC · ${e(j.options.write_budget_gib)} GiB` : e(j.options?.mode)}</td><td><button class="text-button" data-view-job="${e(j.id)}" data-kind="${kind}">${L("İncele", "Inspect", lang)} ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="inline-empty">${icon("history")}${L("Henüz kaydedilmiş bir test yok.", "No recorded runs yet.", lang)}</div>`}</article>`;
 }
 
-function recoveryView(d: Disk): string {
+function recoveryAppsPanel(job: Job): string {
   const lang = getLang();
-  const job = currentJob("recovery") ?? recoveryHistory[0] ?? null;
-  if (job?.id && job.id !== lastRecoveryJobId) {
-    lastRecoveryJobId = job.id;
-    selectedRecoveryIds.clear();
-    recoveryTabManual = false;
-  } else if (!job && lastRecoveryJobId) {
-    lastRecoveryJobId = "";
-    selectedRecoveryIds.clear();
-    recoveryTabManual = false;
-  }
-
-  const rawItems: RecoveredItem[] = job?.recovery_items ?? [];
-  const apps: DeletedAppBundle[] = job?.deleted_apps ?? [];
-  const unopenableCount = rawItems.filter((i) => isUnopenableMedia(i)).length;
-  const visiblePool = showUnopenableMedia
-    ? rawItems
-    : rawItems.filter((i) => !isUnopenableMedia(i));
-
-  const activeTab: "apps" | "files" = recoveryTabManual
-    ? recoveryTab
-    : job?.options?.mode === "dev"
-      ? "files"
-      : apps.length > 0
-        ? "apps"
-        : rawItems.length > 0
-          ? "files"
-          : "apps";
-
-  const filtered = aiNaturalFilter(visiblePool, recoverySearch, recoveryCat);
-  const sorted = [...filtered].sort((a, b) => {
-    if (recoverySort === "size") return b.size_bytes - a.size_bytes;
-    if (recoverySort === "recent")
-      return (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "");
-    if (recoverySort === "name") return a.name.localeCompare(b.name, localeTag(lang));
-    return 0;
-  });
-
-  const canLive = canStart(state, d) && !pending;
-  const needsAdmin = recConfig.mode === "deep";
-  const startDisabled = !canLive || (needsAdmin && !state?.admin);
-  const rs = job?.repair_summary as Record<string, unknown> | undefined;
-
-  const catCounts = new Map<string, number>();
-  for (const it of visiblePool) {
-    catCounts.set(it.category, (catCounts.get(it.category) ?? 0) + 1);
-  }
-  const userVisibleCount = visiblePool.filter(
-    (i) => i.category !== "system_lib",
-  ).length;
-  const filesTabCount =
-    userVisibleCount > 0 || visiblePool.length === 0
-      ? userVisibleCount
-      : visiblePool.length;
-  const categories: [string, string, number][] = [
-    ["all", L("Tümü", "All", lang), userVisibleCount],
-    ["exe_setup", L("EXE & Kurulumlar", "EXE & Installers", lang), catCounts.get("exe_setup") ?? 0],
-    ["game_portable", L("Oyun & Taşınabilir", "Games & Portable", lang), catCounts.get("game_portable") ?? 0],
-    ["document", L("Belgeler", "Documents", lang), catCounts.get("document") ?? 0],
-    ["photo", L("Fotoğraf & Görsel", "Photos & Images", lang), catCounts.get("photo") ?? 0],
-    ["video_audio", L("Video & Ses", "Video & Audio", lang), catCounts.get("video_audio") ?? 0],
-    ["archive", L("Arşiv", "Archives", lang), catCounts.get("archive") ?? 0],
-    ["database_code", L("Veritabanı & Kod", "Database & Code", lang), catCounts.get("database_code") ?? 0],
-    ["system_lib", L("DLL & Sistem", "DLL & System", lang), catCounts.get("system_lib") ?? 0],
-  ];
-
+  const apps = job.deleted_apps ?? [];
   const isGameCat = (cat?: string | null) => {
     const low = (cat ?? "").toLocaleLowerCase("tr");
     return low === "oyun" || low === "game";
@@ -2055,55 +1997,19 @@ function recoveryView(d: Disk): string {
     ["games", L("Oyunlar", "Games", lang), appCounts.games],
     ["reinstall_only", L("Kalıntı / Yeniden Kur", "Traces / Reinstall", lang), appCounts.reinstall_only],
   ];
-
-  const mftScanned = Number(rs?.mft_scanned ?? 0);
-  const vssFound = Number(rs?.vss_found ?? 0);
-  const usnDeleted = Number(rs?.usn_deleted ?? 0);
-  const exeFound = Number(
-    rs?.exe_found ??
-      rawItems.filter(
-        (i) =>
-          (i.category === "exe_setup" || i.category === "game_portable") &&
-          !i.trim_zeroed,
-      ).length,
-  );
-  const highConf = Number(rs?.high_confidence ?? 0);
-  const sourceLabel = (src: string) => recoverySourceLabel(src, lang);
-
-  if (recConfig.mode === "apps_only") recConfig.mode = "quick";
-  const recCard = (value: string, ico: string, title: string, text: string, tag = "") =>
-    `<label class="mode-card ${recConfig.mode === value ? "selected" : ""}"><input type="radio" name="rec-mode" value="${value}" ${recConfig.mode === value ? "checked" : ""}><span>${icon(ico)}<strong>${title}${tag ? ` <em class="mode-tag">${tag}</em>` : ""}</strong><small>${text}</small></span></label>`;
-  const recAuto =
-    recConfig.mode === "deep"
-      ? deepRecoveryEstimate(d)
-      : recConfig.mode === "dev"
-        ? L("Geri Dönüşüm, VSS, $MFT ve $UsnJrnl yalnız .env, kaynak kod ve veritabanı dosyalarına odaklanarak taranır (salt okunur).", "Scans Recycle Bin, VSS, $MFT, and $UsnJrnl focusing on .env, source code, and database files (read-only).", lang)
-        : L("Geri Dönüşüm, gölge kopyalar, dosya tablosu ve program izleri taranır. Birkaç dakika sürer.", "Scans Recycle Bin, VSS Shadow Copies, NTFS $MFT, $UsnJrnl, and app traces. Read-only.", lang);
-
-  const validItemIds = new Set(rawItems.map((i) => i.id));
-  const activeSelectedIds = Array.from(selectedRecoveryIds).filter((id) =>
-    validItemIds.has(id),
-  );
-  const selectedCount = activeSelectedIds.length;
-  const recoverableVisibleCount = sorted.filter((it) =>
-    isRecoverableRow(it),
-  ).length;
-
-  const appsTabHtml = `<div class="rec-tab-panel" role="tabpanel" aria-label="${L("Silinmiş Uygulamalar ve Oyunlar", "Deleted Apps & Games", lang)}">
-    <div class="ai-search-bar">
-      <input type="search" id="recovery-app-search" value="${e(appSearch)}" placeholder="${L("Uygulama, oyun, yayıncı veya yol ara…", "Search app, game, publisher, or path…", lang)}" aria-label="${L("Silinmiş uygulama ara", "Search deleted apps", lang)}">
-    </div>
-    <div class="cat-pills app-filter-pills" role="group" aria-label="${L("Uygulama kurtarma filtresi", "App recovery filter", lang)}">
-      ${appFilterTabs
-        .map(
-          ([k, label, count]) =>
-            `<button type="button" class="button compact ${appFilter === k ? "selected" : "quiet"}" data-app-filter="${k}">${label} (${count})</button>`,
-        )
-        .join("")}
+  const result = recoveryPageWindow(filteredApps, recoveryPages.apps, "apps");
+  recoveryPages.apps = result.page;
+  return `<div class="rec-tab-panel" id="rec-panel-apps" role="tabpanel" aria-labelledby="rec-tab-apps">
+    <div class="recovery-browser-tools">
+      <label class="search-field">${icon("search")}<input type="search" id="recovery-app-search" value="${e(appSearch)}" placeholder="${L("Uygulama, oyun, yayıncı veya yol ara…", "Search app, game, publisher, or path…", lang)}" aria-label="${L("Silinmiş uygulama ara", "Search deleted apps", lang)}"></label>
+      <div class="cat-pills app-filter-pills" role="group" aria-label="${L("Uygulama kurtarma filtresi", "App recovery filter", lang)}">
+        ${appFilterTabs.map(([k, label, count]) => `<button type="button" id="rec-app-filter-${k}" class="button compact ${appFilter === k ? "selected" : "quiet"}" aria-pressed="${appFilter === k}" data-app-filter="${k}">${label} (${fmt(count)})</button>`).join("")}
+      </div>
+      ${recoveryPager(result, lang, L("uygulama", result.total === 1 ? "app" : "apps", lang))}
     </div>
     ${
-      filteredApps.length
-        ? `<div class="app-bundle-grid">${filteredApps
+      result.rows.length
+        ? `<div class="app-bundle-grid">${result.rows
             .map((app) => {
               const st = inferAppRecoveryStatus(app);
               const isGame = isGameCat(app.category);
@@ -2194,132 +2100,192 @@ function recoveryView(d: Disk): string {
               : L("Henüz silinmiş uygulama listelenmedi", "No deleted apps listed yet", lang),
             apps.length
               ? L("Arama metnini temizleyin veya üstten başka bir filtre seçin.", "Clear search text or select another filter tab above.", lang)
-              : L("Silinmiş program ve oyunları tespit etmek için soldan taramayı başlatın.", "Start a recovery scan on the left to detect uninstalled apps and games.", lang),
+                  : L("Tarama sonucu uygulama veya oyun kaydı içermiyor.", "This scan has no records of apps or games.", lang),
             "recover",
           )
     }
   </div>`;
+}
 
-  const filesTabHtml = `<div class="rec-tab-panel" role="tabpanel" aria-label="${L("Kurtarılabilir Dosyalar", "Recoverable Files", lang)}">
-    <div class="ai-search-bar">
-      <input type="search" id="recovery-search" value="${e(recoverySearch)}" placeholder="${L("Ara: 'exe', 'oyun', 'pdf', 'foto', 'sağlam', 'rufus', 'dll'…", "Filter: 'exe', 'game', 'pdf', 'photo', 'healthy', 'dll'…", lang)}" aria-label="${L("Kurtarma dosyası arama ve akıllı filtre", "Filter recoverable files", lang)}">
-      <select id="recovery-sort" aria-label="${L("Sonuç sıralama", "Sort recovery results", lang)}">
-        <option value="best" ${recoverySort === "best" ? "selected" : ""}>${L("Öncelik: Önce VSS, EXE &amp; Sağlam", "Priority: VSS, EXE &amp; High Integrity first", lang)}</option>
-        <option value="size" ${recoverySort === "size" ? "selected" : ""}>${L("Boyut (Büyükten Küçüğe)", "Size (Largest first)", lang)}</option>
-        <option value="recent" ${recoverySort === "recent" ? "selected" : ""}>${L("Silinme Tarihi (En Yeni)", "Deleted time (Newest)", lang)}</option>
-        <option value="name" ${recoverySort === "name" ? "selected" : ""}>${L("Dosya Adı (A–Z)", "Filename (A–Z)", lang)}</option>
-      </select>
-    </div>
-    <div class="cat-pills-row">
-      <div class="cat-pills" role="group" aria-label="${L("Kategori filtresi", "Category filter", lang)}">
-        ${categories
-          .map(
-            ([cat, label, count]) =>
-              `<button type="button" class="button compact ${recoveryCat === cat ? "selected" : "quiet"}" data-rec-cat="${cat}">${label} (${count})</button>`,
-          )
-          .join("")}
-      </div>
-      ${
-        unopenableCount > 0
-          ? `<label class="unopenable-toggle"><input type="checkbox" id="show-unopenable-media" ${showUnopenableMedia ? "checked" : ""}><span>${L(`Bozuk / açılamayanları da göster (${unopenableCount})`, `Show corrupted / unopenable (${unopenableCount})`, lang)}</span></label>`
-          : ""
-      }
-    </div>
-    ${
-      sorted.length
-        ? `<div class="batch-recovery-bar ${selectedCount > 0 ? "has-selection" : ""}" role="region" aria-label="${L("Toplu kurtarma çubuğu", "Batch recovery bar", lang)}">
-            <div class="batch-bar-info">
-              <strong>${selectedCount > 0 ? L(`${selectedCount} dosya seçildi`, `${selectedCount} item(s) selected`, lang) : L("Toplu kurtarma", "Batch recovery", lang)}</strong>
-              <small>${selectedCount > 0 ? L("Seçilenler tek seferde seçeceğiniz güvenli klasöre kurtarılır.", "Selected items are recovered safely into your chosen destination folder.", lang) : L(`${recoverableVisibleCount} kurtarılabilir dosya · birden fazla seçip tek tıkla kaydedin.`, `${recoverableVisibleCount} recoverable files · select multiple to save together.`, lang)}</small>
-            </div>
-            <div class="batch-bar-actions">
-              <button type="button" class="button compact quiet" data-action="rec-select-all" ${recoverableVisibleCount === 0 ? "disabled" : ""}>${L("Tümünü Seç", "Select All", lang)}</button>
-              <button type="button" class="button compact quiet" data-action="rec-clear-selection" ${selectedCount === 0 ? "disabled" : ""}>${L("Temizle", "Clear", lang)}</button>
-              <button type="button" class="button compact primary" data-action="rec-restore-batch" ${selectedCount === 0 || state?.source !== "live" || pending ? "disabled" : ""}>${icon("folder")}<span>${L("Seçilenleri Klasöre Kurtar", "Restore Selected to Folder", lang)}${selectedCount > 0 ? ` (${selectedCount})` : ""}</span></button>
-            </div>
-          </div>`
-        : ""
-    }
-    ${
-      sorted.length
-        ? `<div class="recovery-list">${sorted
-            .map((it) => {
-              const metaOnly =
-                it.source === "usn_journal" || it.source === "indx_slack";
-              const unopenable = isUnopenableMedia(it);
-              const recoverable = isRecoverableRow(it);
-              const checked = selectedRecoveryIds.has(it.id);
-              const mBadge = mediaStatusBadge(it, lang);
-              return `<div class="recovery-row ${checked ? "row-selected" : ""} ${unopenable ? "row-unopenable" : ""}">
-                <label class="rec-check-wrap" title="${recoverable ? L("Toplu kurtarma için seç", "Select for batch restore", lang) : L("Bu öğe doğrudan kurtarılamaz", "Not directly recoverable", lang)}">
-                  <input type="checkbox" class="rec-checkbox" data-rec-select="${e(it.id)}" ${checked ? "checked" : ""} ${!recoverable ? "disabled" : ""} aria-label="${e(it.name)}">
-                </label>
-                <div class="recovery-row-main">
-                  <div class="inline-actions">
-                    <strong>${e(it.name)}</strong>
-                    ${pill(L(`%${it.confidence}`, `${it.confidence}%`, lang), it.trim_zeroed || unopenable ? "critical" : it.confidence >= 75 ? "ok" : "warning")}
-                    ${mBadge ? pill(mBadge.label, mBadge.level) : ""}
-                    ${it.sub_type ? pill(translateRecoveryText(it.sub_type, lang)) : ""}
-                    ${it.publisher ? pill(it.publisher) : ""}
-                    ${pill(sourceLabel(it.source), it.source === "vss_shadow" ? "ok" : "")}
-                  </div>
-                  <small class="mono">${e(it.original_path)}${it.size_bytes ? ` · ${fmtBytes(it.size_bytes)}` : ""}${it.deleted_at ? ` · ${date(it.deleted_at)}` : ""}</small>
-                  <p class="ai-note">${e(translateRecoveryText(it.ai_summary, lang))}</p>
-                  ${it.repair_note ? `<p class="repair-note ${unopenable ? "repair-note-bad" : ""}">${icon(unopenable ? "alert" : "check")}<span>${e(translateRecoveryText(it.repair_note, lang))}</span></p>` : ""}
-                </div>
-                <div class="recovery-row-actions">
-                  <button type="button" class="button compact quiet" data-preview-job="${e(job!.id)}" data-preview-id="${e(it.id)}" data-preview-name="${e(it.name)}" data-preview-recoverable="${recoverable ? "1" : "0"}" ${pending ? "disabled" : ""}>${icon("eye")}<span>${L("Önizle", "Preview", lang)}</span></button>
-                  <button type="button" class="button compact primary" data-restore-job="${e(job!.id)}" data-restore-id="${e(it.id)}" ${state?.source !== "live" || !recoverable || pending ? "disabled" : ""}>${metaOnly ? L("Yalnız İz", "Trace Only", lang) : unopenable ? L("Açılamaz", "Corrupt", lang) : L("Kurtar", "Recover", lang)}</button>
-                </div>
-              </div>`;
-            })
-            .join("")}</div>`
-        : empty(
-            L("Kurtarılacak dosya listelenmedi", "No recoverable files listed", lang),
-            job
-              ? unopenableCount > 0 && !showUnopenableMedia
-                ? L(`Mevcut filtrede açılabilir dosya yok (${unopenableCount} bozuk/açılamayan medya gizlendi).`, `No openable items match this filter (${unopenableCount} corrupted media hidden).`, lang)
-                : L("Mevcut kategori veya arama filtresiyle eşleşen kullanıcı dosyası yok.", "No user files match the current category or query.", lang)
-              : L("Silinmiş EXE, uygulama, fotoğraf ve kullanıcı dosyalarını tespit etmek için soldan taramayı başlatın.", "Start a scan on the left to find deleted EXEs, apps, photos, and documents.", lang),
-            "recover",
-          )
-    }
-  </div>`;
+function activeRecoveryTab(job: Job | null): RecoveryTab {
+  if (recoveryTabManual) return recoveryTab;
+  return job?.options?.mode !== "dev" && !job?.recovery_items?.length && job?.deleted_apps?.length ? "apps" : "files";
+}
 
-  return `${heading(d, L("DOSYA KURTARMA", "FILE RECOVERY", lang), L("Silinen dosya ve programları geri getirin", "Recover deleted files &amp; uninstalled apps", lang), L("Önce hızlı tarama yapın. Aradığınızı bulamazsanız derin taramayı deneyin.", "Start with Quick Scan; switch to Deep Carve if items were wiped longer ago.", lang))}
-    <div class="scope-note">${icon("shield")}<div><strong>${L("Kurtardığınız dosyaları başka bir diske kaydedin.", "Save recovered files to a different drive.", lang)}</strong> ${L("Tarama diske hiç yazmaz; aynı diske kaydetmek diğer silinmiş dosyaların üzerine yazabilir. Bozuk fotoğraf ve videolar kurtarılırken otomatik onarılır.", "Scanning is strictly read-only. Writing output back to the source volume can overwrite deleted clusters. Corrupt JPEG/PNG/MP4 headers are repaired on restore.", lang)}</div></div>
-    <div class="recovery-layout">
-      <article class="card scan-settings">
-        <div class="section-title"><div><h2>${L("Nasıl tarayalım?", "Scan method", lang)}</h2><p>${L("Birini seçin, gerisini uygulama ayarlar", "Select mode — safe parameters are automatic", lang)}</p></div></div>
-        ${volumeSelect(d)}
-        ${recCard("quick", "search", L("Hızlı tarama", "Quick scan", lang), L("Yakın zamanda silinen dosya ve programları bulur.", "Finds recently deleted files, Recycle Bin, VSS copies, and app traces.", lang), L("Önce bunu", "Start here", lang))}
-        ${recCard("dev", "code", L("Geliştirici & Proje", "Developer & Project", lang), L(".env, kaynak kod, SQLite ve yapılandırma dosyalarını öncelikli tarar (salt okunur).", "Prioritizes .env, source code, SQLite DBs, and project configs (read-only).", lang), L("Vibe", "Dev", lang))}
-        ${recCard("deep", "cpu", L("Derin tarama", "Deep signature carve", lang), `${L("Tüm boş alanı sektör sektör kazır; formatlanmış veya eski dosyaları da bulur.", "Carves unallocated space sector-by-sector for formatted or older files.", lang)}${!state?.admin ? L(" · Yönetici gerekir", " · Admin required", lang) : ""}`)}
-        <div class="auto-budget">${icon("settings")}<div><strong>${L("Otomatik ayarlandı", "Auto-configured", lang)}</strong><small>${e(recAuto)}</small></div></div>
-        ${button("start-recovery", recConfig.mode === "deep" ? L("Derin taramayı başlat", "Start Deep Scan", lang) : recConfig.mode === "dev" ? L("Geliştirici taramasını başlat", "Start Developer Scan", lang) : L("Hızlı taramayı başlat", "Start Quick Scan", lang), "recover", "primary full", startDisabled)}
-        <p class="form-hint">${e(disabledReason(d) || (needsAdmin && !state?.admin ? L("Derin tarama için sağ üstten “Yönetici olarak aç”a basın.", "Click “Run as Admin” in the top bar for raw deep carving.", lang) : L("Tarama salt okunurdur; istediğiniz an durdurabilirsiniz.", "Scanning is read-only; stop anytime.", lang)))}</p>
-      </article>
+function recoveryFilesPanel(job: Job): string {
+  const lang = getLang();
+  const rawItems = job.recovery_items ?? [];
+  const sorted = filteredRecoveryFiles(rawItems, recoveryFilters, lang);
+  const result = recoveryPageWindow(sorted, recoveryPages.files, "files");
+  recoveryPages.files = result.page;
 
-      <article class="card recovery-results-card">
-        <div class="section-title"><div><h2>${L("Tespit edilen dosya ve uygulamalar", "Detected files &amp; applications", lang)}</h2><p>${job ? `${rawItems.length} ${L("öğe", "items", lang)} · ${apps.length} ${L("silinmiş uygulama", "deleted apps", lang)}${vssFound ? ` · ${vssFound} VSS %100` : ""}${usnDeleted ? ` · ${usnDeleted} $UsnJrnl` : ""}` : L("Henüz kurtarma taraması yapılmadı", "No recovery scan run yet", lang)}</p></div>${job && rs ? pill(`${highConf} ${L("Sağlam", "Intact", lang)}`, "ok") : ""}</div>
-        ${
-          job
-            ? `<div class="rec-telemetry">
-                 <div><span>${L("Okunan Sektör", "Bytes Scanned", lang)}</span><strong>${fmtBytes(job.read_bytes)}</strong></div>
-                 <div><span>${L("İncelenen $MFT", "$MFT Parsed", lang)}</span><strong>${fmt(mftScanned)} ${L("kayıt", "records", lang)}</strong></div>
-                 <div><span>${L("Bulunan EXE / VSS", "EXEs / VSS", lang)}</span><strong>${exeFound} EXE · ${vssFound} VSS</strong></div>
-                 <div><span>${L("Yüksek Bütünlük", "High Integrity", lang)}</span><strong>${highConf}</strong></div>
-               </div>`
-            : ""
-        }
-        ${jobProgress(job)}
-        <div class="recovery-tabs" role="tablist" aria-label="${L("Kurtarma sonucu sekmeleri", "Recovery result tabs", lang)}">
-          <button type="button" role="tab" aria-selected="${activeTab === "apps"}" class="rec-tab ${activeTab === "apps" ? "selected" : ""}" data-rec-tab="apps">${icon("cpu")}<span>${L("Silinmiş Uygulamalar &amp; Oyunlar", "Deleted Apps &amp; Games", lang)}</span><span class="rec-tab-count">${apps.length}</span></button>
-          <button type="button" role="tab" aria-selected="${activeTab === "files"}" class="rec-tab ${activeTab === "files" ? "selected" : ""}" data-rec-tab="files">${icon("recover")}<span>${L("Kurtarılabilir Dosyalar", "Recoverable Files", lang)}</span><span class="rec-tab-count">${filesTabCount}</span></button>
+  const eligibleCount = sorted.filter(isRecoverableRow).length;
+  const selectedInFilter = sorted.filter((item) => selectedRecoveryIds.has(item.id) && isRecoverableRow(item)).length;
+  const selectedCount = rawItems.filter((item) => selectedRecoveryIds.has(item.id) && isRecoverableRow(item)).length;
+  const hiddenSelected = selectedCount - selectedInFilter;
+  const count = fmt(selectedCount);
+  const filtersActive = Object.entries(defaultRecoveryFileFilters).some(([key, value]) =>
+    recoveryFilters[key as keyof typeof recoveryFilters] !== value,
+  );
+
+  return `<div class="rec-tab-panel" id="rec-panel-files" role="tabpanel" aria-labelledby="rec-tab-files">
+    <div class="recovery-browser-tools">
+      <div class="recovery-filters">
+        <div class="form-field">
+          <label for="recovery-search">${L("Dosya ara", "Search files", lang)}</label>
+          <div class="search-field">${icon("search")}<input type="search" id="recovery-search" value="${e(recoveryFilters.query)}" placeholder="${L("Ad, klasör veya .jpg", "Name, folder or .jpg", lang)}"></div>
         </div>
-        ${activeTab === "apps" ? appsTabHtml : filesTabHtml}
-      </article>
-    </div>`;
+        ${options("recovery-category", L("Dosya türü", "File type", lang), [
+          ["all", L("Kişisel dosyalar", "User files", lang)],
+          ["screenshot", L("Ekran görüntüsü", "Screenshots", lang)],
+          ["photo", L("Fotoğraflar", "Photos", lang)],
+          ["project", L("Proje dosyaları", "Project files", lang)],
+          ["video_audio", L("Video ve ses", "Video and audio", lang)],
+          ["document", L("Belgeler", "Documents", lang)],
+          ["archive", L("Arşivler", "Archives", lang)],
+          ["exe_setup", L("Kurulum dosyaları", "Installers", lang)],
+          ["game_portable", L("Oyun ve taşınabilir", "Games and portable", lang)],
+          ["database_code", L("Kod / veritabanı", "Code / database", lang)],
+          ["infrastructure", L("Altyapı dosyaları", "Support files", lang)],
+          ["system_lib", L("Sistem / DLL", "System / DLL", lang)],
+          ["other", L("Diğer dosyalar", "Other files", lang)],
+        ], recoveryFilters.category)}
+        ${options("recovery-condition", L("Durum", "Status", lang), [
+          ["available", L("Dosya ve izler", "Files and traces", lang)],
+          ["recoverable", L("Kurtarılabilir", "Recoverable", lang)],
+          ["trace", L("Yalnızca izler", "Traces only", lang)],
+          ["damaged", L("Hasarlı", "Damaged", lang)],
+          ["all", L("Tüm durumlar", "All statuses", lang)],
+        ], recoveryFilters.condition)}
+        ${options("recovery-name", L("Özgün dosya adı", "Original filename", lang), [
+          ["all", L("Tümü", "Any", lang)],
+          ["recorded", L("Bulundu", "Found", lang)],
+          ["carved", L("Bilinmiyor", "Unknown", lang)],
+        ], recoveryFilters.name)}
+        ${options("recovery-sort", L("Sırala", "Sort by", lang), [
+          ["best", L("Akıllı öncelik", "Smart priority", lang)],
+          ["recent", L("En yeni tarih", "Newest date", lang)],
+          ["size", L("En büyük boyut", "Largest size", lang)],
+          ["name", L("Ad (A–Z)", "Name (A–Z)", lang)],
+        ], recoveryFilters.sort)}
+      </div>
+      ${recoveryPager(result, lang, L("dosya", result.total === 1 ? "file" : "files", lang), filtersActive
+        ? `<button type="button" class="recovery-text-button" data-action="rec-reset-filters">${L("Filtreleri sıfırla", "Reset filters", lang)}</button>`
+        : "")}
+      ${selectedCount ? `<div class="batch-recovery-bar" role="region" aria-label="${L("Toplu kurtarma", "Batch recovery", lang)}">
+        <div class="batch-bar-info" role="status">
+          <strong>${L(`${count} dosya seçildi`, `${count} selected`, lang)}</strong>
+          ${hiddenSelected > 0 ? `<small>${L(`${fmt(hiddenSelected)} seçim bu filtrelerin dışında`, `${fmt(hiddenSelected)} selected outside these filters`, lang)}</small>` : ""}
+        </div>
+        <div class="batch-bar-actions">
+          ${eligibleCount > selectedInFilter ? button("rec-select-all", L(`${fmt(eligibleCount)} eşleşen dosyayı seç`, `Select ${fmt(eligibleCount)} matching files`, lang), "check", "compact quiet", pending) : ""}
+          ${button("rec-clear-selection", L("Seçimi temizle", "Clear selection", lang), "close", "compact quiet", pending)}
+          ${button("rec-restore-batch", L("Seçilenleri kurtar", "Recover selected", lang), "folder", "compact primary", state?.source !== "live" || pending)}
+        </div>
+      </div>` : ""}
+    </div>
+    ${result.rows.length
+      ? recoveryFileTable(result.rows, job.id, selectedRecoveryIds, state?.source === "live", pending, lang)
+      : empty(
+          rawItems.length ? L("Eşleşen dosya yok", "No matching files", lang) : L("Dosya bulunamadı", "No files found", lang),
+          rawItems.length
+            ? L("Başka bir ad veya uzantı arayın ya da filtreleri değiştirin.", "Search for another name or extension, or change the filters.", lang)
+            : L("Bu tarama herhangi bir dosya sonucu içermiyor.", "This scan has no file results.", lang),
+          "search",
+        )}
+  </div>`;
+}
+
+function recoveryScanControls(d: Disk, job: Job | null): string {
+  const lang = getLang();
+  const modes: [typeof recConfig.mode, string][] = [
+    ["quick", L("Hızlı tarama", "Quick scan", lang)],
+    ["deep", L("Derin tarama", "Deep scan", lang)],
+    ["dev", L("Kod ve proje taraması", "Code and project scan", lang)],
+  ];
+  const needsAdmin = recConfig.mode === "deep" && !state?.admin;
+  const descriptions = {
+    quick: L("Yakın zamanda silinen dosya ve uygulamaları arar.", "Looks for recently deleted files and apps.", lang),
+    deep: deepRecoveryEstimate(d),
+    dev: L(".env, kaynak kod ve veritabanı dosyalarını arar.", "Looks for .env files, source code, and databases.", lang),
+  };
+  const startLabel = {
+    quick: L("Hızlı taramayı başlat", "Start quick scan", lang),
+    deep: L("Derin taramayı başlat", "Start deep scan", lang),
+    dev: L("Proje taramasını başlat", "Start project scan", lang),
+  };
+  const hint = disabledReason(d) || (needsAdmin
+    ? L("Derin tarama için uygulamayı yönetici olarak açın.", "Run the app as administrator to use deep scan.", lang)
+    : descriptions[recConfig.mode]);
+  return `<section class="card recovery-scan-card" aria-label="${L("Kurtarma taraması", "Recovery scan", lang)}">
+    <div class="recovery-scan-controls">
+      ${volumeSelect(d, "target-volume", L("Taranacak bölüm", "Volume to scan", lang))}
+      ${options("recovery-mode", L("Tarama türü", "Scan type", lang), modes, recConfig.mode)}
+      ${button("start-recovery", startLabel[recConfig.mode], "search", "primary", !canStart(state, d) || pending || needsAdmin)}
+    </div>
+    <div class="recovery-scan-notes">
+      <span>${e(hint)}</span>
+      <span>${icon("shield")}${L("Kurtarılan dosyaları farklı bir diske kaydedin.", "Save recovered files to a different drive.", lang)}</span>
+    </div>
+    ${job && job.status !== "completed" ? jobProgress(job) : ""}
+  </section>`;
+}
+
+function recoveryScanDetails(job: Job, lang: Lang): string {
+  const stats = job.repair_summary as Record<string, unknown> | undefined;
+  if (!stats) return "";
+  return `<details class="recovery-scan-details" data-details-key="recovery-scan-${e(job.id)}">
+    <summary>${icon("info")}${L("Tarama bilgileri", "Scan information", lang)}</summary>
+    <dl class="rec-telemetry">
+      <div><dt>${L("Okunan veri", "Data read", lang)}</dt><dd>${fmtBytes(job.read_bytes)}</dd></div>
+      <div><dt>${L("İncelenen NTFS kaydı", "NTFS records checked", lang)}</dt><dd>${fmt(stats.mft_scanned ?? 0)}</dd></div>
+      <div><dt>${L("Gölge kopyadan bulunan", "Found in shadow copies", lang)}</dt><dd>${fmt(stats.vss_found ?? 0)}</dd></div>
+      <div><dt>${L("Yüksek bütünlük tahmini", "High estimated integrity", lang)}</dt><dd>${fmt(stats.high_confidence ?? 0)}</dd></div>
+    </dl>
+  </details>`;
+}
+
+function recoveryView(d: Disk): string {
+  const lang = getLang();
+  const job = recoveryJob();
+  const jobId = job?.id ?? "";
+  if (jobId !== lastRecoveryJobId) {
+    lastRecoveryJobId = jobId;
+    selectedRecoveryIds.clear();
+    recoveryPages.files = recoveryPages.apps = 1;
+    recoveryTabManual = false;
+  }
+  const activeTab = activeRecoveryTab(job);
+  const tabs: [RecoveryTab, string, string, number][] = [
+    ["files", L("Dosyalar", "Files", lang), "smart", job?.recovery_items?.length ?? 0],
+    ["apps", L("Uygulamalar ve oyunlar", "Apps and games", lang), "cpu", job?.deleted_apps?.length ?? 0],
+  ];
+  const hasResults = tabs.some(([, , , count]) => count > 0);
+  return `<section class="recovery-workspace">
+    <div class="recovery-heading">
+      <h1>${L("Dosya kurtarma", "File recovery", lang)}</h1>
+      <span>${e(d.model)}</span>
+    </div>
+    ${recoveryScanControls(d, job)}
+    <article class="card recovery-results-card">
+      ${job ? `<div class="recovery-result-header">
+        <div class="recovery-tabs" role="tablist" aria-label="${L("Kurtarma sonuçları", "Recovery results", lang)}">
+          ${tabs.map(([key, label, ico, count]) => `<button type="button" role="tab" id="rec-tab-${key}" aria-selected="${activeTab === key}" tabindex="${activeTab === key ? 0 : -1}" ${hasResults && activeTab === key ? `aria-controls="rec-panel-${key}"` : ""} class="rec-tab ${activeTab === key ? "selected" : ""}" data-rec-tab="${key}" ${hasResults ? "" : "disabled"}>${icon(ico)}<span>${label}</span><span class="rec-tab-count">${fmt(count)}</span></button>`).join("")}
+        </div>
+        <div class="recovery-scan-meta">
+          <span>${job.letter ? `${e(job.letter.replace(/:$/, ""))}: · ` : ""}${date(job.finished_at ?? job.started_at)}</span>
+          ${recoveryScanDetails(job, lang)}
+        </div>
+      </div>` : ""}
+      ${job && hasResults
+        ? activeTab === "apps" ? recoveryAppsPanel(job) : recoveryFilesPanel(job)
+        : active(job)
+          ? empty(L("Dosyalar aranıyor", "Looking for files", lang), L("Sonuçlar tarama tamamlanınca burada görünür.", "Results will appear here when the scan finishes.", lang), "search")
+          : job
+            ? empty(L("Gösterilecek sonuç yok", "No results to show", lang), L("Başka bir tarama türü veya bölüm seçebilirsiniz.", "You can choose another scan type or volume.", lang), "search")
+            : empty(L("Henüz tarama yapılmadı", "No scan yet", lang), L("Aradığınız dosyanın bulunduğu bölümü seçip hızlı taramayı başlatın.", "Choose the volume that held your file and start a quick scan.", lang), "search")}
+    </article>
+  </section>`;
 }
 
 function historyView(d: Disk): string {
@@ -2464,6 +2430,8 @@ function render() {
       ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${(isPortableEdition() ? L("Resmi taşınabilir .zip, SHA-256 ile doğrulanarak .\\data\\updates klasörüne indirilir.", "The official portable .zip is downloaded to .\\data\\updates and verified with SHA-256.", lang) : L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang))}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", (isPortableEdition() ? L("Taşınabilir .zip İndir (SHA-256)", "Download Portable .zip (SHA-256)", lang) : L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang)), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
       : "";
   root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(connectionError, lang))}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(state.error, lang))}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.11.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(translateJobPhase(state.job.phase, lang))}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  const recoveryPageCheckbox = root.querySelector<HTMLInputElement>("#rec-select-page[data-partial]");
+  if (recoveryPageCheckbox) recoveryPageCheckbox.indeterminate = true;
   document.querySelector("#main")!.scrollTop = scroll;
   if (id) {
     const input = document.getElementById(id) as HTMLInputElement | null;
@@ -2485,6 +2453,39 @@ function render() {
     }
   });
   lastPollSignature = currentPollSignature();
+}
+
+function renderRecoveryResults() {
+  render();
+  const panel = root.querySelector(".rec-tab-panel");
+  const main = root.querySelector("#main");
+  if (panel && main && panel.getBoundingClientRect().top < main.getBoundingClientRect().top) {
+    panel.scrollIntoView({ block: "start", inline: "nearest" });
+  }
+}
+
+function setRecoveryTab(tab: RecoveryTab) {
+  recoveryTab = tab;
+  recoveryTabManual = true;
+  renderRecoveryResults();
+  document.getElementById(`rec-tab-${tab}`)?.focus({ preventScroll: true });
+}
+
+function setRecoveryPage(value: string) {
+  const next = Number(value);
+  if (!Number.isInteger(next) || next < 1) return;
+  const focus = document.activeElement?.id;
+  recoveryPages[activeRecoveryTab(recoveryJob())] = next;
+  renderRecoveryResults();
+  if ((focus === "recovery-prev" || focus === "recovery-next") && document.getElementById(focus)?.matches(":disabled")) {
+    document.getElementById("recovery-page")?.focus({ preventScroll: true });
+  }
+}
+
+function updateRecoveryFilter<K extends keyof typeof recoveryFilters>(key: K, value: (typeof recoveryFilters)[K]) {
+  recoveryFilters[key] = value;
+  recoveryPages.files = 1;
+  renderRecoveryResults();
 }
 
 function applyLanguage(next: Lang) {
@@ -2666,23 +2667,28 @@ async function copyText(text: string): Promise<boolean> {
 
 async function openRecoveryPreview(
   jobId: string,
-  itemId: string,
-  itemName: string,
-  recoverable: boolean,
+  item: RecoveredItem,
 ) {
   const lang = getLang();
-  dialog.innerHTML = `<div class="preview-modal"><div class="preview-head"><div><span class="eyebrow">${L("SALT OKUNUR ÖNİZLEME", "READ-ONLY PREVIEW", lang)}</span><h2 id="confirm-title">${e(itemName)}</h2></div></div><p class="muted">${L("Önizleme hazırlanıyor…", "Loading preview…", lang)}</p></div>`;
+  const itemName = recoveryFileName(item, lang);
+  const heading = `<div><h2 id="confirm-title" dir="auto">${e(itemName)}</h2>${item.source === "carved" ? `<p class="preview-meta">${L("Özgün ad ve konum bulunamadı.", "The original name and location were unavailable.", lang)}</p>` : ""}</div>`;
+  const close = `<button type="button" class="button quiet" id="close-result">${L("Kapat", "Close", lang)}</button>`;
+  dialog.innerHTML = `<div class="preview-modal"><div class="preview-head">${heading}</div><p class="muted" role="status">${L("Önizleme hazırlanıyor…", "Loading preview…", lang)}</p><div class="dialog-actions">${close}</div></div>`;
+  const loading = dialog.firstElementChild;
+  dialog.querySelector("#close-result")?.addEventListener("click", () => dialog.close());
   dialog.showModal();
   try {
     const res = await invoke<RecoveryPreview>("preview_recovered_item", {
       jobId,
-      itemId,
+      itemId: item.id,
     });
+    if (!dialog.open || dialog.firstElementChild !== loading) return;
     const repairBanner =
       res.repaired || res.repair_note
         ? `<div class="preview-repair-banner">${icon("check")}<div><strong>${res.repaired ? L("Otomatik Onarıldı", "Auto-Repaired", lang) : L("Medya Durumu", "Media Status", lang)}</strong>${res.repair_note ? `<p>${e(translateRecoveryText(res.repair_note, lang))}</p>` : ""}</div></div>`
         : "";
-    let body = "";
+    let body = repairBanner;
+    let detailsItem = item;
     if (res.kind === "image") {
       const dims =
         res.width && res.height ? ` · ${res.width}×${res.height}` : "";
@@ -2695,15 +2701,15 @@ async function openRecoveryPreview(
         : "";
       body = `${repairBanner}${secretBanner}<pre class="preview-text" id="preview-text-pre">${e(res.text)}</pre><p class="preview-meta">${fmtBytes(res.size_bytes)}${res.truncated ? ` · ${L("İlk 16 KiB gösteriliyor", "Showing first 16 KiB", lang)}` : ""}</p>`;
     } else if (res.kind === "binary") {
-      const m = res.metadata ?? {};
-      body = `<dl class="preview-kv">
-        <dt>${L("Ürün Adı", "Product Name", lang)}</dt><dd>${e(m.product_name || "—")}</dd>
-        <dt>${L("Yayıncı", "Publisher", lang)}</dt><dd>${e(m.publisher || "—")}</dd>
-        <dt>${L("Dosya Türü", "File Type", lang)}</dt><dd>${e(translateRecoveryText(m.sub_type, lang) || L("PE / Çalıştırılabilir", "PE / Executable", lang))}</dd>
-        <dt>${L("Boyut", "Size", lang)}</dt><dd>${m.size_bytes != null ? fmtBytes(m.size_bytes) : "—"}</dd>
-        <dt>${L("Kaynak", "Source", lang)}</dt><dd>${e(m.source ? recoverySourceLabel(m.source, lang) : "—")}</dd>
-        <dt>${L("Durum", "Status", lang)}</dt><dd>${e(translateRecoveryText(m.status_label, lang) || "—")}</dd>
-      </dl>`;
+      const m = res.metadata;
+      detailsItem = {
+        ...item,
+        product_name: m?.product_name || item.product_name,
+        publisher: m?.publisher || item.publisher,
+        sub_type: m?.sub_type || item.sub_type,
+        size_bytes: m?.size_bytes ?? item.size_bytes,
+        status_label: m?.status_label || item.status_label,
+      };
     } else {
       body = `${repairBanner}<div class="preview-unavailable">${icon("info")}<div><strong>${L("Önizleme kullanılamıyor", "Preview unavailable", lang)}</strong><p>${e(translateRecoveryText(res.reason, lang))}</p></div></div>`;
     }
@@ -2715,18 +2721,19 @@ async function openRecoveryPreview(
           : res.kind === "binary"
             ? L("PE / İkili", "PE / Binary", lang)
             : L("Bilgi", "Info", lang);
-    const canRestore = state?.source === "live" && recoverable && !pending;
+    const canRestore = state?.source === "live" && isRecoverableRow(item) && !pending;
     dialog.innerHTML = `<div class="preview-modal">
-      <div class="preview-head"><div><span class="eyebrow">${L("SALT OKUNUR ÖNİZLEME", "READ-ONLY PREVIEW", lang)}</span><h2 id="confirm-title">${e(itemName)}</h2></div>${pill(kindBadge, res.kind === "unavailable" ? "warning" : "ok")}</div>
+      <div class="preview-head">${heading}${pill(kindBadge, res.kind === "unavailable" ? "warning" : "ok")}</div>
       ${body}
+      ${recoveryFileDetails(detailsItem, recoverySourceLabel(item.source, lang), res.kind === "binary" || res.kind === "unavailable", lang)}
       <div class="dialog-actions">
         ${canRestore ? `<button type="button" class="button primary" id="preview-restore">${icon("recover")}<span>${L("Dosyayı Kurtar", "Restore File", lang)}</span></button>` : ""}
-        <button type="button" class="button quiet" id="close-result">${L("Kapat", "Close", lang)}</button>
+        ${close}
       </div>
     </div>`;
-    dialog
-      .querySelector("#close-result")!
-      .addEventListener("click", () => dialog.close());
+    const closeButton = dialog.querySelector<HTMLButtonElement>("#close-result")!;
+    closeButton.addEventListener("click", () => dialog.close());
+    closeButton.focus({ preventScroll: true });
     if (res.kind === "text" && res.secrets_masked && typeof res.raw_text === "string") {
       let revealed = false;
       const preEl = dialog.querySelector<HTMLPreElement>("#preview-text-pre");
@@ -2741,32 +2748,32 @@ async function openRecoveryPreview(
     }
     dialog.querySelector("#preview-restore")?.addEventListener("click", () => {
       dialog.close();
-      void run(async () => {
-        const out = await invoke<{
-          saved: boolean;
-          path?: string;
-          repaired?: boolean;
-        }>("restore_recovered_item", { jobId, itemId });
-        if (out.saved) {
-          toast(
-            L(
-              `Dosya kurtarıldı${out.repaired ? " (otomatik onarıldı)" : ""}: ${out.path ?? ""}`,
-              `File restored${out.repaired ? " (auto-repaired)" : ""}: ${out.path ?? ""}`,
-            ),
-          );
-        }
-      });
+      restoreRecoveryItem(jobId, item.id);
     });
   } catch (err) {
+    if (!dialog.open || dialog.firstElementChild !== loading) return;
     dialog.innerHTML = `<div class="preview-modal">
-      <div class="preview-head"><h2 id="confirm-title">${e(itemName)}</h2>${pill(L("Hata", "Error", lang), "critical")}</div>
-      <p class="error-text">${e(String(err))}</p>
-      <div class="dialog-actions"><button type="button" class="button primary" id="close-result">${L("Kapat", "Close", lang)}</button></div>
+      <div class="preview-head">${heading}${pill(L("Hata", "Error", lang), "critical")}</div>
+      <p class="error-text">${e(translateBackendError(String(err), lang))}</p>
+      ${recoveryFileDetails(item, recoverySourceLabel(item.source, lang), true, lang)}
+      <div class="dialog-actions">${close}</div>
     </div>`;
-    dialog
-      .querySelector("#close-result")!
-      .addEventListener("click", () => dialog.close());
+    const closeButton = dialog.querySelector<HTMLButtonElement>("#close-result")!;
+    closeButton.addEventListener("click", () => dialog.close());
+    closeButton.focus({ preventScroll: true });
   }
+}
+
+function restoreRecoveryItem(jobId: string, itemId: string) {
+  void run(async () => {
+    const res = await invoke<{ saved: boolean; path?: string; repaired?: boolean }>("restore_recovered_item", { jobId, itemId });
+    if (res.saved) {
+      toast(L(
+        `Dosya kurtarıldı${res.repaired ? " (otomatik onarıldı)" : ""}: ${res.path ?? ""}`,
+        `File restored${res.repaired ? " (auto-repaired)" : ""}: ${res.path ?? ""}`,
+      ));
+    }
+  });
 }
 
 interface DryRunSpec {
@@ -3914,6 +3921,15 @@ function runOptimize(action: string, target: string, value: string) {
   );
 }
 
+root.addEventListener("keydown", (event) => {
+  const tab = (event.target as HTMLElement).dataset.recTab;
+  if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    setRecoveryTab(event.key === "Home" || (event.key !== "End" && tab === "apps") ? "files" : "apps");
+    return;
+  }
+});
+
 root.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button");
   if (!target || target.hasAttribute("disabled")) return;
@@ -3948,6 +3964,10 @@ root.addEventListener("click", (event) => {
     devCustomRoot = "";
     devFilter = "all";
     selectedRecoveryIds.clear();
+    recoveryFilters = { ...defaultRecoveryFileFilters };
+    recoveryPages.files = recoveryPages.apps = 1;
+    appSearch = "";
+    appFilter = "all";
     recoveryTabManual = false;
     lastRecoveryJobId = "";
     letter = disk()?.volumes[0]?.letter ?? "";
@@ -3975,14 +3995,17 @@ root.addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.recTab) {
-    recoveryTab = target.dataset.recTab as "apps" | "files";
-    recoveryTabManual = true;
-    render();
+    setRecoveryTab(target.dataset.recTab as RecoveryTab);
+    return;
+  }
+  if (target.dataset.recPage) {
+    setRecoveryPage(target.dataset.recPage);
     return;
   }
   if (target.dataset.appFilter) {
     appFilter = target.dataset.appFilter as AppFilter;
-    render();
+    recoveryPages.apps = 1;
+    renderRecoveryResults();
     return;
   }
   if (target.dataset.copyWinget) {
@@ -4017,37 +4040,14 @@ root.addEventListener("click", (event) => {
     offloadDevCache(target.dataset.devOffloadId);
     return;
   }
-  if (target.dataset.recCat) {
-    recoveryCat = target.dataset.recCat;
-    render();
-    return;
-  }
   if (target.dataset.previewId) {
-    const jobId = target.dataset.previewJob ?? "";
-    const itemId = target.dataset.previewId;
-    const itemName = target.dataset.previewName ?? L("Dosya", "File");
-    const recoverable = target.dataset.previewRecoverable === "1";
-    void openRecoveryPreview(jobId, itemId, itemName, recoverable);
+    const job = recoveryJob();
+    const item = job?.recovery_items?.find((item) => item.id === target.dataset.previewId);
+    if (job && job.id === target.dataset.previewJob && item) void openRecoveryPreview(job.id, item);
     return;
   }
   if (target.dataset.restoreId) {
-    const jobId = target.dataset.restoreJob ?? "";
-    const itemId = target.dataset.restoreId;
-    void run(async () => {
-      const res = await invoke<{
-        saved: boolean;
-        path?: string;
-        repaired?: boolean;
-      }>("restore_recovered_item", { jobId, itemId });
-      if (res.saved) {
-        toast(
-          L(
-            `Dosya kurtarıldı${res.repaired ? " (otomatik onarıldı)" : ""}: ${res.path ?? ""}`,
-            `File restored${res.repaired ? " (auto-repaired)" : ""}: ${res.path ?? ""}`,
-          ),
-        );
-      }
-    });
+    if (target.dataset.restoreJob) restoreRecoveryItem(target.dataset.restoreJob, target.dataset.restoreId);
     return;
   }
   if (target.dataset.benchRow) {
@@ -4281,25 +4281,26 @@ root.addEventListener("click", (event) => {
     void analyzeDevWorkspace();
   }
   else if (action === "start-recovery") startRecovery();
+  else if (action === "rec-reset-filters") {
+    recoveryFilters = { ...defaultRecoveryFileFilters };
+    recoveryPages.files = 1;
+    renderRecoveryResults();
+    document.getElementById("recovery-search")?.focus({ preventScroll: true });
+  }
   else if (action === "rec-select-all") {
-    const job = currentJob("recovery") ?? recoveryHistory[0] ?? null;
-    const rawItems = job?.recovery_items ?? [];
-    const pool = showUnopenableMedia
-      ? rawItems
-      : rawItems.filter((i) => !isUnopenableMedia(i));
-    for (const it of aiNaturalFilter(pool, recoverySearch, recoveryCat)) {
-      if (isRecoverableRow(it)) selectedRecoveryIds.add(it.id);
-    }
+    const rawItems = recoveryJob()?.recovery_items ?? [];
+    for (const item of filteredRecoveryFiles(rawItems, recoveryFilters, getLang()).filter(isRecoverableRow)) selectedRecoveryIds.add(item.id);
     render();
+    root.querySelector<HTMLElement>('[data-action="rec-clear-selection"]')?.focus({ preventScroll: true });
   } else if (action === "rec-clear-selection") {
     selectedRecoveryIds.clear();
     render();
+    document.getElementById("rec-select-page")?.focus({ preventScroll: true });
   } else if (action === "rec-restore-batch") {
-    const job = currentJob("recovery") ?? recoveryHistory[0] ?? null;
-    const validIds = new Set((job?.recovery_items ?? []).map((i) => i.id));
-    const itemIds = Array.from(selectedRecoveryIds).filter((id) =>
-      validIds.has(id),
-    );
+    const job = recoveryJob();
+    const itemIds = (job?.recovery_items ?? [])
+      .filter((item) => selectedRecoveryIds.has(item.id) && isRecoverableRow(item))
+      .map((item) => item.id);
     if (job && itemIds.length) {
       void run(async () => {
         const res = await invoke<BatchRestoreResult>("restore_recovered_batch", {
@@ -4421,11 +4422,11 @@ root.addEventListener("input", (event) => {
     search = t.value;
     render();
   } else if (t.id === "recovery-search") {
-    recoverySearch = t.value;
-    render();
+    updateRecoveryFilter("query", t.value);
   } else if (t.id === "recovery-app-search") {
     appSearch = t.value;
-    render();
+    recoveryPages.apps = 1;
+    renderRecoveryResults();
   }
 });
 root.addEventListener("change", (event) => {
@@ -4443,13 +4444,19 @@ root.addEventListener("change", (event) => {
       devAnalysis = null;
     }
     render();
+  } else if (t.id === "rec-select-page") {
+    const rawItems = recoveryJob()?.recovery_items ?? [];
+    const filtered = filteredRecoveryFiles(rawItems, recoveryFilters, getLang());
+    const { rows } = recoveryPageWindow(filtered, recoveryPages.files, "files");
+    for (const item of rows.filter(isRecoverableRow)) {
+      if (t.checked) selectedRecoveryIds.add(item.id);
+      else selectedRecoveryIds.delete(item.id);
+    }
+    render();
   } else if (t.dataset.recSelect) {
     const id = t.dataset.recSelect;
     if (t.checked) selectedRecoveryIds.add(id);
     else selectedRecoveryIds.delete(id);
-    render();
-  } else if (t.id === "show-unopenable-media") {
-    showUnopenableMedia = t.checked;
     render();
   } else if (t.id.startsWith("bench-")) {
     const key = t.id.slice(6) as keyof typeof bench;
@@ -4464,12 +4471,19 @@ root.addEventListener("change", (event) => {
   } else if (t.name === "scan-mode") {
     scan.mode = t.value;
     render();
-  } else if (t.name === "rec-mode") {
+  } else if (t.id === "recovery-mode" && (t.value === "quick" || t.value === "deep" || t.value === "dev")) {
     recConfig.mode = t.value;
     render();
+  } else if (t.id === "recovery-page") {
+    setRecoveryPage(t.value);
+  } else if (t.id === "recovery-category") {
+    updateRecoveryFilter("category", t.value);
+  } else if (t.id === "recovery-condition") {
+    updateRecoveryFilter("condition", t.value as typeof recoveryFilters.condition);
+  } else if (t.id === "recovery-name") {
+    updateRecoveryFilter("name", t.value as typeof recoveryFilters.name);
   } else if (t.id === "recovery-sort") {
-    recoverySort = t.value as typeof recoverySort;
-    render();
+    updateRecoveryFilter("sort", t.value as typeof recoveryFilters.sort);
   } else if (t.id === "language-setting") {
     applyLanguage(t.value === "en" ? "en" : "tr");
   } else if (t.id === "minimise-setting" && state)

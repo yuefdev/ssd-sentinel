@@ -498,6 +498,7 @@ export const BACKEND_PAIRS: readonly (readonly [string, string])[] = [
   ["powercfg /h başarısız: {}", "powercfg /h failed: {}"],
   ["powercfg başarısız: {}", "powercfg failed: {}"],
   ["ProgramData Kalıntısı", "ProgramData Leftover"],
+  ["Proje Dosyası (.{lower_ext})", "Project File (.{lower_ext})"],
   ["Proje Yapılandırması ({fname})", "Project Configuration ({fname})"],
   ["PSD başlığı bozuk; açılamaz.", "The PSD header is corrupt; cannot be opened."],
   ["PSD başlığı sağlam; açılabilir.", "PSD header is intact; can be opened."],

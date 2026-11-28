@@ -166,10 +166,15 @@ export function maskSerial(serial: string | null | undefined): string {
   return `${s.slice(0, 2)}${dots}${s.slice(-2)}`;
 }
 
+function recoverySearchKey(value: string): string {
+  return value.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/\u0131/g, "i").replaceAll("\\", "/");
+}
+
 export function aiNaturalFilter<
   T extends {
     name: string;
     category: string;
+    file_kind?: string;
     confidence: number;
     extension: string;
     original_path: string;
@@ -178,158 +183,42 @@ export function aiNaturalFilter<
     publisher?: string | null;
     ai_summary?: string;
   },
->(items: T[], query: string, categoryFilter = "all"): T[] {
-  const q = query.trim().toLocaleLowerCase("tr");
-  const tokens = q.split(/\s+/).filter(Boolean);
-  const wantsSystem =
-    categoryFilter === "system_lib" ||
-    tokens.some((tok) =>
-      [
-        "dll",
-        "sistem",
-        "sürücü",
-        "surucu",
-        "kütüphane",
-        "kutuphane",
-        "system",
-        "driver",
-        "library",
-      ].includes(tok),
-    );
-  let list =
-    categoryFilter === "all"
-      ? items.filter((i) => wantsSystem || i.category !== "system_lib")
-      : items.filter((i) => i.category === categoryFilter);
-  if (!tokens.length) return list;
-  for (const tok of tokens) {
-    if (
-      [
-        "uygulama",
-        "program",
-        "kurulum",
-        "setup",
-        "exe",
-        "msi",
-        "app",
-        "apps",
-        "programs",
-        "installer",
-      ].includes(tok)
-    ) {
-      list = list.filter(
-        (i) => i.category === "exe_setup" || i.category === "game_portable",
-      );
-    } else if (["oyun", "game", "games", "steam"].includes(tok)) {
-      list = list.filter((i) => i.category === "game_portable");
-    } else if (
-      [
-        "belge",
-        "doküman",
-        "dokuman",
-        "pdf",
-        "word",
-        "excel",
-        "doc",
-        "docs",
-        "document",
-        "documents",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.category === "document");
-    } else if (
-      [
-        "foto",
-        "fotoğraf",
-        "fotograf",
-        "resim",
-        "görsel",
-        "gorsel",
-        "png",
-        "jpg",
-        "photo",
-        "photos",
-        "image",
-        "images",
-        "picture",
-        "pictures",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.category === "photo");
-    } else if (
-      [
-        "video",
-        "videos",
-        "ses",
-        "müzik",
-        "muzik",
-        "medya",
-        "mp4",
-        "mp3",
-        "audio",
-        "sound",
-        "music",
-        "media",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.category === "video_audio");
-    } else if (["arşiv", "arsiv", "archive", "archives", "zip", "rar", "7z"].includes(tok)) {
-      list = list.filter((i) => i.category === "archive");
-    } else if (
-      [
-        "veritabanı",
-        "veritabani",
-        "sqlite",
-        "kod",
-        "ayar",
-        "json",
-        "database",
-        "code",
-        "config",
-        "vibe",
-        "proje",
-        "project",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.category === "database_code");
-    } else if (
-      [
-        "dll",
-        "sistem",
-        "sürücü",
-        "surucu",
-        "kütüphane",
-        "kutuphane",
-        "system",
-        "driver",
-        "library",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.category === "system_lib");
-    } else if (
-      [
-        "sağlam",
-        "saglam",
-        "yüksek",
-        "yuksek",
-        "kesin",
-        "bozulmamış",
-        "healthy",
-        "intact",
-        "good",
-        "solid",
-        "high",
-      ].includes(tok)
-    ) {
-      list = list.filter((i) => i.confidence >= 75);
-    } else {
-      list = list.filter((i) =>
-        `${i.name} ${i.sub_type ?? ""} ${i.product_name ?? ""} ${i.publisher ?? ""} ${i.extension} ${i.original_path} ${i.ai_summary ?? ""}`
-          .toLocaleLowerCase("tr")
-          .includes(tok),
-      );
-    }
-  }
-  return list;
+>(items: T[], query: string, categoryFilter: string | ((item: T) => boolean) = "all"): T[] {
+  const tokens = recoverySearchKey(query.trim()).split(/\s+/).filter(Boolean);
+  const systemTerms = ["sistem", "surucu", "kutuphane", "system", "driver", "library"];
+  const categoryTerms: [string[], string[]][] = [
+    [["uygulama", "program", "kurulum", "setup", "app", "apps", "programs", "installer"], ["exe_setup", "game_portable"]],
+    [["oyun", "game", "games", "steam"], ["game_portable"]],
+    [["belge", "dokuman", "word", "excel", "docs", "document", "documents"], ["document"]],
+    [["foto", "fotograf", "resim", "gorsel", "photo", "photos", "image", "images", "picture", "pictures"], ["photo"]],
+    [["video", "videos", "ses", "muzik", "medya", "audio", "sound", "music", "media"], ["video_audio"]],
+    [["arsiv", "archive", "archives"], ["archive"]],
+    [["veritabani", "kod", "ayar", "database", "code", "config", "vibe", "proje", "project"], ["database_code"]],
+    [systemTerms, ["system_lib"]],
+  ];
+  const extensions = new Set(["exe", "msi", "pdf", "doc", "png", "jpg", "mp4", "mp3", "zip", "rar", "7z", "sqlite", "json", "dll", "sys"]);
+  const healthTerms = ["saglam", "yuksek", "kesin", "bozulmamis", "healthy", "intact", "good", "solid", "high"];
+  const matchesSystem = tokens.some((token) => systemTerms.includes(token) || /(?:^|\.)(dll|sys)$/.test(token));
+  const matchesCategory = typeof categoryFilter === "function" ? categoryFilter : (item: T) =>
+    categoryFilter === "all" ? (matchesSystem || item.category !== "system_lib") : item.category === categoryFilter;
+
+  return items.filter((item) => {
+    if (!matchesCategory(item)) return false;
+    if (!tokens.length) return true;
+    const extension = recoverySearchKey(item.extension ?? "").replace(/^\./, "");
+    const screenshotTerms = item.file_kind === "screenshot" ? "screenshot screenshots ekran goruntusu ekran goruntuleri ekran alintisi" : "";
+    const text = recoverySearchKey([
+      item.name, item.sub_type, item.product_name, item.publisher, item.extension, item.original_path, item.ai_summary, screenshotTerms,
+    ].join(" "));
+
+    return tokens.every((token) => {
+      const ext = token.replace(/^\./, "");
+      if (extensions.has(ext)) return extension === ext;
+      if (healthTerms.includes(token)) return item.confidence >= 75;
+      const categories = categoryTerms.find(([terms]) => terms.includes(token))?.[1];
+      return !!categories?.includes(item.category) || text.includes(token);
+    });
+  });
 }
 
 export function formatInterface(
@@ -482,14 +371,12 @@ export function filterDeletedApps<
     }
     return true;
   });
-  const q = query.trim().toLocaleLowerCase("tr");
+  const q = recoverySearchKey(query.trim());
   if (!q) return list;
   const tokens = q.split(/\s+/).filter(Boolean);
   for (const tok of tokens) {
     list = list.filter((app) =>
-      `${app.name} ${app.publisher ?? ""} ${app.exe_path} ${app.category ?? ""} ${app.winget_hint ?? ""} ${(app.sources ?? []).join(" ")} ${app.drive_letter ?? ""}`
-        .toLocaleLowerCase("tr")
-        .includes(tok),
+      recoverySearchKey(`${app.name} ${app.publisher ?? ""} ${app.exe_path} ${app.category ?? ""} ${app.winget_hint ?? ""} ${(app.sources ?? []).join(" ")} ${app.drive_letter ?? ""}`).includes(tok),
     );
   }
   return list;

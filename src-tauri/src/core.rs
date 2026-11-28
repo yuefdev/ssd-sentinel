@@ -721,7 +721,15 @@ impl Core {
         lock(&self.store).events(id, &self.source_key)
     }
     pub fn saved_jobs(&self, kind: &str, id: Option<&str>) -> Result<Value, String> {
-        lock(&self.store).jobs(kind, id)
+        let mut jobs = lock(&self.store).jobs(kind, id)?;
+        if kind == "recovery" {
+            for job in jobs.as_array_mut().into_iter().flatten() {
+                if let Some(items) = job.get_mut("recovery_items") {
+                    crate::recovery::annotate_recovery_file_kinds(items);
+                }
+            }
+        }
+        Ok(jobs)
     }
     pub fn health_forecast(&self, id: &str) -> Result<Value, String> {
         let disk = self

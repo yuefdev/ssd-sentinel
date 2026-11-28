@@ -295,12 +295,16 @@ export interface SmartTierSummary {
   retrim_ok?: boolean;
   scope?: string;
 }
+export type RecoveryFileKind = "screenshot" | "photo" | "project" | "document" | "media" | "archive"
+  | "other" | "installer" | "infrastructure" | "system";
+
 export interface RecoveredItem {
   id: string;
   name: string;
   original_path: string;
   extension: string;
   category: string;
+  file_kind?: RecoveryFileKind;
   sub_type?: string;
   product_name?: string | null;
   publisher?: string | null;

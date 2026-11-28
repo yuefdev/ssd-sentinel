@@ -2546,66 +2546,6 @@ dialog pre {
   border: 1px solid var(--line);
   color: var(--secondary);
 }
-.recovery-layout {
-  display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
-  gap: 18px;
-  margin-bottom: 18px;
-}
-.recovery-results-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.ai-search-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.ai-search-bar input {
-  flex: 1;
-  min-width: 190px;
-  background: var(--input);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 9px 12px;
-  font: inherit;
-  font-size: 12.5px;
-}
-.ai-search-bar select {
-  background: var(--input);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 9px 11px;
-  font: inherit;
-  font-size: 12px;
-  max-width: 100%;
-}
-.rec-telemetry {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.rec-telemetry > div {
-  padding: 10px 12px;
-  border-radius: 9px;
-  background: var(--input);
-  border: 1px solid var(--line);
-}
-.rec-telemetry span {
-  display: block;
-  font-size: 10px;
-  color: var(--muted);
-  margin-bottom: 3px;
-}
-.rec-telemetry strong {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
 .cat-pills {
   display: flex;
   flex-wrap: wrap;
@@ -2638,43 +2578,6 @@ dialog pre {
   font-size: 11px;
   color: var(--secondary);
   overflow-wrap: anywhere;
-}
-.recovery-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.recovery-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 13px 14px;
-  border-radius: 10px;
-  background: var(--input);
-  border: 1px solid var(--line);
-}
-.recovery-row-main {
-  min-width: 0;
-  flex: 1;
-}
-.recovery-row-main strong {
-  display: block;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.recovery-row-main small {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--secondary);
-  overflow-wrap: anywhere;
-}
-.ai-note {
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--muted);
-  line-height: 1.5;
 }
 .ai-answer-box {
   padding: 14px;
@@ -2914,9 +2817,6 @@ dialog pre {
   .opt-card.wide-opt {
     grid-column: span 1;
   }
-  .recovery-layout {
-    grid-template-columns: 1fr;
-  }
   .page-heading h1 {
     font-size: 24px;
   }
@@ -2953,17 +2853,6 @@ dialog pre {
     flex-direction: column;
     align-items: flex-start;
     padding: 16px;
-  }
-  .recovery-row {
-    flex-direction: column;
-  }
-  .rec-telemetry {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .ai-search-bar input,
-  .ai-search-bar select {
-    width: 100%;
-    min-width: 0;
   }
   .brand {
     padding: 0 5px 22px;
@@ -4019,75 +3908,7 @@ nav + .nav-label {
   margin-top: 6px;
 }
 
-/* Recovery 2-Tab Redesign, Lost App Cards, Batch Bar & Preview Modal */
-.recovery-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  padding: 4px;
-  border-radius: 9px;
-  background: var(--input);
-  border: 1px solid var(--line);
-}
-.rec-tab {
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--secondary);
-  border-radius: 7px;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 550;
-  min-width: 0;
-  transition:
-    background 0.15s,
-    border-color 0.15s,
-    color 0.15s;
-}
-.rec-tab .icon {
-  width: 15px;
-  height: 15px;
-}
-.rec-tab > span:nth-child(2) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rec-tab:hover {
-  color: var(--text);
-  background: var(--card-hover);
-}
-.rec-tab.selected {
-  background: var(--card);
-  border-color: var(--accent);
-  color: var(--text);
-  box-shadow: 0 2px 8px #00000018;
-}
-.rec-tab.selected .icon {
-  color: var(--accent);
-}
-.rec-tab-count {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--line-soft);
-  color: var(--secondary);
-  flex-shrink: 0;
-}
-.rec-tab.selected .rec-tab-count {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.rec-tab-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
+/* Deleted app cards and recovery previews */
 .app-bundle-grid {
   grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
 }
@@ -4231,110 +4052,6 @@ nav + .nav-label {
   border-radius: 5px;
   padding: 5px 7px;
 }
-.cat-pills-row {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.unopenable-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--secondary);
-  cursor: pointer;
-  user-select: none;
-}
-.unopenable-toggle input {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.batch-recovery-bar {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 11px 14px;
-  border-radius: 9px;
-  background: var(--card);
-  border: 1px solid var(--line);
-}
-.batch-recovery-bar.has-selection {
-  border-color: var(--accent);
-  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--card) 75%);
-}
-.batch-bar-info strong {
-  display: block;
-  font-size: 12px;
-}
-.batch-bar-info small {
-  display: block;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 2px;
-}
-.batch-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.rec-check-wrap {
-  display: flex;
-  align-items: center;
-  padding-top: 3px;
-  flex-shrink: 0;
-}
-.rec-checkbox {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.rec-checkbox:disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
-}
-.recovery-row.row-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--input));
-}
-.recovery-row.row-unopenable {
-  opacity: 0.78;
-  border-style: dashed;
-}
-.recovery-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-.repair-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 10.5px;
-  color: var(--accent);
-  line-height: 1.45;
-}
-.repair-note.repair-note-bad {
-  color: var(--red);
-}
-.repair-note .icon {
-  width: 13px;
-  height: 13px;
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
 /* Preview modal inside #confirmation */
 dialog:has(.preview-modal) {
   width: min(640px, calc(100vw - 28px));
@@ -4462,28 +4179,11 @@ dialog:has(.preview-modal) {
     min-height: 34px;
     padding: 6px 10px;
   }
-  .recovery-tabs {
-    grid-template-columns: 1fr;
-  }
   .app-bundle-grid {
     grid-template-columns: 1fr;
   }
   .app-ev-winget code {
     min-width: 0;
-  }
-  .batch-recovery-bar {
-    position: static;
-  }
-  .batch-bar-actions {
-    width: 100%;
-  }
-  .recovery-row {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .recovery-row-actions {
-    width: 100%;
-    padding-left: 28px;
   }
   .preview-kv {
     grid-template-columns: 1fr;

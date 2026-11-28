@@ -1427,8 +1427,8 @@ try {
         },
         {
           id: "rec-photo",
-          name: "tatil.jpg",
-          original_path: "D:\\Fotograflar\\tatil.jpg",
+          name: "Kurtarilan_Foto_014.jpg",
+          original_path: "D:\\Kurtarilan_Foto_014.jpg",
           extension: "jpg",
           category: "photo",
           sub_type: "JPEG Fotoğraf (1920×1080)",
@@ -1553,6 +1553,8 @@ try {
   await page.locator(".disk-tile").first().click();
   await page.locator('[data-page="recovery"]').click();
   await expect(page.locator(".recovery-tabs")).toBeVisible();
+  await expect(page.locator('[data-rec-tab="files"]')).toHaveAttribute("aria-selected", "true");
+  await page.locator('[data-rec-tab="files"]').press("ArrowRight");
   await expect(page.locator('[data-rec-tab="apps"]')).toHaveAttribute(
     "aria-selected",
     "true",
@@ -1598,10 +1600,21 @@ try {
   );
   await expect(page.locator(".recovery-list")).toContainText("klip.mp4");
   await expect(page.locator(".recovery-list")).not.toContainText("bozuk.jpg");
-  await page.locator("#show-unopenable-media").check();
+  await expect(page.locator(".recovery-list")).toContainText("Fotoğraf 014.jpg");
+  await expect(page.locator(".recovery-list")).toContainText("Özgün ad ve konum bulunamadı");
+  await expect(page.locator(".recovery-list")).not.toContainText("Kurtarilan_Foto_014.jpg");
+  await page.locator("#recovery-condition").selectOption("all");
   await expect(page.locator(".recovery-row")).toHaveCount(5);
   await expect(page.locator(".recovery-list")).toContainText("bozuk.jpg");
-  await page.locator("#show-unopenable-media").uncheck();
+  await page.locator("#recovery-condition").selectOption("damaged");
+  await expect(page.locator(".recovery-row")).toHaveCount(1);
+  await expect(page.locator('.recovery-row [data-restore-id]')).toHaveCount(0);
+  await page.locator("#recovery-condition").selectOption("available");
+  await page.locator("#recovery-name").selectOption("carved");
+  await expect(page.locator(".recovery-row")).toHaveCount(2);
+  await page.locator("#recovery-name").selectOption("recorded");
+  await expect(page.locator(".recovery-row")).toHaveCount(2);
+  await page.locator('[data-action="rec-reset-filters"]').click();
   await expect(page.locator(".recovery-row")).toHaveCount(4);
   await page.locator('[data-preview-id="rec-photo"]').click();
   await expect(page.locator("#confirmation .preview-modal")).toBeVisible();
@@ -1609,6 +1622,10 @@ try {
     page.locator("#confirmation .preview-repair-banner"),
   ).toContainText("Otomatik Onarıldı");
   await expect(page.locator("#confirmation .preview-image")).toBeVisible();
+  await expect(page.locator("#confirm-title")).toHaveText("Fotoğraf 014.jpg");
+  await page.locator(".recovery-file-details summary").click();
+  await expect(page.locator(".recovery-file-details dd").first()).toHaveText("Kurtarilan_Foto_014.jpg");
+  await expect(page.locator(".recovery-file-details")).not.toContainText("D:\\Kurtarilan_Foto_014.jpg");
   await page.locator("#close-result").click();
   await page.locator('input[data-rec-select="rec-1"]').check();
   await page.locator('input[data-rec-select="rec-photo"]').check();
@@ -1632,10 +1649,13 @@ try {
     path: path.join(output, "recovery-files-dark.png"),
     fullPage: true,
   });
-  await page.locator('[data-rec-cat="system_lib"]').click();
+  await page.locator("#recovery-category").selectOption("system_lib");
   await expect(page.locator(".recovery-row")).toHaveCount(1);
   await expect(page.locator(".recovery-row")).toContainText("vcruntime140.dll");
-  await page.locator('[data-rec-cat="all"]').click();
+  await page.locator("#recovery-category").selectOption("all");
+  await page.locator("#recovery-search").fill("vcruntime140.dll");
+  await expect(page.locator(".recovery-row")).toHaveCount(1);
+  await expect(page.locator(".recovery-row")).toContainText("vcruntime140.dll");
   await page.locator("#recovery-search").fill("sağlam uygulama");
   await expect(page.locator(".recovery-row")).toHaveCount(1);
   await expect(page.locator(".recovery-row")).toContainText("SpotifySetup.exe");
@@ -1646,15 +1666,116 @@ try {
   for (const tab of ["files", "apps"]) {
     await page.locator(`[data-rec-tab="${tab}"]`).click();
     const recOverflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > window.innerWidth,
+      () => document.querySelector("#main").scrollWidth > document.querySelector("#main").clientWidth,
     );
     if (recOverflow)
       throw new Error(`Horizontal document overflow on recovery tab: ${tab}`);
   }
   await page.setViewportSize({ width: 1400, height: 1000 });
   checks.push(
-    "Recovery Center 2-tab UI, Lost Apps filters/details, media auto-repair badges, hidden unopenable media toggle, preview modal, and batch folder restore verified",
+    "File-first recovery, app filters, keyboard tabs, name provenance, damaged media filters, photo preview, and batch folder restore arguments verified",
   );
+  await page.evaluate(() => {
+    const job = window.__fixture.jobs.find((entry) => entry.id === "sim-recovery-1");
+    const originals = job.recovery_items.length;
+    for (let i = originals + 1; i <= 800; i++) {
+      const name = `Fotoğraf ${String(i).padStart(3, "0")}.jpg`;
+      job.recovery_items.push({
+        ...job.recovery_items[1],
+        id: `large-recovery-${i}`,
+        name,
+        original_path: `D:\\Arşiv\\${name}`,
+        category: "photo",
+        extension: "jpg",
+        sub_type: "JPEG Fotoğraf",
+      });
+    }
+    const app = job.deleted_apps[0];
+    for (let i = 3; i <= 13; i++) job.deleted_apps.push({ ...app, name: `App ${i}` });
+  });
+  await page.locator(".disk-tile").first().click();
+  await expect(page.locator('[data-rec-tab="files"]')).toContainText("800");
+  await expect(page.locator(".recovery-row")).toHaveCount(12);
+  await page.locator("#rec-select-page").check();
+  await expect(page.locator(".batch-recovery-bar")).toContainText("12 dosya seçildi");
+  await page.locator("#recovery-next").click();
+  await expect(page.locator(".recovery-result-count")).toContainText("13–24 / 798");
+  await expect(page.locator("#rec-select-page")).not.toBeChecked();
+  await page.locator('.recovery-row .rec-checkbox').first().check();
+  await expect(page.locator(".batch-recovery-bar")).toContainText("13 dosya seçildi");
+  await page.locator("#recovery-page").selectOption("67");
+  await expect(page.locator(".recovery-row")).toHaveCount(6);
+  await expect(page.locator("#recovery-next")).toBeDisabled();
+  await page.locator("#recovery-search").fill("D:/Arsiv/fotograf 800");
+  await expect(page.locator(".recovery-row")).toContainText("Fotoğraf 800.jpg");
+  await expect(page.locator(".recovery-row")).toHaveCount(1);
+  await expect(page.locator(".batch-recovery-bar")).toContainText("13 seçim bu filtrelerin dışında");
+  await page.locator('[data-action="rec-clear-selection"]').click();
+  await page.locator('[data-action="rec-reset-filters"]').click();
+  await expect(page.locator("#recovery-page")).toHaveValue("1");
+  await page.screenshot({ path: path.join(output, "recovery-large.png") });
+  await page.locator('[data-rec-tab="apps"]').click();
+  await expect(page.locator(".app-bundle-card")).toHaveCount(9);
+  await page.locator("#recovery-next").click();
+  await expect(page.locator(".app-bundle-card")).toHaveCount(4);
+  await page.locator("#recovery-app-search").fill("App 13");
+  await expect(page.locator(".app-bundle-card")).toHaveCount(1);
+  await page.evaluate(() => {
+    const job = window.__fixture.jobs.find((entry) => entry.id === "sim-recovery-1");
+    job.recovery_items.length = 6;
+    job.deleted_apps.length = 2;
+  });
+  checks.push("800-file results render 12 per page, with direct page navigation, path search without Turkish accents, retained cross-page selection, and paginated app results");
+
+  await page.evaluate(() => {
+    const job = window.__fixture.jobs.find((entry) => entry.id === "sim-recovery-1");
+    const [base] = job.recovery_items;
+    const examples = [
+      ["support", "package.json", "json", "database_code", "infrastructure"],
+      ["installer", "EditorSetup.exe", "exe", "exe_setup", "installer"],
+      ["edit", "Belgesel.prproj", "prproj", "other", "project"],
+      ["code", "App.tsx", "tsx", "database_code", "project"],
+      ["shot", "UI - 001.png", "png", "photo", "screenshot"],
+    ];
+    for (const [id, name, extension, category, file_kind] of examples) {
+      job.recovery_items.push({
+        ...base, id, name, extension, category, file_kind, size_bytes: 12000,
+        sub_type: "", product_name: null, publisher: null,
+        original_path: `D:\\${id === "shot" ? "Screenshots" : "Project"}\\${name}`,
+      });
+    }
+  });
+  await page.locator(".disk-tile").first().click();
+  const rows = page.locator(".recovery-row");
+  await expect(rows).toHaveCount(9);
+  await expect(rows.first()).toContainText("UI - 001.png");
+  await expect(rows.first()).toContainText("Ekran görüntüsü");
+  await expect(rows.last()).toContainText("package.json");
+  const ordered = await rows.evaluateAll((entries) => entries.map((row) => row.querySelector('[data-preview-id]').dataset.previewId));
+  if (ordered.indexOf("edit") > ordered.indexOf("rec-photo")) throw new Error("Project file must precede an unnamed photo");
+  await page.locator("#recovery-category").selectOption("screenshot");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("UI - 001.png");
+  await page.locator("#recovery-category").selectOption("project");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("Belgesel.prproj");
+  await page.locator("#recovery-category").selectOption("infrastructure");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("package.json");
+  await page.locator("#recovery-category").selectOption("all");
+  await page.locator("#recovery-search").fill("ekran görüntüsü");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("UI - 001.png");
+  await page.locator("#recovery-search").fill("");
+  await page.locator("#recovery-sort").selectOption("size");
+  await expect(rows.first()).toContainText("SpotifySetup.exe");
+  await page.locator("#recovery-sort").selectOption("best");
+  await page.screenshot({ path: path.join(output, "recovery-priority.png") });
+  await page.evaluate(() => {
+    const job = window.__fixture.jobs.find((entry) => entry.id === "sim-recovery-1");
+    job.recovery_items.length = 6;
+  });
+  checks.push("Smart recovery priority shows screenshots before editable projects and support files, with direct type filters and manual sort overrides");
   // Developer & Vibe-Coding suite smoke verification (Dev Workspace, LongPaths/8.3, VHDX Compact, Dev Recovery & .env secret masking)
   await page.evaluate(() => {
     const s = window.__fixture.state;
@@ -1869,7 +1990,7 @@ try {
   // Dev recovery mode & masked .env preview toggle
   await page.locator(".disk-tile").first().click();
   await page.locator('[data-page="recovery"]').first().click();
-  await expect(page.locator('input[name="rec-mode"][value="dev"]')).toBeVisible();
+  await expect(page.locator('#recovery-mode option[value="dev"]')).toHaveText("Kod ve proje taraması");
   await page.locator('[data-rec-tab="files"]').click();
   await page.locator("#recovery-search").fill(".env");
   await expect(page.locator(".recovery-row")).toHaveCount(1);
@@ -2029,7 +2150,7 @@ try {
   }
 
   await page.locator('[data-page="recovery"]').first().click();
-  await expect(page.locator("main")).toContainText("Recoverable Files");
+  await expect(page.locator('[data-rec-tab="files"]')).toContainText("Files");
 
   await page.locator('[data-page="smart"]').first().click();
   await expect(page.locator(".smart-table")).toContainText("Raw value");
@@ -2592,6 +2713,7 @@ try {
         await pp.locator('[data-page="' + view + '"]').first().click();
         await pp.waitForTimeout(150);
         if (view === "recovery") {
+          await pp.locator('[data-rec-tab="apps"]').click();
           await inspect("recovery/apps", pp);
           await pp.locator('[data-rec-tab="files"]').click();
         }

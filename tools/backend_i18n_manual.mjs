@@ -81,6 +81,7 @@ export const MANUAL_PAIRS = [
   ["{arch} Masaüstü Uygulaması", "{arch} Desktop Application"],
   ["Ortam Değişkenleri (.env)", "Environment Variables (.env)"],
   ["Proje Yapılandırması ({fname})", "Project Configuration ({fname})"],
+  ["Proje Dosyası (.{lower_ext})", "Project File (.{lower_ext})"],
   ["Oyun Çalıştırıcısı (.exe)", "Game Launcher (.exe)"],
   ["Windows Uygulaması (.exe)", "Windows Application (.exe)"],
   ["Metin Dosyası (.{lower_ext})", "Text File (.{lower_ext})"],

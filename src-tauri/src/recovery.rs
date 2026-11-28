@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -19,8 +20,11 @@ use std::{
     time::Instant,
 };
 
+mod priority;
+
 const WINDOWS_EPOCH_OFFSET_100NS: i64 = 116_444_736_000_000_000;
 const MAX_RESULTS: usize = 800;
+const RESERVED_PROJECT_RESULTS: usize = 64;
 const MAX_MFT_COLLECT: usize = 8_000;
 const MAX_MFT_PROBE: usize = 800;
 const MAX_MFT_DIRS: usize = 250_000;
@@ -524,7 +528,8 @@ pub fn is_junk_noise_path(path_or_name: &str, ext: &str) -> bool {
     if matches!(
         ext_lower.as_str(),
         "tmp" | "etl" | "pf" | "lock" | "dmp" | "cache" | "chk" | "mui" | "evtx" | "dat"
-    ) {
+    ) && !(ext_lower == "lock" && priority::is_project_lockfile(&file_name_lower(path_or_name)))
+    {
         return true;
     }
     let lower = path_or_name.to_ascii_lowercase();
@@ -859,58 +864,24 @@ pub fn is_dev_project_file(full_path: &str, ext: &str) -> bool {
         return true;
     }
     let lower_ext = ext.trim_start_matches('.').to_ascii_lowercase();
-    matches!(
-        lower_ext.as_str(),
-        "tsx"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "vue"
-            | "svelte"
-            | "astro"
-            | "go"
-            | "java"
-            | "kt"
-            | "kts"
-            | "swift"
-            | "rb"
-            | "php"
-            | "c"
-            | "h"
-            | "hpp"
-            | "prisma"
-            | "graphql"
-            | "gql"
-            | "proto"
-            | "tf"
-            | "hcl"
-            | "sh"
-            | "scss"
-            | "sass"
-            | "less"
-            | "env"
-            | "sql"
-            | "sqlite"
-            | "sqlite3"
-            | "db"
-            | "duckdb"
-            | "rs"
-            | "ts"
-            | "js"
-            | "py"
-            | "json"
-            | "toml"
-            | "yaml"
-            | "yml"
-            | "md"
-            | "cpp"
-            | "cs"
-            | "html"
-            | "css"
-            | "xml"
-            | "ini"
-            | "cfg"
-    )
+    priority::is_source_extension(&lower_ext)
+        || priority::is_editable_project_extension(&lower_ext)
+        || priority::is_project_lockfile(&name)
+        || matches!(
+            lower_ext.as_str(),
+            "sqlite"
+                | "sqlite3"
+                | "db"
+                | "duckdb"
+                | "json"
+                | "toml"
+                | "yaml"
+                | "yml"
+                | "md"
+                | "xml"
+                | "ini"
+                | "cfg"
+        )
 }
 
 pub fn category_for_file(
@@ -967,8 +938,8 @@ pub fn category_for_file(
         "xlsx" | "xls" | "ods" | "csv" => ("document", format!("Tablo Belgesi (.{lower_ext})")),
         "pptx" | "ppt" => ("document", format!("Sunum Belgesi (.{lower_ext})")),
         "txt" | "md" => ("document", format!("Metin Dosyası (.{lower_ext})")),
-        "jpg" | "jpeg" | "png" | "webp" | "heic" | "bmp" | "gif" | "tif" | "tiff" | "psd"
-        | "svg" | "ico" | "raw" | "cr2" | "nef" => {
+        "jpg" | "jpeg" | "png" | "webp" | "heic" | "heif" | "avif" | "bmp" | "gif" | "tif"
+        | "tiff" | "psd" | "svg" | "ico" | "raw" | "cr2" | "nef" => {
             ("photo", format!("Görsel / Fotoğraf (.{lower_ext})"))
         }
         "mp4" | "mkv" | "mov" | "m4v" | "avi" | "webm" | "wmv" | "flv" => {
@@ -983,14 +954,21 @@ pub fn category_for_file(
         "sqlite" | "sqlite3" | "db" | "mdb" | "sql" | "bak" | "duckdb" => {
             ("database_code", format!("Veritabanı (.{lower_ext})"))
         }
-        "json" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "rs" | "ts" | "tsx" | "js"
-        | "jsx" | "mjs" | "cjs" | "vue" | "svelte" | "astro" | "py" | "go" | "java" | "kt"
-        | "kts" | "swift" | "rb" | "php" | "c" | "h" | "hpp" | "cs" | "cpp" | "html" | "css"
-        | "scss" | "sass" | "less" | "prisma" | "graphql" | "gql" | "proto" | "tf" | "hcl"
-        | "sh" | "env" => (
-            "database_code",
-            format!("Kod / Yapılandırma (.{lower_ext})"),
-        ),
+        ext if priority::is_editable_project_extension(ext) => {
+            ("database_code", format!("Proje Dosyası (.{lower_ext})"))
+        }
+        ext if priority::is_source_extension(ext)
+            || priority::is_project_lockfile(&fname)
+            || matches!(
+                ext,
+                "json" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg"
+            ) =>
+        {
+            (
+                "database_code",
+                format!("Kod / Yapılandırma (.{lower_ext})"),
+            )
+        }
         "dll" | "sys" | "ocx" | "drv" | "lnk" | "bat" | "cmd" | "ps1" => {
             ("system_lib", format!("Sistem / Kısayol (.{lower_ext})"))
         }
@@ -3193,6 +3171,101 @@ pub fn build_deleted_app_bundles(
     bundles
 }
 
+pub(crate) fn annotate_recovery_file_kinds(items: &mut Value) {
+    for item in items.as_array_mut().into_iter().flatten() {
+        let Some(record) = item.as_object_mut() else {
+            continue;
+        };
+        if record.get("file_kind").is_some_and(Value::is_string) {
+            continue;
+        }
+        let field = |key| record.get(key).and_then(Value::as_str).unwrap_or("");
+        let kind = priority::file_kind(
+            field("name"),
+            field("original_path"),
+            field("extension"),
+            field("category"),
+            field("source") != "carved",
+        );
+        record.insert("file_kind".to_owned(), json!(kind));
+    }
+}
+
+fn recovery_availability(item: &RecoveredItem) -> u8 {
+    if !item.openable || item.trim_zeroed || item.media_status.as_deref() == Some("unrecoverable") {
+        0
+    } else if matches!(item.source.as_str(), "usn_journal" | "indx_slack") {
+        1
+    } else {
+        2
+    }
+}
+
+fn recovered_file_kind(item: &RecoveredItem) -> priority::FileKind {
+    priority::file_kind(
+        &item.name,
+        &item.original_path,
+        &item.extension,
+        &item.category,
+        item.source != "carved",
+    )
+}
+
+fn prioritize_recovery_results(
+    items: &mut Vec<RecoveredItem>,
+    apps: &[DeletedAppBundle],
+    developer_mode: bool,
+) {
+    items.sort_by_cached_key(|item| {
+        let env =
+            developer_mode && (is_env_filename(&item.name) || is_env_filename(&item.original_path));
+        Reverse((
+            recovery_availability(item),
+            env,
+            recovered_file_kind(item),
+            item.source == "vss_shadow",
+            item.confidence,
+            item.deleted_at.clone(),
+        ))
+    });
+
+    if items.len() <= MAX_RESULTS || developer_mode {
+        items.truncate(MAX_RESULTS);
+        return;
+    }
+
+    // App cards link to records in this same result set, so keep their restore targets.
+    let mut protected_ids: HashSet<String> = apps
+        .iter()
+        .filter_map(|app| app.recoverable_item_id.clone())
+        .collect();
+    protected_ids.extend(
+        items
+            .iter()
+            .filter(|item| {
+                recovery_availability(item) == 2
+                    && recovered_file_kind(item) == priority::FileKind::Project
+            })
+            .take(RESERVED_PROJECT_RESULTS)
+            .map(|item| item.id.clone()),
+    );
+    let reserved = items
+        .iter()
+        .filter(|item| protected_ids.contains(&item.id))
+        .count();
+    let mut remaining = MAX_RESULTS.saturating_sub(reserved);
+    items.retain(|item| {
+        if protected_ids.contains(&item.id) {
+            return true;
+        }
+        if remaining == 0 {
+            return false;
+        }
+        remaining -= 1;
+        true
+    });
+}
+
 pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Result<(), String> {
     let mode = request.options["mode"].as_str().unwrap_or("quick");
     if mode == "deep" && !platform::is_admin() {
@@ -3562,27 +3635,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
                 || is_dev_project_file(&i.name, &i.extension)
         });
     }
-    items.sort_by(|a, b| {
-        let a_vss = a.source == "vss_shadow";
-        let b_vss = b.source == "vss_shadow";
-        let a_env =
-            mode == "dev" && (is_env_filename(&a.name) || is_env_filename(&a.original_path));
-        let b_env =
-            mode == "dev" && (is_env_filename(&b.name) || is_env_filename(&b.original_path));
-        let a_app = matches!(a.category.as_str(), "exe_setup" | "game_portable");
-        let b_app = matches!(b.category.as_str(), "exe_setup" | "game_portable");
-        let a_sys = a.category == "system_lib";
-        let b_sys = b.category == "system_lib";
-        b.openable
-            .cmp(&a.openable)
-            .then_with(|| b_vss.cmp(&a_vss))
-            .then_with(|| b_env.cmp(&a_env))
-            .then_with(|| a_sys.cmp(&b_sys))
-            .then_with(|| b_app.cmp(&a_app))
-            .then_with(|| b.confidence.cmp(&a.confidence))
-            .then_with(|| b.deleted_at.cmp(&a.deleted_at))
-    });
-    items.truncate(MAX_RESULTS);
+    prioritize_recovery_results(&mut items, &apps, mode == "dev");
 
     let dev_files_found = items
         .iter()
@@ -3613,9 +3666,11 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         .count();
     let media_unrecoverable = items.iter().filter(|i| !i.openable).count();
 
+    let mut recovery_items = json!(items);
+    annotate_recovery_file_kinds(&mut recovery_items);
     let mut job = lock(&core.job);
     job["progress"] = json!(100);
-    job["recovery_items"] = json!(items);
+    job["recovery_items"] = recovery_items;
     job["deleted_apps"] = json!(apps);
     job["repair_summary"] = json!({
         "mode": mode,
@@ -3958,26 +4013,17 @@ mod win {
         Some(pbuf.as_mut()[skip..end].to_vec())
     }
 
-    fn candidate_priority(name: &str, full_path: &str, size: u64) -> i32 {
-        let ext = extension_of(name);
+    fn candidate_priority(
+        name: &str,
+        full_path: &str,
+        ext: &str,
+        size: u64,
+        dev_only: bool,
+    ) -> (bool, priority::FileKind, u8) {
+        let category = category_for_file(ext, full_path, &[], None).0;
+        let kind = priority::file_kind(name, full_path, ext, category, true);
         let lower_path = full_path.to_ascii_lowercase();
-        let mut score = if is_env_filename(name) {
-            115
-        } else {
-            match ext.as_str() {
-                "exe" | "msi" | "msix" | "apk" => 120,
-                "pdf" | "docx" | "xlsx" | "pptx" | "doc" | "xls" => 80,
-                "jpg" | "jpeg" | "png" | "mp4" | "mkv" | "mov" | "zip" | "rar" | "7z"
-                | "sqlite" | "sqlite3" | "db" | "duckdb" | "sql" => 75,
-                "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "json" | "toml" | "yaml"
-                | "yml" | "prisma" | "env" => 65,
-                "dll" | "sys" | "bat" | "cmd" | "ps1" => -40,
-                _ => 30,
-            }
-        };
-        if is_game_path(&lower_path) {
-            score += 40;
-        }
+        let mut score = if is_game_path(&lower_path) { 40 } else { 0 };
         if lower_path.contains("\\users\\")
             || lower_path.contains("\\downloads\\")
             || lower_path.contains("\\desktop\\")
@@ -3988,13 +4034,43 @@ mod win {
         if size >= 128 * 1024 {
             score += 20;
         }
-        score
+        (dev_only && is_env_filename(name), kind, score)
     }
 
     struct MftCandidate {
         parsed: ParsedMftDeleted,
         full_path: String,
-        priority: i32,
+        priority: (bool, priority::FileKind, u8),
+    }
+
+    fn limit_mft_candidates(candidates: &mut Vec<MftCandidate>, mixed_scan: bool) {
+        if !mixed_scan || candidates.len() <= MAX_MFT_PROBE {
+            candidates.truncate(MAX_MFT_PROBE);
+            return;
+        }
+
+        let count = |kind, limit| {
+            candidates
+                .iter()
+                .filter(|file| file.priority.1 == kind)
+                .take(limit)
+                .count()
+        };
+        let mut projects = count(priority::FileKind::Project, RESERVED_PROJECT_RESULTS);
+        let mut installers = count(priority::FileKind::Installer, 48);
+        let mut remaining = MAX_MFT_PROBE - projects - installers;
+        candidates.retain(|candidate| {
+            let slots = match candidate.priority.1 {
+                priority::FileKind::Project if projects > 0 => &mut projects,
+                priority::FileKind::Installer if installers > 0 => &mut installers,
+                _ => &mut remaining,
+            };
+            if *slots == 0 {
+                return false;
+            }
+            *slots -= 1;
+            true
+        });
     }
 
     pub type MftScanResult = (Vec<RecoveredItem>, u64, HashMap<u64, (u64, String)>);
@@ -4129,7 +4205,8 @@ mod win {
                 if dev_only && !is_dev_project_file(&full_path, &ext) {
                     return None;
                 }
-                let priority = candidate_priority(&parsed.name, &full_path, parsed.real_size);
+                let priority =
+                    candidate_priority(&parsed.name, &full_path, &ext, parsed.real_size, dev_only);
                 Some(MftCandidate {
                     parsed,
                     full_path,
@@ -4143,7 +4220,7 @@ mod win {
                 .cmp(&a.priority)
                 .then_with(|| b.parsed.deleted_at.cmp(&a.parsed.deleted_at))
         });
-        candidates.truncate(MAX_MFT_PROBE);
+        limit_mft_candidates(&mut candidates, !apps_only && !dev_only);
 
         let mut probe = PageBuf::alloc(64 * 1024)?;
         let mut out = Vec::with_capacity(candidates.len());
@@ -4835,6 +4912,93 @@ impl CarvedSignature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_recovery_rows_are_annotated_using_existing_metadata() {
+        let mut rows = json!([
+            { "name": "Screenshot (4).png", "original_path": "D:\\Pictures\\Screenshot (4).png", "category": "photo" },
+            { "name": "video.prproj", "original_path": "D:\\Video\\video.prproj", "category": "other" },
+            { "name": "Cargo.lock", "original_path": "D:\\App\\Cargo.lock", "category": "other" },
+            { "name": "Screenshot.png", "extension": "png", "source": "carved", "category": "photo" }
+        ]);
+        annotate_recovery_file_kinds(&mut rows);
+        assert_eq!(rows[0]["file_kind"], "screenshot");
+        assert_eq!(rows[1]["file_kind"], "project");
+        assert_eq!(rows[2]["file_kind"], "infrastructure");
+        assert_eq!(rows[3]["file_kind"], "photo");
+        assert_eq!(rows[1]["category"], "other");
+        assert!(!is_junk_noise_path(r"D:\App\Cargo.lock", "lock"));
+        assert!(is_junk_noise_path(r"D:\App\stale.lock", "lock"));
+    }
+
+    #[test]
+    fn priority_puts_usable_screenshots_first_and_retains_projects_and_app_targets_at_the_limit() {
+        let item = |id: &str, name: &str, extension: &str, category: &str| RecoveredItem {
+            id: id.into(),
+            name: name.into(),
+            original_path: format!("D:\\Work\\{name}"),
+            extension: extension.into(),
+            category: category.into(),
+            sub_type: String::new(),
+            product_name: None,
+            publisher: None,
+            size_bytes: 10_000,
+            deleted_at: None,
+            source: "mft_resident".into(),
+            confidence: 85,
+            status_label: String::new(),
+            entropy: 0.0,
+            trim_zeroed: false,
+            ai_summary: String::new(),
+            source_letter: "D".into(),
+            locator: Value::Null,
+            media_status: None,
+            openable: true,
+            repair_note: None,
+        };
+        let mut infrastructure = item("support", "package.json", "json", "database_code");
+        infrastructure.source = "vss_shadow".into();
+        infrastructure.confidence = 100;
+        let mut broken = item("broken", "Screenshot broken.png", "png", "photo");
+        broken.trim_zeroed = true;
+        let mut items = vec![
+            infrastructure,
+            item("installer", "EditorSetup.exe", "exe", "exe_setup"),
+            item("project", "edit.prproj", "prproj", "database_code"),
+            item("photo", "IMG_123.png", "png", "photo"),
+            item("screen", "Screenshot 011.png", "png", "photo"),
+            broken,
+        ];
+        let app = serde_json::from_value(json!({
+            "name": "Editor", "exe_path": "D:\\Work\\EditorSetup.exe", "installer_found": true,
+            "recoverable_item_id": "installer", "appdata_paths": [], "winget_hint": "", "confidence": 85
+        })).unwrap();
+        let apps = [app];
+        prioritize_recovery_results(&mut items, &apps, false);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "screen",
+                "project",
+                "photo",
+                "installer",
+                "support",
+                "broken"
+            ]
+        );
+
+        for n in 0..MAX_RESULTS {
+            let id = format!("screen-{n}");
+            items.push(item(&id, "Screenshot 012.png", "png", "photo"));
+        }
+        prioritize_recovery_results(&mut items, &apps, false);
+        assert_eq!(items.len(), MAX_RESULTS);
+        assert_eq!(items[MAX_RESULTS - 2].id, "project");
+        assert_eq!(items[MAX_RESULTS - 1].id, "installer");
+    }
 
     fn push_version_kv(out: &mut Vec<u8>, key: &str, val: &str) {
         while !out.len().is_multiple_of(4) {
