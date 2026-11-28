@@ -34,19 +34,27 @@ pub struct Sample {
 }
 
 pub fn engine_info() -> Value {
-    let available = cfg!(windows);
-    let name = if available {
-        "SSD Sentinel Direct-I/O (Win32 IOCP)"
+    if cfg!(windows) {
+        json!({"available":true,"name":"SSD Sentinel Direct-I/O (Win32 IOCP)","native":true})
+    } else if cfg!(target_os = "linux") {
+        #[cfg(target_os = "linux")]
+        let name = if crate::io_linux::io_uring_supported() {
+            "SSD Sentinel Direct-I/O (Linux io_uring + O_DIRECT)"
+        } else {
+            "SSD Sentinel Direct-I/O (Linux O_DIRECT)"
+        };
+        #[cfg(not(target_os = "linux"))]
+        let name = "SSD Sentinel Direct-I/O";
+        json!({"available":true,"name":name,"native":true})
     } else {
-        "Desteklenmiyor (yalnız Windows)"
-    };
-    json!({"available":available,"name":name,"native":available})
+        json!({"available":false,"name":"Desteklenmiyor","native":false})
+    }
 }
 pub fn check_engine() -> Result<(), String> {
-    if cfg!(windows) {
+    if cfg!(any(windows, target_os = "linux")) {
         Ok(())
     } else {
-        Err("Native Direct-I/O hız testi yalnız Windows'ta çalışır.".into())
+        Err("Native Direct-I/O hız testi bu platformda desteklenmiyor.".into())
     }
 }
 
@@ -704,10 +712,14 @@ pub fn run_native_io_step(
     {
         native_io::run(path, file_size, row, direction, seconds, zero_data, cancel)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::io_linux::run(path, file_size, row, direction, seconds, zero_data, cancel)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (path, file_size, row, direction, seconds, zero_data, cancel);
-        Err("Native Direct-I/O hız testi yalnız Windows'ta çalışır.".into())
+        Err("Native Direct-I/O hız testi bu platformda desteklenmiyor.".into())
     }
 }
 
@@ -729,48 +741,116 @@ fn defrag(core: &Core, request: &JobRequest, disk: &Disk) -> Result<(), String> 
             )
             .into());
     }
-    let mode = request.options["mode"].as_str().unwrap_or("analyze");
-    let (flag, title_tr, title_en) = match mode {
-        "defrag" => (
-            "/O",
-            "HDD akıllı birleştirme · defrag /O",
-            "HDD smart optimization · defrag /O",
-        ),
-        "consolidate" => (
-            "/X",
-            "HDD boş alan birleştirme · defrag /X",
-            "HDD free-space consolidation · defrag /X",
-        ),
-        _ => (
-            "/A",
-            "HDD parçalanma analizi · defrag /A",
-            "HDD fragmentation analysis · defrag /A",
-        ),
-    };
-    lock(&core.job)["total"] = json!(1);
-    phase_bi(core, title_tr, title_en);
-    let output = process::run(
-        &platform::system_executable("defrag.exe"),
-        &[format!("{}:", request.letter), flag.into(), "/V".into()],
-        Duration::from_secs(1800),
-        &core.job_cancel,
-    )?;
-    let mut job = lock(&core.job);
-    job["completed"] = json!(1);
-    job["progress"] = json!(100);
-    job["repair_summary"] = json!({
-        "mode": mode,
-        "code": output.code,
-        "output": output.stdout.chars().take(12000).collect::<String>()
-    });
-    if output.code != 0 {
-        return Err(if en {
-            format!("defrag.exe returned error code: {}", output.code)
+    #[cfg(target_os = "linux")]
+    {
+        let mode = request.options["mode"].as_str().unwrap_or("analyze");
+        let fs = disk
+            .volumes
+            .iter()
+            .find(|v| v["letter"] == request.letter)
+            .and_then(|v| v["filesystem"].as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        lock(&core.job)["total"] = json!(1);
+        phase_bi(
+            core,
+            &format!("HDD Linux birleştirme ({mode}) · {}", request.letter),
+            &format!("HDD Linux optimization ({mode}) · {}", request.letter),
+        );
+        let out = if mode == "analyze" {
+            if fs == "ext4" {
+                let exe =
+                    crate::linux_priv::find_trusted_binary(&["e4defrag"]).ok_or_else(|| {
+                        if en {
+                            "e4defrag is not installed (e2fsprogs package).".to_string()
+                        } else {
+                            "e4defrag kurulu değil (e2fsprogs paketi).".to_string()
+                        }
+                    })?;
+                let res = process::run(
+                    &exe,
+                    &["-c".into(), request.letter.clone()],
+                    Duration::from_secs(600),
+                    &core.job_cancel,
+                )?;
+                json!({ "status": "ok", "code": res.code, "output": res.stdout })
+            } else {
+                json!({
+                    "status": "ok",
+                    "code": 0,
+                    "output": if en {
+                        format!("Analysis ready for {fs}; run defrag if fragmentation is suspected.")
+                    } else {
+                        format!("{fs} dosya sistemi için analiz tamamlandı; gerekirse defrag çalıştırabilirsiniz.")
+                    }
+                })
+            }
         } else {
-            format!("defrag.exe hata kodu döndürdü: {}", output.code)
+            crate::linux_priv::call(crate::linux_priv::HelperOp::FsDefrag {
+                path: request.letter.clone(),
+                fstype: fs,
+            })?
+        };
+        let mut job = lock(&core.job);
+        job["completed"] = json!(1);
+        job["progress"] = json!(100);
+        job["repair_summary"] = json!({
+            "mode": mode,
+            "code": out.get("code").cloned().unwrap_or_else(|| json!(0)),
+            "output": out["output"].as_str().unwrap_or("").chars().take(12000).collect::<String>()
         });
+        Ok(())
     }
-    Ok(())
+    #[cfg(windows)]
+    {
+        let mode = request.options["mode"].as_str().unwrap_or("analyze");
+        let (flag, title_tr, title_en) = match mode {
+            "defrag" => (
+                "/O",
+                "HDD akıllı birleştirme · defrag /O",
+                "HDD smart optimization · defrag /O",
+            ),
+            "consolidate" => (
+                "/X",
+                "HDD boş alan birleştirme · defrag /X",
+                "HDD free-space consolidation · defrag /X",
+            ),
+            _ => (
+                "/A",
+                "HDD parçalanma analizi · defrag /A",
+                "HDD fragmentation analysis · defrag /A",
+            ),
+        };
+        lock(&core.job)["total"] = json!(1);
+        phase_bi(core, title_tr, title_en);
+        let output = process::run(
+            &platform::system_executable("defrag.exe"),
+            &[format!("{}:", request.letter), flag.into(), "/V".into()],
+            Duration::from_secs(1800),
+            &core.job_cancel,
+        )?;
+        let mut job = lock(&core.job);
+        job["completed"] = json!(1);
+        job["progress"] = json!(100);
+        job["repair_summary"] = json!({
+            "mode": mode,
+            "code": output.code,
+            "output": output.stdout.chars().take(12000).collect::<String>()
+        });
+        if output.code != 0 {
+            return Err(if en {
+                format!("defrag.exe returned error code: {}", output.code)
+            } else {
+                format!("defrag.exe hata kodu döndürdü: {}", output.code)
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = en;
+        Err("Bu platformda desteklenmiyor.".into())
+    }
 }
 
 pub fn command(path: &Path, row: &Row, direction: &str, options: &Value) -> Vec<String> {
@@ -940,6 +1020,13 @@ pub fn candidate_samples_with_cancel(
     };
     check()?;
     let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let root_dev = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&canonical_root)
+            .map_err(|e| e.to_string())?
+            .dev()
+    };
     let mut dirs = vec![root.to_path_buf()];
     let mut files = Vec::new();
     let mut bytes = 0;
@@ -969,6 +1056,12 @@ pub fn candidate_samples_with_cancel(
                         | "pagefile.sys"
                         | "hiberfil.sys"
                         | "swapfile.sys"
+                        | "proc"
+                        | "sys"
+                        | "dev"
+                        | "run"
+                        | "lost+found"
+                        | "snap"
                 )
                 || platform::reparse(&path)
             {
@@ -977,6 +1070,13 @@ pub fn candidate_samples_with_cancel(
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if meta.dev() != root_dev {
+                    continue;
+                }
+            }
             if meta.is_dir() {
                 if dirs.len() < 1024 {
                     dirs.push(path);
@@ -1347,9 +1447,37 @@ fn run_autopilot(
 
         phase_bi(
             core,
-            "2/4 · Çevrimiçi dosya sistemi bütünlüğü denetleniyor (chkdsk /scan)",
-            "2/4 · Checking online file system integrity (chkdsk /scan)",
+            if cfg!(target_os = "linux") {
+                "2/4 · Salt-okunur dosya sistemi bütünlüğü denetleniyor"
+            } else {
+                "2/4 · Çevrimiçi dosya sistemi bütünlüğü denetleniyor (chkdsk /scan)"
+            },
+            if cfg!(target_os = "linux") {
+                "2/4 · Checking read-only file system integrity"
+            } else {
+                "2/4 · Checking online file system integrity (chkdsk /scan)"
+            },
         );
+        #[cfg(target_os = "linux")]
+        if let Some(vol) = disk.volumes.iter().find(|v| v["letter"] == request.letter) {
+            let dev = vol["device"].as_str().unwrap_or("");
+            let fs = vol["filesystem"].as_str().unwrap_or("");
+            if !dev.is_empty() {
+                if let Ok(res) =
+                    crate::linux_priv::call(crate::linux_priv::HelperOp::FsCheckReadOnly {
+                        device: dev.into(),
+                        fstype: fs.into(),
+                    })
+                {
+                    steps.push(format!(
+                        "{}: {fs} salt-okunur kontrol ({}).",
+                        request.letter,
+                        res["status"].as_str().unwrap_or("ok")
+                    ));
+                }
+            }
+        }
+        #[cfg(windows)]
         if disk
             .volumes
             .iter()
@@ -1383,40 +1511,60 @@ fn run_autopilot(
         if let Some(warning) = autopilot_hdd_defrag_guard_for_lang(disk, en) {
             phase_bi(
                 core,
-                "3/4 · Güvenlik kontrolü: sağlık uyarısı nedeniyle defrag /O atlandı",
-                "3/4 · Safety check: defrag /O skipped because of a health warning",
+                "3/4 · Güvenlik kontrolü: sağlık uyarısı nedeniyle HDD birleştirme atlandı",
+                "3/4 · Safety check: HDD defragmentation skipped because of a health warning",
             );
             steps.push(warning);
         } else {
             phase_bi(
                 core,
-                "3/4 · HDD akıllı dosya & boş alan hızlandırması çalışıyor (defrag /O)",
-                "3/4 · Running HDD smart file & free-space optimization (defrag /O)",
+                "3/4 · HDD akıllı dosya & boş alan hızlandırması çalışıyor",
+                "3/4 · Running HDD smart file & free-space optimization",
             );
-            let defrag_out = process::run(
-                &platform::system_executable("defrag.exe"),
-                &[format!("{}:", request.letter), "/O".into(), "/V".into()],
-                Duration::from_secs(1800),
-                &core.job_cancel,
-            )?;
-            if defrag_out.code != 0 {
-                return Err(if en {
-                    format!("defrag /O returned error code: {}", defrag_out.code)
+            #[cfg(target_os = "linux")]
+            {
+                let fs = disk
+                    .volumes
+                    .iter()
+                    .find(|v| v["letter"] == request.letter)
+                    .and_then(|v| v["filesystem"].as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                match crate::linux_priv::call(crate::linux_priv::HelperOp::FsDefrag {
+                    path: request.letter.clone(),
+                    fstype: fs,
+                }) {
+                    Ok(_) => steps.push(format!("{} birleştirme uygulandı.", request.letter)),
+                    Err(e) => steps.push(format!("{} birleştirme atlandı: {e}", request.letter)),
+                }
+            }
+            #[cfg(windows)]
+            {
+                let defrag_out = process::run(
+                    &platform::system_executable("defrag.exe"),
+                    &[format!("{}:", request.letter), "/O".into(), "/V".into()],
+                    Duration::from_secs(1800),
+                    &core.job_cancel,
+                )?;
+                if defrag_out.code != 0 {
+                    return Err(if en {
+                        format!("defrag /O returned error code: {}", defrag_out.code)
+                    } else {
+                        format!("defrag /O hata kodu döndürdü: {}", defrag_out.code)
+                    });
+                }
+                steps.push(if en {
+                    format!(
+                        "{}: volume arranged onto the fastest tracks with defrag /O.",
+                        request.letter
+                    )
                 } else {
-                    format!("defrag /O hata kodu döndürdü: {}", defrag_out.code)
+                    format!(
+                        "{}: bölümü defrag /O ile en hızlı izlere düzenlendi.",
+                        request.letter
+                    )
                 });
             }
-            steps.push(if en {
-                format!(
-                    "{}: volume arranged onto the fastest tracks with defrag /O.",
-                    request.letter
-                )
-            } else {
-                format!(
-                    "{}: bölümü defrag /O ile en hızlı izlere düzenlendi.",
-                    request.letter
-                )
-            });
         }
         {
             let mut j = lock(&core.job);
@@ -1528,27 +1676,47 @@ fn run_autopilot(
                 );
             }
         }
-        let retrim_out = process::run(
-            &platform::system_executable("defrag.exe"),
-            &[format!("{}:", request.letter), "/L".into(), "/V".into()],
-            Duration::from_secs(600),
-            &core.job_cancel,
-        );
-        match retrim_out {
-            Ok(out) if out.code == 0 => {
-                steps.push(if en {
-                    format!("{}: SSD ReTrim (/L) completed.", request.letter)
+        #[cfg(target_os = "linux")]
+        {
+            match crate::platform_linux::fstrim_volume(&request.letter) {
+                Ok(_) => steps.push(if en {
+                    format!("{} SSD TRIM (FITRIM/fstrim) completed.", request.letter)
                 } else {
-                    format!("{}: SSD ReTrim (/L) tamamlandı.", request.letter)
-                });
+                    format!("{} SSD TRIM (FITRIM/fstrim) tamamlandı.", request.letter)
+                }),
+                Err(_) => steps.push(
+                    core.t(
+                        "SSD TRIM adımı sistem tarafından atlandı.",
+                        "The SSD TRIM step was skipped by the system.",
+                    )
+                    .into(),
+                ),
             }
-            _ => steps.push(
-                core.t(
-                    "SSD ReTrim adımı sistem tarafından atlandı.",
-                    "The SSD ReTrim step was skipped by the system.",
-                )
-                .into(),
-            ),
+        }
+        #[cfg(windows)]
+        {
+            let retrim_out = process::run(
+                &platform::system_executable("defrag.exe"),
+                &[format!("{}:", request.letter), "/L".into(), "/V".into()],
+                Duration::from_secs(600),
+                &core.job_cancel,
+            );
+            match retrim_out {
+                Ok(out) if out.code == 0 => {
+                    steps.push(if en {
+                        format!("{}: SSD ReTrim (/L) completed.", request.letter)
+                    } else {
+                        format!("{}: SSD ReTrim (/L) tamamlandı.", request.letter)
+                    });
+                }
+                _ => steps.push(
+                    core.t(
+                        "SSD ReTrim adımı sistem tarafından atlandı.",
+                        "The SSD ReTrim step was skipped by the system.",
+                    )
+                    .into(),
+                ),
+            }
         }
         {
             let data = lock(&core.data);
@@ -1607,12 +1775,13 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk) {
             &request.letter,
             needed,
             request.kind == "surface",
-            request.kind == "smart_tier"
-                || (request.kind == "surface"
-                    && matches!(
-                        mode,
-                        "targeted_repair" | "magnetic_refresh" | "bad_zone_isolate"
-                    )),
+            cfg!(windows)
+                && (request.kind == "smart_tier"
+                    || (request.kind == "surface"
+                        && matches!(
+                            mode,
+                            "targeted_repair" | "magnetic_refresh" | "bad_zone_isolate"
+                        ))),
         )?;
         match request.kind.as_str() {
             "benchmark" => benchmark(core, request, disk, &root, &mut area),
@@ -1840,30 +2009,64 @@ fn surface(
         if !platform::is_admin() {
             return Err("Çevrimiçi dosya sistemi kontrolü yönetici erişimi gerektirir.".into());
         }
-        if !disk
-            .volumes
-            .iter()
-            .any(|v| v["letter"] == request.letter && v["filesystem"] == "NTFS")
+        #[cfg(target_os = "linux")]
         {
-            return Err("chkdsk /scan yalnız NTFS bölümlerinde sunulur.".into());
+            let vol = disk
+                .volumes
+                .iter()
+                .find(|v| v["letter"] == request.letter)
+                .ok_or("Hedef Linux bölümü bulunamadı.")?;
+            let dev = vol["device"].as_str().unwrap_or("");
+            let fs = vol["filesystem"].as_str().unwrap_or("");
+            phase_bi(
+                core,
+                "Linux salt-okunur dosya sistemi denetimi",
+                "Linux read-only file system check",
+            );
+            let res = crate::linux_priv::call(crate::linux_priv::HelperOp::FsCheckReadOnly {
+                device: dev.into(),
+                fstype: fs.into(),
+            })?;
+            let ok = res["status"] == "ok";
+            let code = res["exit_code"].as_u64().unwrap_or(0);
+            lock(&core.job)["repair_summary"]["filesystem_check"] = json!({
+                "ok": ok,
+                "code": code,
+                "output": res["output"].as_str().unwrap_or("")
+            });
+            if !ok {
+                return Err(format!(
+                    "Dosya sistemi kontrolü uyarı/hata döndürdü (kod {code}). Günlüğü inceleyin."
+                ));
+            }
         }
-        phase_bi(
-            core,
-            "Windows çevrimiçi NTFS kontrolü · chkdsk /scan",
-            "Windows online NTFS check · chkdsk /scan",
-        );
-        let result = process::run(
-            &platform::system_executable("chkdsk.exe"),
-            &[format!("{}:", request.letter), "/scan".into()],
-            Duration::from_secs(600),
-            &core.job_cancel,
-        )?;
-        lock(&core.job)["repair_summary"]["filesystem_check"] = json!({"ok":result.code==0,"code":result.code,"output":result.stdout.chars().take(8000).collect::<String>()});
-        if result.code != 0 {
-            return Err(format!(
-                "Dosya sistemi kontrolü uyarı/hata kodu döndürdü: {}. Günlüğü inceleyin.",
-                result.code
-            ));
+        #[cfg(windows)]
+        {
+            if !disk
+                .volumes
+                .iter()
+                .any(|v| v["letter"] == request.letter && v["filesystem"] == "NTFS")
+            {
+                return Err("chkdsk /scan yalnız NTFS bölümlerinde sunulur.".into());
+            }
+            phase_bi(
+                core,
+                "Windows çevrimiçi NTFS kontrolü · chkdsk /scan",
+                "Windows online NTFS check · chkdsk /scan",
+            );
+            let result = process::run(
+                &platform::system_executable("chkdsk.exe"),
+                &[format!("{}:", request.letter), "/scan".into()],
+                Duration::from_secs(600),
+                &core.job_cancel,
+            )?;
+            lock(&core.job)["repair_summary"]["filesystem_check"] = json!({"ok":result.code==0,"code":result.code,"output":result.stdout.chars().take(8000).collect::<String>()});
+            if result.code != 0 {
+                return Err(format!(
+                    "Dosya sistemi kontrolü uyarı/hata kodu döndürdü: {}. Günlüğü inceleyin.",
+                    result.code
+                ));
+            }
         }
     }
     if mode == "data_refresh" {

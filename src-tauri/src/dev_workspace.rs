@@ -274,11 +274,19 @@ const ROOT_DEV_DIRS: &[&str] = &[
 const USER_DEV_DIRS: &[&str] = &[
     "source\\repos",
     "Projects",
+    "projects",
     "Projeler",
     "Dev",
+    "dev",
     "Code",
+    "code",
     "Workspace",
+    "workspace",
+    "work",
     "repos",
+    "src",
+    "git",
+    "github",
     "Documents",
     "Desktop",
 ];
@@ -448,6 +456,69 @@ const CACHE_RULES: &[CacheRule] = &[
         can_clean: true,
         note_tr: "pip install sırasında yeniden oluşur.",
         note_en: "Rebuilt by pip install.",
+    },
+    CacheRule {
+        rel: &[".cache", "yarn"],
+        kind: "pkg_cache",
+        name: "Yarn önbelleği",
+        name_en: "Yarn cache",
+        can_clean: true,
+        note_tr: "yarn install sırasında yeniden oluşur.",
+        note_en: "Rebuilt by yarn install.",
+    },
+    CacheRule {
+        rel: &[".local", "share", "pnpm", "store"],
+        kind: "pkg_cache",
+        name: "pnpm XDG içerik deposu",
+        name_en: "pnpm XDG content store",
+        can_clean: true,
+        note_tr: "pnpm install sırasında yeniden oluşur.",
+        note_en: "Rebuilt by pnpm install.",
+    },
+    CacheRule {
+        rel: &["go", "pkg", "mod", "cache"],
+        kind: "pkg_cache",
+        name: "Go modül önbelleği",
+        name_en: "Go module cache",
+        can_clean: true,
+        note_tr: "go build/mod download ile yeniden indirilir.",
+        note_en: "Re-downloaded by go build.",
+    },
+    CacheRule {
+        rel: &[".cache", "go-build"],
+        kind: "pkg_cache",
+        name: "Go derleme önbelleği",
+        name_en: "Go build cache",
+        can_clean: true,
+        note_tr: "Sonraki go build sırasında yeniden oluşur.",
+        note_en: "Rebuilt on next go build.",
+    },
+    CacheRule {
+        rel: &[".cache", "yay"],
+        kind: "pkg_cache",
+        name: "yay AUR derleme önbelleği",
+        name_en: "yay AUR build cache",
+        can_clean: true,
+        note_tr: "Eski AUR kaynak ve paket artıkları.",
+        note_en: "Stale AUR build artifacts and packages.",
+    },
+    CacheRule {
+        rel: &[".cache", "paru"],
+        kind: "pkg_cache",
+        name: "paru AUR derleme önbelleği",
+        name_en: "paru AUR build cache",
+        can_clean: true,
+        note_tr: "Eski AUR kaynak ve paket artıkları.",
+        note_en: "Stale AUR build artifacts and packages.",
+    },
+    CacheRule {
+        rel: &[".local", "share", "koboldcpp"],
+        kind: "ai_model",
+        name: "KoboldCpp modelleri",
+        name_en: "KoboldCpp models",
+        can_clean: false,
+        note_tr: "Yerel yapay zeka modelleri; silinmez, yalnızca taşınabilir.",
+        note_en: "Local AI models; never deleted, offloadable only.",
     },
 ];
 
@@ -791,8 +862,21 @@ fn discover_projects(
 ) -> Vec<DevProject> {
     let mut projects = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut stack: Vec<(PathBuf, usize)> = roots.iter().rev().map(|r| (r.clone(), 0)).collect();
-    while let Some((dir, depth)) = stack.pop() {
+    let mut stack: Vec<(PathBuf, usize, Option<u64>)> = roots
+        .iter()
+        .rev()
+        .map(|r| {
+            #[cfg(unix)]
+            let dev = {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::metadata(r).map(|m| m.dev()).ok()
+            };
+            #[cfg(not(unix))]
+            let dev = None;
+            (r.clone(), 0, dev)
+        })
+        .collect();
+    while let Some((dir, depth, root_dev)) = stack.pop() {
         if budget.exhausted || !budget.tick_dir() {
             break;
         }
@@ -816,6 +900,13 @@ fn discover_projects(
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
+            #[cfg(unix)]
+            if let Some(r_dev) = root_dev {
+                use std::os::unix::fs::MetadataExt;
+                if meta.dev() != r_dev {
+                    continue;
+                }
+            }
             if !meta.is_dir() || meta_is_reparse(&meta) {
                 continue;
             }
@@ -830,7 +921,7 @@ fn discover_projects(
         }
         children.sort();
         for child in children.into_iter().rev() {
-            stack.push((child, depth + 1));
+            stack.push((child, depth + 1, root_dev));
         }
     }
     projects.sort_by(|a, b| {
@@ -839,6 +930,14 @@ fn discover_projects(
             .then_with(|| a.name.cmp(&b.name))
     });
     projects
+}
+
+/// Scans a single folder read-only for CLI `dev` inspection while enforcing system-path protections.
+pub fn scan_directory_projects(root: &Path) -> Vec<DevProject> {
+    let is_sys_forbidden =
+        |p: &Path| crate::tiering::is_forbidden_path(p) || crate::platform::reparse(p);
+    let mut budget = Budget::new(Duration::from_secs(12));
+    discover_projects(&[root.to_path_buf()], "cli", &is_sys_forbidden, &mut budget)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -921,14 +1020,16 @@ fn vhdx_item(path: &Path, kind: &str) -> Option<WslVhdxItem> {
         return None;
     }
     let path_str = path.to_string_lossy().into_owned();
-    let letter = path_str
-        .strip_prefix("\\\\?\\")
-        .unwrap_or(&path_str)
-        .chars()
-        .next()
-        .filter(|c| c.is_ascii_alphabetic())
-        .map(|c| c.to_ascii_uppercase().to_string())
-        .unwrap_or_default();
+    let letter = drive_letter(&path_str).unwrap_or_else(|| {
+        path_str
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(&path_str)
+            .chars()
+            .next()
+            .filter(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_uppercase().to_string())
+            .unwrap_or_default()
+    });
     Some(WslVhdxItem {
         id: format!("vhdx-{}", sha16(&path_key(&path_str))),
         name: path
@@ -944,7 +1045,21 @@ fn vhdx_item(path: &Path, kind: &str) -> Option<WslVhdxItem> {
 }
 
 fn local_app_data() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|h| PathBuf::from(h).join(".local").join("share"))
+            })
+    }
 }
 
 #[cfg(windows)]
@@ -1014,13 +1129,26 @@ fn lxss_base_paths() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Directories under which WSL / Docker Desktop VHDX files are recognized.
+/// Directories under which WSL / Docker Desktop VHDX (or Linux VM/container disk images) are recognized.
 pub fn wsl_vhdx_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(base) = local_app_data() {
         roots.push(base.join("Docker").join("wsl"));
         roots.push(base.join("Packages"));
         roots.push(base.join("wsl"));
+        #[cfg(target_os = "linux")]
+        {
+            roots.push(base.join("libvirt").join("images"));
+            roots.push(base.join("gnome-boxes").join("images"));
+            roots.push(base.join("containers").join("storage"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        roots.push(PathBuf::from("/var/lib/libvirt/images"));
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            roots.push(PathBuf::from(home).join("VirtualBox VMs"));
+        }
     }
     roots.extend(lxss_base_paths());
     roots
@@ -1059,6 +1187,58 @@ fn vhdx_candidates() -> Vec<(PathBuf, &'static str)> {
                 out.push((candidate, "wsl_vhdx"));
             }
         }
+        #[cfg(target_os = "linux")]
+        for vm_dir in [
+            base.join("libvirt").join("images"),
+            base.join("gnome-boxes").join("images"),
+        ] {
+            if let Ok(read) = std::fs::read_dir(vm_dir) {
+                for entry in read.flatten().take(200) {
+                    let p = entry.path();
+                    if p.extension().is_some_and(|e| {
+                        matches!(
+                            e.to_string_lossy().to_ascii_lowercase().as_str(),
+                            "qcow2" | "img" | "vdi" | "vhdx"
+                        )
+                    }) {
+                        out.push((p, "vm_disk"));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(read) = std::fs::read_dir("/var/lib/libvirt/images") {
+            for entry in read.flatten().take(200) {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| {
+                    matches!(
+                        e.to_string_lossy().to_ascii_lowercase().as_str(),
+                        "qcow2" | "img" | "vdi" | "vhdx"
+                    )
+                }) {
+                    out.push((p, "vm_disk"));
+                }
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            let vbox = PathBuf::from(home).join("VirtualBox VMs");
+            if let Ok(read) = std::fs::read_dir(vbox) {
+                for vm in read.flatten().take(100) {
+                    if let Ok(files) = std::fs::read_dir(vm.path()) {
+                        for f in files.flatten().take(50) {
+                            let p = f.path();
+                            if p.extension().is_some_and(|e| {
+                                e.eq_ignore_ascii_case("vdi") || e.eq_ignore_ascii_case("vmdk")
+                            }) {
+                                out.push((p, "vm_disk"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     for base in lxss_base_paths() {
         out.push((base.join("ext4.vhdx"), "wsl_vhdx"));
@@ -1071,9 +1251,14 @@ fn scan_wsl_vhdx_files(candidates: &[(PathBuf, &'static str)], letter: &str) -> 
     let mut out = Vec::new();
     for (path, kind) in candidates {
         if let Some(item) = vhdx_item(path, kind) {
-            if (letter.is_empty() || item.drive_letter.eq_ignore_ascii_case(letter))
-                && seen.insert(path_key(&item.path))
-            {
+            let matches_vol = if letter.is_empty() {
+                true
+            } else if letter.starts_with('/') {
+                item.drive_letter == letter
+            } else {
+                item.drive_letter.eq_ignore_ascii_case(letter)
+            };
+            if matches_vol && seen.insert(path_key(&item.path)) {
                 out.push(item);
             }
         }
@@ -1082,8 +1267,7 @@ fn scan_wsl_vhdx_files(candidates: &[(PathBuf, &'static str)], letter: &str) -> 
     out
 }
 
-/// Validates a `.vhdx` path destined for `diskpart compact vdisk`. The path is written into a
-/// temporary script file, so every shell / script metacharacter is rejected up front.
+/// Validates a `.vhdx` (or Linux `.qcow2`/`.img`/`.vdi`) path destined for compaction.
 pub fn validate_wsl_vhdx_path_with_roots(raw: &str, roots: &[PathBuf]) -> Result<PathBuf, String> {
     let text = raw.trim();
     if text.is_empty() || text.len() > 520 {
@@ -1102,7 +1286,12 @@ pub fn validate_wsl_vhdx_path_with_roots(raw: &str, roots: &[PathBuf]) -> Result
     }
     let path = PathBuf::from(text);
     let name = file_name_lower(&path);
-    if !matches!(name.as_str(), "ext4.vhdx" | "docker_data.vhdx") {
+    let valid_linux_img = cfg!(target_os = "linux")
+        && (name.ends_with(".qcow2")
+            || name.ends_with(".img")
+            || name.ends_with(".vdi")
+            || matches!(name.as_str(), "ext4.vhdx" | "docker_data.vhdx"));
+    if !matches!(name.as_str(), "ext4.vhdx" | "docker_data.vhdx") && !valid_linux_img {
         return Err("Yalnız WSL / Docker ext4.vhdx ve docker_data.vhdx sıkıştırılabilir.".into());
     }
     let meta = std::fs::symlink_metadata(&path).map_err(|_| "VHDX dosyası bulunamadı.")?;
@@ -1152,20 +1341,31 @@ pub fn find_dev_offload_target(disks: &[Disk], source_disk_id: &str) -> Option<V
             SSD_TARGET_MIN_FREE
         };
         for volume in &disk.volumes {
-            if volume["filesystem"] != "NTFS" {
+            if cfg!(windows) && volume["filesystem"] != "NTFS" {
                 continue;
             }
-            let Some(letter) = volume["letter"].as_str().filter(|l| l.len() == 1) else {
+            let Some(letter) = volume["letter"].as_str().filter(|l| {
+                if cfg!(windows) {
+                    l.len() == 1
+                } else {
+                    crate::platform::is_valid_volume_id(l)
+                }
+            }) else {
                 continue;
             };
             let free = volume["free_bytes"].as_u64().unwrap_or(0);
             if free < min_free {
                 continue;
             }
+            let norm_letter = if letter.starts_with('/') {
+                letter.to_owned()
+            } else {
+                letter.to_ascii_uppercase()
+            };
             let candidate = json!({
                 "disk_id": disk.id,
                 "model": disk.model,
-                "letter": letter.to_ascii_uppercase(),
+                "letter": norm_letter,
                 "type": disk.kind,
                 "free_bytes": free,
                 "direction": if is_hdd { "to_hdd" } else { "to_archive" }
@@ -1278,6 +1478,44 @@ pub fn analyze_dev_workspace_root(
 }
 
 fn list_profile_dirs(letter: &str) -> Vec<PathBuf> {
+    if letter.starts_with('/') {
+        let mut out = Vec::new();
+        let mount_path = Path::new(letter);
+        let home_dir = if letter == "/" {
+            PathBuf::from("/home")
+        } else if mount_path.file_name().is_some_and(|n| n == "home") {
+            mount_path.to_path_buf()
+        } else {
+            mount_path.join("home")
+        };
+        if let Ok(read) = std::fs::read_dir(&home_dir) {
+            for entry in read.flatten() {
+                let lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if lower != "lost+found"
+                    && entry
+                        .metadata()
+                        .map(|m| m.is_dir() && !meta_is_reparse(&m))
+                        .unwrap_or(false)
+                {
+                    out.push(entry.path());
+                }
+            }
+        }
+        if let Some(env_home) = std::env::var_os("HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+        {
+            if drive_letter(&env_home.to_string_lossy()).as_deref() == Some(letter)
+                && env_home.is_dir()
+                && !path_is_reparse(&env_home)
+                && !out.contains(&env_home)
+            {
+                out.push(env_home);
+            }
+        }
+        out.sort();
+        return out;
+    }
     let users = PathBuf::from(format!("{letter}:\\Users"));
     let Ok(read) = std::fs::read_dir(users) else {
         return Vec::new();
@@ -1303,21 +1541,47 @@ fn build_roots(letter: &str, profiles: &[PathBuf], custom: Option<&Path>) -> Vec
     if let Some(custom) = custom {
         candidates.push(custom.to_path_buf());
     }
-    for name in ROOT_DEV_DIRS {
-        candidates.push(PathBuf::from(format!("{letter}:\\{name}")));
+    if letter.starts_with('/') {
+        let base = Path::new(letter);
+        for name in ROOT_DEV_DIRS {
+            candidates.push(base.join(name));
+        }
+    } else {
+        for name in ROOT_DEV_DIRS {
+            candidates.push(PathBuf::from(format!("{letter}:\\{name}")));
+        }
     }
     for profile in profiles {
         for name in USER_DEV_DIRS {
-            candidates.push(profile.join(name));
+            if letter.starts_with('/') && name.contains('\\') {
+                candidates.push(profile.join(name.replace('\\', "/")));
+            } else {
+                candidates.push(profile.join(name));
+            }
         }
     }
+    #[cfg(unix)]
+    let root_dev = if letter.starts_with('/') {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(letter).map(|m| m.dev()).ok()
+    } else {
+        None
+    };
     let mut seen = HashSet::new();
     candidates
         .into_iter()
         .filter(|p| {
-            std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
-                && !path_is_reparse(p)
-                && seen.insert(path_key(&p.to_string_lossy()))
+            let meta_ok = std::fs::metadata(p).is_ok_and(|m| {
+                #[cfg(unix)]
+                if let Some(r_dev) = root_dev {
+                    use std::os::unix::fs::MetadataExt;
+                    if m.dev() != r_dev {
+                        return false;
+                    }
+                }
+                m.is_dir()
+            });
+            meta_ok && !path_is_reparse(p) && seen.insert(path_key(&p.to_string_lossy()))
         })
         .collect()
 }
@@ -1335,16 +1599,25 @@ pub fn validate_custom_root(
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err("Proje klasörü yolu üst dizin içeremez.".into());
     }
-    let path_letter = text
-        .strip_prefix("\\\\?\\")
-        .unwrap_or(text)
-        .chars()
-        .next()
-        .filter(|c| c.is_ascii_alphabetic())
-        .map(|c| c.to_ascii_uppercase().to_string())
-        .ok_or("Proje klasörü bir sürücü harfiyle başlamalıdır.")?;
-    if !path_letter.eq_ignore_ascii_case(letter) {
-        return Err("Proje klasörü seçili bölümde olmalıdır.".into());
+    if letter.starts_with('/') {
+        if !text.starts_with('/') {
+            return Err("Proje klasörü seçili Linux bağlama noktasında olmalıdır.".into());
+        }
+        if drive_letter(text).as_deref() != Some(letter) {
+            return Err("Proje klasörü seçili bölümde olmalıdır.".into());
+        }
+    } else {
+        let path_letter = text
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(text)
+            .chars()
+            .next()
+            .filter(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_uppercase().to_string())
+            .ok_or("Proje klasörü bir sürücü harfiyle başlamalıdır.")?;
+        if !path_letter.eq_ignore_ascii_case(letter) {
+            return Err("Proje klasörü seçili bölümde olmalıdır.".into());
+        }
     }
     let meta = std::fs::symlink_metadata(&path).map_err(|_| "Proje klasörü bulunamadı.")?;
     if !meta.is_dir() || meta_is_reparse(&meta) {
@@ -1463,14 +1736,20 @@ pub fn validate_cleanable_dev_path(
     }
     let comps = normal_components_lower(path);
     if CACHE_RULES.iter().filter(|r| r.can_clean).any(|r| {
-        comps.len() >= r.rel.len() + 2 && {
+        let user_profile_match = comps.len() >= r.rel.len() + 2 && {
             let users_idx = comps.len() - r.rel.len() - 2;
-            comps[users_idx] == "users"
+            (comps[users_idx] == "users" || comps[users_idx] == "home")
                 && comps[users_idx + 2..]
                     .iter()
                     .zip(r.rel)
                     .all(|(a, b)| a == b)
-        }
+        };
+        let root_profile_match = comps.len() > r.rel.len() && {
+            let root_idx = comps.len() - r.rel.len() - 1;
+            comps[root_idx] == "root"
+                && comps[root_idx + 1..].iter().zip(r.rel).all(|(a, b)| a == b)
+        };
+        user_profile_match || root_profile_match
     }) {
         return Ok(CleanKind::PackageCache);
     }
@@ -1610,15 +1889,35 @@ pub fn clean_dev_artifact_checked(
     clean_dev_artifact_path(path, cancel, on_progress, &tiering::is_forbidden_path)
 }
 
-/// Volume letter (`C`) of an absolute Windows path.
+/// Volume letter (`C`) of an absolute Windows path, or Linux mount point (`/home`) of a POSIX path.
 pub fn drive_letter(path: &str) -> Option<String> {
     let text = path.strip_prefix("\\\\?\\").unwrap_or(path);
     let bytes = text.as_bytes();
-    (bytes.len() >= 3
+    if bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/'))
-        .then(|| (bytes[0] as char).to_ascii_uppercase().to_string())
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return Some((bytes[0] as char).to_ascii_uppercase().to_string());
+    }
+    #[cfg(target_os = "linux")]
+    if text.starts_with('/') {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        let mounts = crate::platform_linux::parse_mountinfo_str(&mountinfo);
+        let best = mounts
+            .into_iter()
+            .filter(|m| {
+                let mp = m.mount_point.as_str();
+                mp == "/"
+                    || text == mp
+                    || text
+                        .strip_prefix(mp)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+            .max_by_key(|m| m.mount_point.len());
+        return Some(best.map(|m| m.mount_point).unwrap_or_else(|| "/".into()));
+    }
+    None
 }
 
 #[cfg(test)]

@@ -3,10 +3,12 @@ use crate::{
     process,
 };
 use serde_json::{json, Value};
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
     time::Duration,
 };
 
@@ -21,9 +23,39 @@ pub fn is_admin() -> bool {
     {
         unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_priv::is_elevated()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
+    }
+}
+
+pub fn is_valid_volume_id(id: &str) -> bool {
+    #[cfg(windows)]
+    {
+        id.len() == 1 && id.as_bytes()[0].is_ascii_uppercase()
+    }
+    #[cfg(not(windows))]
+    {
+        (id.len() == 1 && id.as_bytes()[0].is_ascii_uppercase())
+            || (id.starts_with('/') && !id.contains('\0') && !id.split('/').any(|c| c == ".."))
+    }
+}
+
+pub fn normalize_volume_id(raw: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with('/') {
+        let stripped = t.trim_end_matches('/');
+        if stripped.is_empty() {
+            "/".to_owned()
+        } else {
+            stripped.to_owned()
+        }
+    } else {
+        t.trim_end_matches(':').to_ascii_uppercase()
     }
 }
 
@@ -88,7 +120,41 @@ pub fn powershell(
 pub fn smart(exe: &Path, args: &[String], cancel: &AtomicBool) -> Result<Value, String> {
     let mut command = vec!["-j".into()];
     command.extend_from_slice(args);
-    let output = process::run(exe, &command, Duration::from_secs(45), cancel)?;
+    let direct = process::run(exe, &command, Duration::from_secs(45), cancel);
+    #[cfg(target_os = "linux")]
+    let direct = {
+        let needs_helper = match &direct {
+            Err(e) if e != process::CANCELLED => crate::linux_priv::is_helper_active(),
+            Ok(out) => {
+                if let Ok(val) = serde_json::from_str::<Value>(out.stdout.trim()) {
+                    let exit = out.code;
+                    (exit & 2 != 0
+                        || val
+                            .pointer("/smartctl/messages")
+                            .and_then(Value::as_array)
+                            .is_some_and(|m| {
+                                m.iter().any(|x| {
+                                    x["string"].as_str().is_some_and(|s| {
+                                        s.contains("Permission denied")
+                                            || s.contains("Operation not permitted")
+                                    })
+                                })
+                            }))
+                        && crate::linux_priv::is_helper_active()
+                } else {
+                    crate::linux_priv::is_helper_active()
+                }
+            }
+            _ => false,
+        };
+        if needs_helper {
+            if let Some(op) = smart_args_to_helper_op(args) {
+                return crate::linux_priv::call(op);
+            }
+        }
+        direct
+    };
+    let output = direct?;
     let mut value: Value = serde_json::from_str(output.stdout.trim())
         .map_err(|_| format!("smartctl geçerli JSON döndürmedi (kod {}).", output.code))?;
     if !value.is_object() {
@@ -99,6 +165,52 @@ pub fn smart(exe: &Path, args: &[String], cancel: &AtomicBool) -> Result<Value, 
     }
     value["smartctl"]["exit_status"] = json!(output.code);
     Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn smart_args_to_helper_op(args: &[String]) -> Option<crate::linux_priv::HelperOp> {
+    use crate::linux_priv::HelperOp;
+    if args.iter().any(|a| a == "--scan-open") {
+        return Some(HelperOp::SmartScan { open: true });
+    }
+    if args.iter().any(|a| a == "--scan") {
+        return Some(HelperOp::SmartScan { open: false });
+    }
+    let device = args.last()?.clone();
+    if !device.starts_with("/dev/") {
+        return None;
+    }
+    let device_type = args.windows(2).find(|w| w[0] == "-d").map(|w| w[1].clone());
+    if args.iter().any(|a| a == "-X") {
+        return Some(HelperOp::SmartSelfTest {
+            device,
+            device_type,
+            mode: "abort".into(),
+        });
+    }
+    if let Some(t_arg) = args
+        .windows(2)
+        .find(|w| w[0] == "-t")
+        .map(|w| w[1].as_str())
+    {
+        return Some(HelperOp::SmartSelfTest {
+            device,
+            device_type,
+            mode: t_arg.to_owned(),
+        });
+    }
+    let mode = if args.iter().any(|a| a == "-a") {
+        "all"
+    } else if args.iter().any(|a| a == "-H" || a == "-A") {
+        "health"
+    } else {
+        "info"
+    };
+    Some(HelperOp::SmartQuery {
+        device,
+        device_type,
+        mode: mode.into(),
+    })
 }
 
 #[cfg(windows)]
@@ -1225,11 +1337,15 @@ pub fn inventory(cancel: &AtomicBool) -> Result<Value, String> {
     {
         win32::inventory(cancel)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform_linux::inventory(cancel)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = cancel;
         Ok(
-            json!({"disks":[],"trim_enabled":null,"system_tuning":{},"error":"Yalnız Windows desteklenmektedir."}),
+            json!({"disks":[],"trim_enabled":null,"system_tuning":{},"error":"Desteklenmeyen işletim sistemi."}),
         )
     }
 }
@@ -1696,6 +1812,29 @@ pub fn attach_volumes(disks: &mut [Disk], inventory: &Value) {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        for di in 0..disks.len() {
+            if mappings[di].is_some() {
+                continue;
+            }
+            let d_dev = disks[di].device.trim();
+            if d_dev.is_empty() {
+                continue;
+            }
+            let cands: Vec<usize> = (0..os.len())
+                .filter(|&oi| {
+                    !used_os[oi] && os[oi]["device_path"].as_str().is_some_and(|p| p == d_dev)
+                })
+                .collect();
+            if cands.len() == 1 {
+                let oi = cands[0];
+                mappings[di] = Some(oi);
+                used_os[oi] = true;
+            }
+        }
+    }
+
     for (disk, index) in disks.iter_mut().zip(mappings) {
         disk.alerts.retain(|a| {
             !a.code.starts_with("space-")
@@ -1791,9 +1930,13 @@ pub fn attach_volumes(disks: &mut [Disk], inventory: &Value) {
                 .map(|(c, u)| (u as f64 / c as f64) * 100.0);
             let misaligned = item["layout"]["misaligned_partitions"].as_u64();
             let aligned_4k = misaligned.map(|m| m == 0);
-            if !item["write_cache"].is_null() || !item["layout"].is_null() {
+            if !item["write_cache"].is_null()
+                || !item["layout"].is_null()
+                || !item["io_scheduler"].is_null()
+            {
                 disk.optimization = json!({
                     "write_cache": item["write_cache"],
+                    "io_scheduler": item["io_scheduler"],
                     "aligned_4k": aligned_4k,
                     "misaligned_partitions": misaligned,
                     "allocated_bytes": allocated,
@@ -1835,18 +1978,57 @@ pub fn verify_disk_mapping(
         || mapped.os_serial != expected.os_serial
         || mapped.os_model != expected.os_model
     {
-        return Err("Güncel Windows disk kimliği değişti veya eşleme belirsiz.".into());
+        return Err("Güncel işletim sistemi disk kimliği değişti veya eşleme belirsiz.".into());
     }
     Ok(mapped.clone())
 }
 pub fn check_filesystem(volume: &Value, ntfs_only: bool) -> Result<(), String> {
-    if ntfs_only && volume["filesystem"] != "NTFS" {
-        return Err("chkdsk /scan yalnız güncel NTFS bölümünde sunulur.".into());
+    #[cfg(windows)]
+    {
+        if ntfs_only && volume["filesystem"] != "NTFS" {
+            return Err("chkdsk /scan yalnız güncel NTFS bölümünde sunulur.".into());
+        }
+        if !matches!(volume["filesystem"].as_str(), Some("NTFS" | "ReFS")) {
+            return Err("Yalnız NTFS / ReFS destekleniyor.".into());
+        }
+        Ok(())
     }
-    if !matches!(volume["filesystem"].as_str(), Some("NTFS" | "ReFS")) {
-        return Err("Yalnız NTFS / ReFS destekleniyor.".into());
+    #[cfg(target_os = "linux")]
+    {
+        let fs = volume["filesystem"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        if ntfs_only && !matches!(fs.as_str(), "NTFS" | "NTFS3" | "FUSEBLK") {
+            return Err("Bu işlem yalnızca NTFS bölümü gerektirir.".into());
+        }
+        if !matches!(
+            fs.as_str(),
+            "EXT4"
+                | "EXT3"
+                | "EXT2"
+                | "BTRFS"
+                | "XFS"
+                | "F2FS"
+                | "ZFS"
+                | "BCACHEFS"
+                | "NTFS"
+                | "NTFS3"
+                | "FUSEBLK"
+                | "REFS"
+                | "VFAT"
+                | "EXFAT"
+                | "FAT32"
+        ) {
+            return Err(format!("Desteklenmeyen dosya sistemi: {fs}"));
+        }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (volume, ntfs_only);
+        Err("Desteklenmeyen platform.".into())
+    }
 }
 
 pub fn pin_directory(path: &Path) -> Result<std::fs::File, String> {
@@ -1931,19 +2113,23 @@ pub fn performance(previous: &mut Value, cancel: &AtomicBool) -> Result<Value, S
     {
         win32::performance(previous, cancel)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform_linux::performance(previous, cancel)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (previous, cancel);
-        Ok(json!({"disks":[],"error":"Yalnız Windows desteklenmektedir."}))
+        Ok(json!({"disks":[],"error":"Desteklenmeyen işletim sistemi."}))
     }
 }
 
 pub fn volume_root(letter: &str) -> Result<PathBuf, String> {
-    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
-        return Err("Geçersiz bölüm harfi.".into());
-    }
     #[cfg(windows)]
     {
+        if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
+            return Err("Geçersiz bölüm harfi.".into());
+        }
         let root = format!("{letter}:\\");
         let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
         if !matches!(
@@ -1954,9 +2140,22 @@ pub fn volume_root(letter: &str) -> Result<PathBuf, String> {
         }
         Ok(root.into())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        Err("Bu işlem Windows yerel bölüm gerektirir.".into())
+        if !letter.starts_with('/') || letter.contains('\0') || letter.split('/').any(|c| c == "..")
+        {
+            return Err("Geçersiz Linux bağlama noktası.".into());
+        }
+        let pb = PathBuf::from(letter);
+        if !pb.is_dir() {
+            return Err(format!("Bağlama noktası bulunamadı: {letter}"));
+        }
+        Ok(pb)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = letter;
+        Err("Bu işlem bu platformda desteklenmiyor.".into())
     }
 }
 
@@ -2004,6 +2203,18 @@ pub fn file_within(file: &std::fs::File, root: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err("Açılan dosya doğrulanan bölümün dışında.".into())
+    }
+}
+
+/// Discovers `smartctl` on the host platform.
+pub fn discover_smartctl() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform_linux::discover_smartctl()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        system_executable("smartctl.exe")
     }
 }
 

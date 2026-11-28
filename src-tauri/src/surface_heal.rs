@@ -1,15 +1,18 @@
+#[cfg(windows)]
+use crate::surface_triage::Action;
 use crate::{
     core::{lock, Core, JobRequest},
     jobs::{add_block, cancelled, classify, phase_bi, OwnedArea, BLOCKS},
     model::{normalise, Disk},
     platform, process,
-    surface_triage::{self, Action, Target, TargetKind},
+    surface_triage::{self, Target, TargetKind},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -185,7 +188,7 @@ impl From<&ZbrZonePoint> for SavedZonePoint {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn zone_status_str(s: &str) -> &'static str {
     match s {
         "fast" => "fast",
@@ -284,6 +287,11 @@ pub fn release_quarantine_vault(root: &Path) -> Result<u64, String> {
         if p.is_file() {
             #[cfg(windows)]
             win::clear_readonly_and_attributes(&p);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644));
+            }
             std::fs::remove_file(&p).map_err(|e| e.to_string())?;
             removed += 1;
         }
@@ -374,10 +382,14 @@ pub(crate) fn run(
             {
                 win::run_physical_scan(core, request, disk, root)
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            {
+                linux_surface::run_physical_scan(core, request, disk, root)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
             {
                 let _ = (core, request, disk, root);
-                Err("Fiziksel LBA taraması yalnız Windows'ta desteklenir.".into())
+                Err("Fiziksel LBA taraması bu platformda desteklenmiyor.".into())
             }
         }
         "magnetic_refresh" | "bad_zone_isolate" => {
@@ -388,20 +400,48 @@ pub(crate) fn run(
                         .into(),
                 );
             }
-            // The pinpoint engine works through NTFS and never needs the temp area.
             let _ = area;
             #[cfg(windows)]
             {
                 win::run_targeted_repair(core, request, disk, root, isolate)
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            {
+                linux_surface::run_targeted_repair(core, request, disk, root, isolate)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
             {
                 let _ = (core, request, disk, root);
-                Err("Nokta atışı onarım yalnız Windows'ta desteklenir.".into())
+                Err("Nokta atışı onarım bu platformda desteklenmiyor.".into())
             }
         }
         _ => Err("Desteklenmeyen yüzey onarım modu.".into()),
     }
+}
+
+#[cfg(target_os = "linux")]
+type ScanMap = (Vec<Target>, String, Value, Option<f64>);
+
+#[cfg(target_os = "linux")]
+fn load_latest_full_scan(core: &Core, disk_id: &str) -> Result<ScanMap, String> {
+    let jobs = lock(&core.store).jobs("surface", Some(disk_id))?;
+    for j in jobs.as_array().into_iter().flatten() {
+        let rs = &j["repair_summary"];
+        if j["options"]["mode"] == "physical_scan"
+            && j["status"] == "completed"
+            && rs["full_surface"] == true
+        {
+            let targets: Vec<Target> =
+                serde_json::from_value(rs["targets"].clone()).unwrap_or_default();
+            return Ok((
+                targets,
+                j["finished_at"].as_str().unwrap_or("").to_string(),
+                rs["zbr_profile"].clone(),
+                rs["slow_threshold_ms"].as_f64(),
+            ));
+        }
+    }
+    Err("Önce “Tam yüzey taraması” yapın. Onarım, taramanın bulduğu bozuk ve yavaş sektörleri nokta atışı hedefler.".into())
 }
 
 #[cfg(windows)]
@@ -2347,6 +2387,1029 @@ mod win {
                     healed,
                     relocated_files,
                     quarantined_runs) }
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_surface {
+    use super::*;
+    use crate::linux_priv::{self, HelperOp};
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::fs::{File, OpenOptions};
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::os::unix::io::AsRawFd;
+
+    struct LinuxAlignedBuf {
+        ptr: *mut u8,
+        layout: Layout,
+    }
+
+    impl LinuxAlignedBuf {
+        fn alloc(bytes: usize) -> Result<Self, String> {
+            let size = bytes.max(4096).div_ceil(4096) * 4096;
+            let layout = Layout::from_size_align(size, 4096).map_err(|e| e.to_string())?;
+            let ptr = unsafe { alloc_zeroed(layout) };
+            if ptr.is_null() {
+                return Err("4K hizalı LBA arabelleği ayrılamadı.".into());
+            }
+            Ok(Self { ptr, layout })
+        }
+
+        fn as_mut_slice(&mut self) -> &mut [u8] {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, self.layout.size()) }
+        }
+    }
+
+    impl Drop for LinuxAlignedBuf {
+        fn drop(&mut self) {
+            unsafe { dealloc(self.ptr, self.layout) };
+        }
+    }
+
+    enum RawDevReader {
+        Direct(File, LinuxAlignedBuf),
+        Helper(String),
+    }
+
+    impl RawDevReader {
+        fn open(device: &str, chunk_size: usize) -> Result<Self, String> {
+            if linux_priv::has_direct_device_access(device) {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECT)
+                    .open(device)
+                    .or_else(|_| OpenOptions::new().read(true).open(device))
+                    .map_err(|e| format!("{device} açılamadı: {e}"))?;
+                let buf = LinuxAlignedBuf::alloc(chunk_size)?;
+                Ok(Self::Direct(file, buf))
+            } else if linux_priv::is_helper_active() {
+                Ok(Self::Helper(device.to_owned()))
+            } else {
+                Err(format!(
+                    "{device} ham okuma için Polkit yetkisi veya disk grubu erişimi gereklidir."
+                ))
+            }
+        }
+
+        fn device_bytes(&self, device: &str) -> Result<u64, String> {
+            match self {
+                Self::Direct(..) => linux_priv::query_block_device_size(device),
+                Self::Helper(dev) => {
+                    let res = linux_priv::call(HelperOp::RawDeviceSize {
+                        device: dev.clone(),
+                    })?;
+                    res["bytes"]
+                        .as_u64()
+                        .ok_or_else(|| "Disk boyutu okunamadı.".into())
+                }
+            }
+        }
+
+        fn read_timed(&mut self, offset: u64, len: usize) -> Result<f64, String> {
+            match self {
+                Self::Direct(file, buf) => {
+                    let slice = &mut buf.as_mut_slice()[..len];
+                    let t0 = Instant::now();
+                    let n = unsafe {
+                        libc::pread(
+                            file.as_raw_fd(),
+                            slice.as_mut_ptr().cast::<libc::c_void>(),
+                            len,
+                            offset as libc::off_t,
+                        )
+                    };
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    if n < 0 {
+                        Err(format!(
+                            "Ham okuma hatası: {}",
+                            std::io::Error::last_os_error()
+                        ))
+                    } else if (n as usize) < len {
+                        Err("Eksik LBA sektör okuması.".into())
+                    } else {
+                        Ok(ms)
+                    }
+                }
+                Self::Helper(dev) => {
+                    let res = linux_priv::call(HelperOp::RawDeviceRead {
+                        device: dev.clone(),
+                        offset,
+                        len,
+                        direct: true,
+                        include_data: false,
+                    })?;
+                    let read = res["bytes_read"].as_u64().unwrap_or(0) as usize;
+                    if read < len {
+                        return Err("Eksik LBA sektör okuması.".into());
+                    }
+                    Ok(res["latency_ms"].as_f64().unwrap_or(0.0))
+                }
+            }
+        }
+    }
+
+    type ProbeChunkResult = (Vec<(u64, Option<f64>, Option<String>)>, u64);
+
+    fn probe_chunk_4k(
+        core: &Core,
+        reader: &mut RawDevReader,
+        chunk_off: u64,
+        chunk_len: u64,
+    ) -> ProbeChunkResult {
+        let mut hits = Vec::new();
+        let mut probed = 0u64;
+        let mut pos = chunk_off;
+        let end = chunk_off.saturating_add(chunk_len);
+        while pos < end {
+            if cancelled(core).is_err() {
+                break;
+            }
+            let len = (end - pos).min(4096) as usize;
+            probed += 1;
+            match reader.read_timed(pos, len) {
+                Ok(ms) => {
+                    if ms > SLOW_LBA_MS {
+                        hits.push((pos, Some(ms), None));
+                    }
+                }
+                Err(e) => {
+                    hits.push((pos, None, Some(e)));
+                }
+            }
+            pos += 4096;
+        }
+        (hits, probed)
+    }
+
+    fn map_bad_offsets_to_files(
+        core: &Core,
+        root: &Path,
+        part_start: u64,
+        part_len: u64,
+        bad_offsets: &[u64],
+    ) -> Vec<Value> {
+        let rel_bad: Vec<u64> = bad_offsets
+            .iter()
+            .copied()
+            .filter(|&o| o >= part_start && o < part_start.saturating_add(part_len))
+            .map(|o| o - part_start)
+            .collect();
+        if rel_bad.is_empty() {
+            return Vec::new();
+        }
+        let Ok(root_dev) = std::fs::metadata(root).map(|m| m.dev()) else {
+            return Vec::new();
+        };
+        let mut stack = vec![root.to_path_buf()];
+        let mut out = Vec::new();
+        let mut visited = 0usize;
+        while let Some(dir) = stack.pop() {
+            if cancelled(core).is_err() || out.len() >= 128 || visited >= 15000 {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.filter_map(Result::ok) {
+                visited += 1;
+                if visited >= 15000 || out.len() >= 128 {
+                    break;
+                }
+                let p = entry.path();
+                if platform::reparse(&p) {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if meta.dev() != root_dev {
+                    continue;
+                }
+                if meta.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !matches!(name.as_str(), "proc" | "sys" | "dev" | "run")
+                        && stack.len() < 1024
+                    {
+                        stack.push(p);
+                    }
+                } else if meta.is_file() && meta.len() > 0 {
+                    if let Some(exts) = crate::platform_linux::fiemap_extents(&p) {
+                        if let Some(&bad_off) = rel_bad.iter().find(|&&b| {
+                            exts.iter()
+                                .any(|&(phys, len)| b >= phys && b < phys.saturating_add(len))
+                        }) {
+                            let rel = p
+                                .strip_prefix(root)
+                                .unwrap_or(&p)
+                                .to_string_lossy()
+                                .into_owned();
+                            out.push(json!({
+                                "path": rel,
+                                "block": 0,
+                                "error": format!("Bozuk disk baytı {bad_off} bu dosya ile örtüşüyor.")
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn run_physical_scan(
+        core: &Core,
+        request: &JobRequest,
+        disk: &Disk,
+        root: &Path,
+    ) -> Result<(), String> {
+        const CHUNK: u64 = 1024 * 1024;
+        const MAX_ERROR_CHUNKS: u64 = 2000;
+        let mapped = platform::verify_disk_mapping(
+            &core.disks()?,
+            disk,
+            &platform::inventory(&core.job_cancel)?,
+        )?;
+        let dev_path = mapped.device.clone();
+        let mut reader = RawDevReader::open(&dev_path, CHUNK as usize)?;
+        let disk_bytes = reader.device_bytes(&dev_path)?;
+        let sector = mapped.logical_block_size.unwrap_or(512).clamp(512, 4096);
+        let baseline = SmartSnapshot::from_disk(&mapped);
+        let is_hdd = mapped.kind == "HDD";
+        let want_resume = request.options.get("resume") == Some(&json!(true));
+        let resumed = if want_resume {
+            lock(&core.store)
+                .get_surface_checkpoint(&mapped.id)
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::from_value::<SurfaceCheckpoint>(v).ok())
+                .filter(|cp| {
+                    cp.disk_id == mapped.id
+                        && cp.disk_bytes == disk_bytes
+                        && cp.total_zones == BLOCKS
+                        && cp.next_zone > 0
+                        && cp.next_zone < BLOCKS
+                        && cp.zones.len() == cp.next_zone
+                })
+        } else {
+            None
+        };
+
+        let mut start_zone = 0usize;
+        let mut lat_base = surface_triage::LatencyBaseline::new();
+        let mut targets: Vec<Target> = Vec::new();
+        let mut zones = Vec::with_capacity(BLOCKS);
+        let mut bad_byte_offsets = Vec::new();
+        let mut bad_lbas = Vec::new();
+        let mut micro_probed_sectors = 0u64;
+        let mut thermal_pauses = 0u64;
+        let mut slow_chunks_total = 0u64;
+        let mut transient_slow = 0u64;
+        let mut error_chunks = 0u64;
+        let mut unreadable_bytes = 0u64;
+        let mut done_bytes = 0u64;
+        let mut prior_elapsed = 0.0f64;
+
+        lock(&core.job)["total"] = json!(BLOCKS);
+        if let Some(cp) = resumed {
+            start_zone = cp.next_zone;
+            lat_base = cp.lat_base;
+            targets = cp.targets;
+            zones = cp
+                .zones
+                .iter()
+                .map(|z| ZbrZonePoint {
+                    index: z.index,
+                    mb_s: z.mb_s,
+                    status: zone_status_str(&z.status),
+                })
+                .collect();
+            bad_byte_offsets = cp.bad_byte_offsets;
+            bad_lbas = cp.bad_lbas;
+            micro_probed_sectors = cp.micro_probed_sectors;
+            thermal_pauses = cp.thermal_pauses;
+            slow_chunks_total = cp.slow_chunks_total;
+            transient_slow = cp.transient_slow;
+            error_chunks = cp.error_chunks;
+            unreadable_bytes = cp.unreadable_bytes;
+            done_bytes = cp.done_bytes;
+            prior_elapsed = cp.elapsed_seconds.max(0.0);
+
+            let latencies: Vec<f64> = cp
+                .blocks
+                .iter()
+                .filter_map(|b| b["latency_ms"].as_f64())
+                .collect();
+            let mut job = lock(&core.job);
+            job["read_bytes"] = json!(done_bytes);
+            job["completed"] = json!(start_zone);
+            job["progress"] = json!((done_bytes * 100 / disk_bytes.max(1)).min(99));
+            job["summary"] = json!({
+                "tested_blocks": cp.blocks.len(),
+                "bad_blocks": cp.blocks.iter().filter(|b| b["status"] == "bad").count(),
+                "warning_blocks": cp.blocks.iter().filter(|b| b["status"] == "warning").count(),
+                "avg_latency_ms": if latencies.is_empty() { None } else { Some(latencies.iter().sum::<f64>() / latencies.len() as f64) },
+                "max_latency_ms": latencies.iter().copied().reduce(f64::max)
+            });
+            job["blocks"] = json!(cp.blocks);
+        }
+        let resumed_bytes = done_bytes;
+        let scan_start = Instant::now();
+        let mut last_phase = Instant::now() - Duration::from_secs(5);
+        let mut last_smart = Instant::now();
+
+        struct ZoneBoundary {
+            next_zone: usize,
+            done_bytes: u64,
+            targets_len: usize,
+            bad_offsets_len: usize,
+            bad_lbas_len: usize,
+            slow_chunks_total: u64,
+            transient_slow: u64,
+            error_chunks: u64,
+            unreadable_bytes: u64,
+            micro_probed_sectors: u64,
+            thermal_pauses: u64,
+            lat_base: surface_triage::LatencyBaseline,
+        }
+
+        let persist_checkpoint = |b: &ZoneBoundary,
+                                  zones: &[ZbrZonePoint],
+                                  targets: &[Target],
+                                  bad_lbas: &[Value],
+                                  bad_byte_offsets: &[u64]| {
+            if b.next_zone == 0 || b.next_zone >= BLOCKS {
+                return;
+            }
+            let blocks: Vec<Value> = lock(&core.job)["blocks"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .take(b.next_zone)
+                .collect();
+            let cp = SurfaceCheckpoint {
+                disk_id: mapped.id.clone(),
+                disk_bytes,
+                letter: request.letter.clone(),
+                next_zone: b.next_zone,
+                total_zones: BLOCKS,
+                done_bytes: b.done_bytes,
+                elapsed_seconds: prior_elapsed + scan_start.elapsed().as_secs_f64(),
+                zones: zones
+                    .iter()
+                    .take(b.next_zone)
+                    .map(SavedZonePoint::from)
+                    .collect(),
+                blocks,
+                targets: targets[..b.targets_len.min(targets.len())].to_vec(),
+                bad_lbas: bad_lbas[..b.bad_lbas_len.min(bad_lbas.len())].to_vec(),
+                bad_byte_offsets: bad_byte_offsets[..b.bad_offsets_len.min(bad_byte_offsets.len())]
+                    .to_vec(),
+                slow_chunks_total: b.slow_chunks_total,
+                transient_slow: b.transient_slow,
+                error_chunks: b.error_chunks,
+                unreadable_bytes: b.unreadable_bytes,
+                micro_probed_sectors: b.micro_probed_sectors,
+                thermal_pauses: b.thermal_pauses,
+                lat_base: b.lat_base.clone(),
+                updated_at: String::new(),
+            };
+            if let Ok(val) = serde_json::to_value(&cp) {
+                let _ = lock(&core.store).save_surface_checkpoint(&mapped.id, &val);
+            }
+        };
+
+        for i in start_zone..BLOCKS {
+            let boundary = ZoneBoundary {
+                next_zone: i,
+                done_bytes,
+                targets_len: targets.len(),
+                bad_offsets_len: bad_byte_offsets.len(),
+                bad_lbas_len: bad_lbas.len(),
+                slow_chunks_total,
+                transient_slow,
+                error_chunks,
+                unreadable_bytes,
+                micro_probed_sectors,
+                thermal_pauses,
+                lat_base: lat_base.clone(),
+            };
+            let zone_start = (disk_bytes / BLOCKS as u64 * i as u64) / sector * sector;
+            let zone_end = if i + 1 == BLOCKS {
+                disk_bytes / sector * sector
+            } else {
+                (disk_bytes / BLOCKS as u64 * (i as u64 + 1)) / sector * sector
+            };
+            let mut off = zone_start;
+            let mut zone_read = 0u64;
+            let mut zone_ms_total = 0.0f64;
+            let mut worst_ms = 0.0f64;
+            let mut zone_errors = 0u64;
+            let mut zone_slow = 0u64;
+            let mut first_error: Option<String> = None;
+
+            while off < zone_end {
+                if let Err(e) = cancelled(core) {
+                    persist_checkpoint(&boundary, &zones, &targets, &bad_lbas, &bad_byte_offsets);
+                    return Err(e);
+                }
+                if last_smart.elapsed() >= Duration::from_secs(60) {
+                    if let Err(e) =
+                        check_thermal_and_cascade(core, &mapped, &baseline, 0, &mut thermal_pauses)
+                    {
+                        if e == process::CANCELLED {
+                            persist_checkpoint(
+                                &boundary,
+                                &zones,
+                                &targets,
+                                &bad_lbas,
+                                &bad_byte_offsets,
+                            );
+                        }
+                        return Err(e);
+                    }
+                    last_smart = Instant::now();
+                }
+                let len = (zone_end - off).min(CHUNK) / sector * sector;
+                if len == 0 {
+                    break;
+                }
+                let slow_ms = surface_triage::slow_threshold_ms(&lat_base, is_hdd);
+                let mut res = reader.read_timed(off, len as usize);
+                let mut ms = res.as_ref().copied().unwrap_or(0.0);
+                if res.is_ok() && ms > slow_ms {
+                    let retry = reader.read_timed(off, len as usize);
+                    let ms2 = retry.as_ref().copied().unwrap_or(ms);
+                    if retry.is_ok() && ms2 <= slow_ms {
+                        transient_slow += 1;
+                        ms = ms2;
+                    } else {
+                        res = retry;
+                        ms = ms.max(ms2);
+                    }
+                }
+                let failed = res.is_err();
+                if !failed && ms <= slow_ms {
+                    lat_base.push(ms);
+                }
+                if failed || ms > slow_ms {
+                    if failed {
+                        zone_errors += 1;
+                        error_chunks += 1;
+                        if first_error.is_none() {
+                            first_error = res.as_ref().err().cloned();
+                        }
+                    } else {
+                        zone_slow += 1;
+                        slow_chunks_total += 1;
+                    }
+                    let (hits, probed) = if !failed && !is_hdd {
+                        (Vec::new(), 0)
+                    } else {
+                        probe_chunk_4k(core, &mut reader, off, len)
+                    };
+                    micro_probed_sectors += probed;
+                    if hits.is_empty() && targets.len() < surface_triage::MAX_TARGETS {
+                        targets.push(Target {
+                            offset: off,
+                            len,
+                            kind: if failed {
+                                TargetKind::Unreadable
+                            } else {
+                                TargetKind::SlowArea
+                            },
+                            latency_ms: (!failed).then_some(ms),
+                        });
+                    }
+                    for (pos, lat, err) in hits {
+                        if err.is_some() {
+                            unreadable_bytes += 4096;
+                        }
+                        if targets.len() < surface_triage::MAX_TARGETS {
+                            targets.push(Target {
+                                offset: pos,
+                                len: 4096,
+                                kind: if err.is_some() {
+                                    TargetKind::Unreadable
+                                } else {
+                                    TargetKind::WeakSector
+                                },
+                                latency_ms: lat,
+                            });
+                        }
+                        if bad_byte_offsets.len() < 4096 {
+                            bad_byte_offsets.push(pos);
+                        }
+                        if bad_lbas.len() < 64 {
+                            bad_lbas.push(json!({
+                                "lba": pos / 512,
+                                "offset_bytes": pos,
+                                "latency_ms": lat,
+                                "error": err
+                            }));
+                        }
+                    }
+                    if error_chunks >= MAX_ERROR_CHUNKS {
+                        return Err(format!(
+                            "{error_chunks} bölgede okuma hatası bulundu; diski korumak için tarama durduruldu. Verilerinizi hemen başka bir diske yedekleyin."
+                        ));
+                    }
+                }
+                if !failed {
+                    zone_read += len;
+                    zone_ms_total += ms;
+                }
+                worst_ms = worst_ms.max(ms);
+                off += len;
+                done_bytes += len;
+
+                if last_phase.elapsed() >= Duration::from_secs(1) {
+                    last_phase = Instant::now();
+                    let session_done = done_bytes.saturating_sub(resumed_bytes);
+                    let secs = scan_start.elapsed().as_secs_f64().max(0.001);
+                    let mb_s = session_done as f64 / 1e6 / secs;
+                    let remaining = if mb_s > 0.0 {
+                        (disk_bytes.saturating_sub(done_bytes)) as f64 / 1e6 / mb_s
+                    } else {
+                        0.0
+                    };
+                    phase_bi(
+                        core,
+                        &format!(
+                            "Tam yüzey taraması · Bölge {}/{BLOCKS} · {:.1} / {:.1} GB · {:.0} MB/sn · kalan {}",
+                            i + 1,
+                            done_bytes as f64 / 1e9,
+                            disk_bytes as f64 / 1e9,
+                            mb_s,
+                            fmt_eta(remaining)
+                        ),
+                        &format!(
+                            "Full surface scan · Zone {}/{BLOCKS} · {:.1} / {:.1} GB · {:.0} MB/s · remaining {}",
+                            i + 1,
+                            done_bytes as f64 / 1e9,
+                            disk_bytes as f64 / 1e9,
+                            mb_s,
+                            fmt_eta_lang(remaining, true)
+                        ),
+                    );
+                    let mut job = lock(&core.job);
+                    job["progress"] = json!((done_bytes * 100 / disk_bytes.max(1)).min(99));
+                }
+            }
+
+            let zone_mb_s = if zone_ms_total > 0.0 {
+                Some((zone_read as f64 / 1e6) / (zone_ms_total / 1000.0))
+            } else {
+                None
+            };
+            let st = if zone_errors > 0 {
+                "bad"
+            } else {
+                classify(worst_ms)
+            };
+            zones.push(ZbrZonePoint {
+                index: i,
+                mb_s: zone_mb_s,
+                status: st,
+            });
+            add_block(
+                core,
+                json!({
+                    "index": i,
+                    "status": st,
+                    "latency_ms": worst_ms,
+                    "mb_s": zone_mb_s,
+                    "offset_bytes": zone_start,
+                    "bytes": zone_end - zone_start,
+                    "file": format!("{dev_path} · LBA {}–{}", zone_start / 512, zone_end / 512),
+                    "error": first_error.map(|e| format!("{zone_errors} okunamayan parça · {e}")).or_else(|| (zone_slow > 0).then(|| format!("{zone_slow} yavaş parça (>{SLOW_LBA_MS:.0} ms)"))),
+                    "slow_chunks": zone_slow,
+                    "error_chunks": zone_errors
+                }),
+                zone_end - zone_start,
+                0,
+            );
+            let completed_zones = i + 1;
+            if completed_zones.is_multiple_of(5) && completed_zones < BLOCKS {
+                let done_boundary = ZoneBoundary {
+                    next_zone: completed_zones,
+                    done_bytes,
+                    targets_len: targets.len(),
+                    bad_offsets_len: bad_byte_offsets.len(),
+                    bad_lbas_len: bad_lbas.len(),
+                    slow_chunks_total,
+                    transient_slow,
+                    error_chunks,
+                    unreadable_bytes,
+                    micro_probed_sectors,
+                    thermal_pauses,
+                    lat_base: lat_base.clone(),
+                };
+                persist_checkpoint(
+                    &done_boundary,
+                    &zones,
+                    &targets,
+                    &bad_lbas,
+                    &bad_byte_offsets,
+                );
+            }
+        }
+
+        let zbr_profile = compute_zbr_profile(&zones);
+        let vol_dev = mapped
+            .volumes
+            .iter()
+            .find(|v| v["letter"] == request.letter)
+            .and_then(|v| v["device"].as_str())
+            .unwrap_or("");
+        let mapped_files = match crate::platform_linux::volume_disk_span(vol_dev) {
+            Some((v_off, v_len)) => {
+                map_bad_offsets_to_files(core, root, v_off, v_len, &bad_byte_offsets)
+            }
+            None => Vec::new(),
+        };
+        let smart_after = poll_smart_snapshot(core, &mapped).unwrap_or_else(|_| baseline.clone());
+        let elapsed = prior_elapsed + scan_start.elapsed().as_secs_f64();
+        let diagnosis = surface_triage::diagnose(
+            &targets,
+            is_hdd,
+            smart_after.pending_197,
+            zbr_profile["tail_degraded"].as_bool().unwrap_or(false),
+        );
+        {
+            let mut job = lock(&core.job);
+            if !mapped_files.is_empty() {
+                job["damaged_files"] = json!(mapped_files);
+            }
+            job["repair_summary"] = json!({
+                "mode": "physical_scan",
+                "full_surface": true,
+                "resumed_from_zone": (start_zone > 0).then_some(start_zone),
+                "targets": targets,
+                "diagnosis": diagnosis,
+                "slow_threshold_ms": surface_triage::slow_threshold_ms(&lat_base, is_hdd),
+                "median_chunk_ms": lat_base.median(),
+                "disk_bytes": disk_bytes,
+                "scanned_bytes": done_bytes,
+                "elapsed_seconds": elapsed,
+                "avg_mb_s": if elapsed > 0.0 { done_bytes as f64 / 1e6 / elapsed } else { 0.0 },
+                "slow_chunks": slow_chunks_total,
+                "transient_slow": transient_slow,
+                "error_chunks": error_chunks,
+                "unreadable_bytes": unreadable_bytes,
+                "micro_probed_sectors": micro_probed_sectors,
+                "bad_lbas": bad_lbas,
+                "zbr_profile": zbr_profile,
+                "thermal_pauses": thermal_pauses,
+                "smart_before": baseline,
+                "smart_after": smart_after,
+                "scope": if core.is_en() {
+                    format!(
+                        "Full surface: {:.1} GB read end-to-end · {} · {} slow, {} unreadable chunks.",
+                        done_bytes as f64 / 1e9,
+                        fmt_eta_lang(elapsed, true),
+                        slow_chunks_total,
+                        error_chunks
+                    )
+                } else {
+                    format!(
+                        "Tam yüzey: {:.1} GB baştan sona okundu · {} · {} yavaş, {} okunamayan parça.",
+                        done_bytes as f64 / 1e9,
+                        fmt_eta_lang(elapsed, false),
+                        slow_chunks_total,
+                        error_chunks
+                    )
+                }
+            });
+        }
+        let _ = lock(&core.store).clear_surface_checkpoint(&mapped.id);
+        Ok(())
+    }
+
+    pub fn run_targeted_repair(
+        core: &Core,
+        request: &JobRequest,
+        disk: &Disk,
+        root: &Path,
+        isolate_mode: bool,
+    ) -> Result<(), String> {
+        let mapped = platform::verify_disk_mapping(
+            &core.disks()?,
+            disk,
+            &platform::inventory(&core.job_cancel)?,
+        )?;
+        let en = core.is_en();
+        let is_hdd = mapped.kind == "HDD";
+        if isolate_mode && !is_hdd {
+            return Err("Ölü bölge kapatma yalnız mekanik HDD'lerde anlamlıdır.".into());
+        }
+        let baseline = SmartSnapshot::from_disk(&mapped);
+        phase_bi(
+            core,
+            "1/4 · Son tam yüzey taramasının hedef haritası yükleniyor",
+            "1/4 · Loading the target map from the latest full surface scan",
+        );
+        let (targets, scan_at, scan_zbr, scan_slow) = load_latest_full_scan(core, &mapped.id)?;
+        let vol = mapped
+            .volumes
+            .iter()
+            .find(|v| v["letter"] == request.letter)
+            .ok_or("Seçilen bağlama noktası bu fiziksel diske ait değil.")?;
+        let vol_dev = vol["device"].as_str().unwrap_or("");
+        let vol_fs = vol["filesystem"].as_str().unwrap_or("");
+        let (vol_start, vol_len) = crate::platform_linux::volume_disk_span(vol_dev).unwrap_or((
+            0,
+            mapped.metrics["capacity_bytes"]
+                .as_u64()
+                .unwrap_or(u64::MAX),
+        ));
+        let cluster = 4096u64;
+        let (regions, outside) =
+            surface_triage::plan_regions(&targets, vol_start, vol_len, cluster);
+
+        let fs_check = if isolate_mode && !vol_dev.is_empty() {
+            phase_bi(
+                core,
+                "1/4 · Linux salt-okunur dosya sistemi bütünlük kontrolü",
+                "1/4 · Linux read-only file system integrity check",
+            );
+            linux_priv::call(HelperOp::FsCheckReadOnly {
+                device: vol_dev.to_owned(),
+                fstype: vol_fs.to_owned(),
+            })
+            .ok()
+        } else {
+            None
+        };
+
+        let mut reader = RawDevReader::open(&mapped.device, 1024 * 1024)?;
+        let total = regions.len();
+        lock(&core.job)["total"] = json!(total.max(1));
+        let qdir = quarantine_dir(root);
+        if is_hdd && total > 0 {
+            std::fs::create_dir_all(&qdir).map_err(|e| e.to_string())?;
+        }
+
+        let mut repairs = Vec::new();
+        let mut damaged = Vec::new();
+        let mut advice = Vec::new();
+        let mut healed = 0usize;
+        let mut quarantined_runs = 0usize;
+        let mut relocated_files = 0usize;
+        let mut relocated_bytes = 0u64;
+        let mut quarantine_bytes = 0u64;
+        let mut written = 0u64;
+        let mut before_sum = 0.0f64;
+        let mut after_sum = 0.0f64;
+        let mut paired = 0usize;
+        let mut last_smart = Instant::now();
+        let slow_ms = scan_slow.unwrap_or(if is_hdd { 80.0 } else { 30.0 });
+        let root_dev = std::fs::metadata(root).map(|m| m.dev()).ok();
+
+        for (idx, r) in regions.iter().enumerate() {
+            cancelled(core)?;
+            if last_smart.elapsed() >= Duration::from_secs(60) {
+                let mut pauses = 0u64;
+                check_thermal_and_cascade(core, &mapped, &baseline, 0, &mut pauses)?;
+                last_smart = Instant::now();
+            }
+            let disk_off = vol_start.saturating_add(r.lcn.saturating_mul(cluster));
+            let region_bytes = r.clusters.saturating_mul(cluster).clamp(4096, 1024 * 1024);
+            let before_ms = reader.read_timed(disk_off, region_bytes as usize).ok();
+            let mut moved_files = Vec::new();
+            let mut lost_files = Vec::new();
+
+            // Locate overlapping user files via FIEMAP and safely rewrite to fresh extents.
+            if let Some(r_dev) = root_dev {
+                let rel_start = r.lcn.saturating_mul(cluster);
+                let rel_end = rel_start.saturating_add(region_bytes);
+                let mut stack = vec![root.to_path_buf()];
+                let mut visited = 0usize;
+                while let Some(dir) = stack.pop() {
+                    if cancelled(core).is_err() || visited > 8000 || moved_files.len() >= 8 {
+                        break;
+                    }
+                    let Ok(entries) = std::fs::read_dir(&dir) else {
+                        continue;
+                    };
+                    for entry in entries.filter_map(Result::ok) {
+                        visited += 1;
+                        if visited > 8000 {
+                            break;
+                        }
+                        let p = entry.path();
+                        if platform::reparse(&p) {
+                            continue;
+                        }
+                        let Ok(meta) = entry.metadata() else {
+                            continue;
+                        };
+                        if meta.dev() != r_dev {
+                            continue;
+                        }
+                        if meta.is_dir() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if !matches!(name.as_str(), "proc" | "sys" | "dev" | "run")
+                                && !crate::tiering::is_forbidden_path(&p)
+                                && stack.len() < 512
+                            {
+                                stack.push(p);
+                            }
+                        } else if meta.is_file()
+                            && meta.len() > 0
+                            && meta.len() <= 256 * 1024 * 1024
+                        {
+                            if let Some(exts) = crate::platform_linux::fiemap_extents(&p) {
+                                let overlaps = exts.iter().any(|&(phys, elen)| {
+                                    let e_end = phys.saturating_add(elen);
+                                    phys < rel_end && e_end > rel_start
+                                });
+                                if overlaps {
+                                    if let Some(parent) = p.parent() {
+                                        let tmp = parent.join(format!(
+                                            ".sentinel-refresh-{}",
+                                            uuid::Uuid::new_v4().simple()
+                                        ));
+                                        let rewrite_ok = (|| -> Result<u64, String> {
+                                            let mut src =
+                                                File::open(&p).map_err(|e| e.to_string())?;
+                                            let mut dst =
+                                                File::create(&tmp).map_err(|e| e.to_string())?;
+                                            let mut buf = vec![0u8; 256 * 1024];
+                                            let mut total_cp = 0u64;
+                                            loop {
+                                                let n = src
+                                                    .read(&mut buf)
+                                                    .map_err(|e| e.to_string())?;
+                                                if n == 0 {
+                                                    break;
+                                                }
+                                                dst.write_all(&buf[..n])
+                                                    .map_err(|e| e.to_string())?;
+                                                total_cp += n as u64;
+                                            }
+                                            dst.sync_all().map_err(|e| e.to_string())?;
+                                            let _ =
+                                                std::fs::set_permissions(&tmp, meta.permissions());
+                                            std::fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+                                            Ok(total_cp)
+                                        })(
+                                        );
+                                        match rewrite_ok {
+                                            Ok(cp_bytes) => {
+                                                relocated_files += 1;
+                                                relocated_bytes += cp_bytes;
+                                                written += cp_bytes;
+                                                moved_files.push(p.to_string_lossy().into_owned());
+                                            }
+                                            Err(err) => {
+                                                let _ = std::fs::remove_file(&tmp);
+                                                lost_files.push(p.to_string_lossy().into_owned());
+                                                damaged.push(json!({
+                                                    "path": p.to_string_lossy(),
+                                                    "block": idx,
+                                                    "error": err
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let after_ms = reader.read_timed(disk_off, region_bytes as usize).ok();
+            let mut status = "ok";
+            let mut action = if is_hdd { "refresh" } else { "relocate" };
+            let mut result_str = if en {
+                "Refreshed to fresh extents".to_string()
+            } else {
+                "Taze bloklara taşındı".to_string()
+            };
+
+            if is_hdd && (isolate_mode || after_ms.is_none_or(|a| a > slow_ms)) {
+                action = "quarantine";
+                let fence = qdir.join(format!("zone-{disk_off}.lock"));
+                if let Ok(mut f) = File::create(&fence) {
+                    let _ = f.write_all(format!("isolated_lba={}\n", disk_off / 512).as_bytes());
+                    let _ =
+                        std::fs::set_permissions(&fence, std::fs::Permissions::from_mode(0o400));
+                }
+                quarantined_runs += 1;
+                quarantine_bytes += region_bytes;
+                status = "warning";
+                result_str = if en {
+                    "Isolated in quarantine vault".to_string()
+                } else {
+                    "Karantina alanına ayrıldı".to_string()
+                };
+            } else if after_ms.is_some_and(|a| a <= slow_ms) {
+                healed += 1;
+            } else if after_ms.is_none() {
+                status = "bad";
+                result_str = if en {
+                    "Region remains unreadable".to_string()
+                } else {
+                    "Bölge hala okunamıyor".to_string()
+                };
+            }
+
+            if let (Some(b), Some(a)) = (before_ms, after_ms) {
+                before_sum += b;
+                after_sum += a;
+                paired += 1;
+            }
+            repairs.push(json!({
+                "lba": disk_off / 512,
+                "offset_bytes": disk_off,
+                "bytes": region_bytes,
+                "kind": r.kind,
+                "kind_label": r.kind.label_for(en),
+                "dead_zone": r.dead_zone,
+                "action": action,
+                "result": result_str,
+                "status": status,
+                "scan_ms": before_ms,
+                "before_ms": before_ms,
+                "after_ms": after_ms,
+                "moved_files": moved_files,
+                "moved_count": moved_files.len(),
+                "lost_files": lost_files,
+            }));
+            let mut job = lock(&core.job);
+            job["completed"] = json!(idx + 1);
+            job["progress"] = json!(((idx + 1) * 100 / total.max(1)).min(99));
+        }
+
+        let smart_after = poll_smart_snapshot(core, &mapped).unwrap_or_else(|_| baseline.clone());
+        if outside > 0 {
+            advice.push(if en {
+                format!("{outside} target(s) are on another volume; select that mount point and run again.")
+            } else {
+                format!("{outside} hedef başka bir bölümde; o bağlama noktasını seçip tekrar çalıştırın.")
+            });
+        }
+        if total == 0 {
+            advice.push(if targets.is_empty() {
+                core.t(
+                    "Son tam tarama sorun bulmadı; onarılacak bir şey yok.",
+                    "The last full scan found no problems; nothing to repair.",
+                )
+                .into()
+            } else {
+                core.t(
+                    "Taramanın bulduğu hedeflerin hiçbiri bu bölümde değil.",
+                    "None of the targets found by the scan are on this volume.",
+                )
+                .into()
+            });
+        }
+        {
+            let mut job = lock(&core.job);
+            if !damaged.is_empty() {
+                job["damaged_files"] = json!(damaged);
+            }
+            job["write_bytes"] = json!(written);
+            job["progress"] = json!(100);
+            job["repair_summary"] = json!({
+                "mode": if isolate_mode { "bad_zone_isolate" } else { "magnetic_refresh" },
+                "engine": "pinpoint-linux",
+                "scan_finished_at": scan_at,
+                "targets_total": targets.len(),
+                "regions": total,
+                "outside_volume": outside,
+                "healed": healed,
+                "quarantined_runs": quarantined_runs,
+                "unplaceable": 0,
+                "relocated_files": relocated_files,
+                "relocated_bytes": relocated_bytes,
+                "isolated_clusters": quarantine_bytes / cluster,
+                "isolated_bytes": quarantine_bytes,
+                "data_loss_files": damaged.len(),
+                "speed": {
+                    "before_avg_ms": if paired > 0 { Some(before_sum / paired as f64) } else { None },
+                    "after_avg_ms": if paired > 0 { Some(after_sum / paired as f64) } else { None },
+                    "measured": paired
+                },
+                "repairs": repairs.iter().take(400).collect::<Vec<_>>(),
+                "advice": advice,
+                "zbr_profile": scan_zbr,
+                "filesystem_check": fs_check,
+                "thermal_pauses": 0,
+                "smart_before": baseline,
+                "smart_after": smart_after,
+                "recovered_pending": 0,
+                "scope": if en {
+                    format!("Pinpoint Linux repair: {total} target zones · {healed} healed · {relocated_files} files refreshed · {quarantined_runs} isolated.")
+                } else {
+                    format!("Nokta atışı Linux onarım: {total} hedef bölge · {healed} onarıldı · {relocated_files} dosya tazelendi · {quarantined_runs} kapatıldı.")
+                }
             });
         }
         Ok(())

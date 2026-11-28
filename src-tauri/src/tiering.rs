@@ -21,16 +21,16 @@ const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * 1024 * 1024;
 const SSD_COMPANION_MIN_FREE_BYTES: u64 = 20 * GIB;
 const RELOCATE_FREE_RESERVE_BYTES: u64 = 10 * GIB;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const SSD_EXTENT_THRESHOLD: usize = 50;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const SSD_WRITE_BUDGET_BYTES: u64 = 2 * GIB;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const HDD_OUTER_MOVE_BUDGET_BYTES: u64 = 4 * GIB;
 const ANALYZE_MAX_ENTRIES: usize = 12_000;
 const ANALYZE_TIME_BUDGET: Duration = Duration::from_millis(3500);
 const ANALYZE_TOP_CANDIDATES: usize = 25;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const ANALYZE_EXTENT_SAMPLE_LIMIT: usize = 400;
 const ARCHIVE_ROOT_NAME: &str = "SSD-Sentinel-Arsiv";
 
@@ -116,35 +116,36 @@ fn is_existing_reparse(path: &Path) -> bool {
 
 fn has_forbidden_components(path: &Path, is_dir_hint: Option<bool>) -> bool {
     let raw = path.to_string_lossy();
-    if raw.trim().is_empty() {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         return true;
     }
+    let no_verbatim = trimmed.strip_prefix("\\\\?\\").unwrap_or(trimmed);
+    if no_verbatim.starts_with("\\\\") {
+        return true;
+    }
+    let body = if no_verbatim.len() >= 2
+        && no_verbatim.as_bytes()[0].is_ascii_alphabetic()
+        && no_verbatim.as_bytes()[1] == b':'
+    {
+        &no_verbatim[2..]
+    } else {
+        no_verbatim
+    };
     let mut normals: Vec<String> = Vec::new();
-    for comp in path.components() {
-        match comp {
-            Component::ParentDir => return true,
-            Component::Prefix(p) => {
-                use std::path::Prefix;
-                match p.kind() {
-                    Prefix::Disk(_) | Prefix::VerbatimDisk(_) => {}
-                    _ => return true,
-                }
-            }
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(os) => {
-                let s = os.to_string_lossy();
-                let lower = s.to_ascii_lowercase();
-                if lower.is_empty()
-                    || lower == ".."
-                    || FORBIDDEN_COMPONENTS.contains(&lower.as_str())
-                    || lower.starts_with("ssd-sentinel-")
-                    || lower.ends_with(".sentinel-moving")
-                {
-                    return true;
-                }
-                normals.push(lower);
-            }
+    for seg in body.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." {
+            continue;
         }
+        let lower = seg.to_ascii_lowercase();
+        if lower == ".."
+            || FORBIDDEN_COMPONENTS.contains(&lower.as_str())
+            || lower.starts_with("ssd-sentinel-")
+            || lower.ends_with(".sentinel-moving")
+        {
+            return true;
+        }
+        normals.push(lower);
     }
     if normals.is_empty() {
         return true;
@@ -157,6 +158,48 @@ fn has_forbidden_components(path: &Path, is_dir_hint: Option<bool>) -> bool {
     }
     if is_dir_hint == Some(true) && normals.len() == 2 && normals[0] == "users" {
         return true;
+    }
+    if raw.starts_with('/') {
+        let root_top = normals[0].as_str();
+        if matches!(
+            root_top,
+            "bin"
+                | "sbin"
+                | "usr"
+                | "lib"
+                | "lib64"
+                | "lib32"
+                | "libx32"
+                | "etc"
+                | "boot"
+                | "dev"
+                | "proc"
+                | "sys"
+                | "run"
+                | "root"
+                | "snap"
+                | "nix"
+                | "ostree"
+                | "srv"
+                | "lost+found"
+        ) {
+            return true;
+        }
+        if root_top == "var"
+            && (normals.len() == 1
+                || (normals.len() >= 2 && matches!(normals[1].as_str(), "run" | "lock"))
+                || (normals.len() >= 3
+                    && normals[1] == "lib"
+                    && matches!(normals[2].as_str(), "dpkg" | "pacman" | "rpm" | "systemd")))
+        {
+            return true;
+        }
+        if normals.len() == 1 && matches!(root_top, "home" | "mnt" | "media" | "tmp" | "opt") {
+            return true;
+        }
+        if is_dir_hint == Some(true) && normals.len() == 2 && root_top == "home" {
+            return true;
+        }
     }
     false
 }
@@ -502,12 +545,29 @@ fn score_unchecked(
     })
 }
 
+fn volume_id_eq(a: &str, b: &str) -> bool {
+    if a.starts_with('/') || b.starts_with('/') {
+        a == b
+    } else {
+        a.eq_ignore_ascii_case(b)
+    }
+}
+
+fn volume_supports_tiering(vol: &Value) -> bool {
+    let fs = vol["filesystem"].as_str().unwrap_or("");
+    if cfg!(windows) {
+        fs == "NTFS"
+    } else {
+        !fs.trim().is_empty()
+    }
+}
+
 fn find_companion(disks: &[Disk], selected: &Disk, letter: &str) -> (Option<&'static str>, Value) {
     let selected_is_ssd = is_ssd_disk(selected);
     let mut best: Option<(u64, Value)> = None;
 
     if selected_is_ssd {
-        // SSD -> best NTFS HDD volume with maximum free space.
+        // SSD -> best HDD volume with maximum free space.
         for disk in disks {
             if disk.id == selected.id || disk.kind != "HDD" {
                 continue;
@@ -516,13 +576,10 @@ fn find_companion(disks: &[Disk], selected: &Disk, letter: &str) -> (Option<&'st
                 let Some(v_letter) = vol["letter"].as_str() else {
                     continue;
                 };
-                if v_letter.len() != 1
-                    || !v_letter.as_bytes()[0].is_ascii_uppercase()
-                    || v_letter.eq_ignore_ascii_case(letter)
-                {
+                if !platform::is_valid_volume_id(v_letter) || volume_id_eq(v_letter, letter) {
                     continue;
                 }
-                if vol["filesystem"].as_str() != Some("NTFS") {
+                if !volume_supports_tiering(vol) {
                     continue;
                 }
                 let free = vol["free_bytes"].as_u64().unwrap_or(0);
@@ -549,7 +606,7 @@ fn find_companion(disks: &[Disk], selected: &Disk, letter: &str) -> (Option<&'st
             None => (None, Value::Null),
         }
     } else {
-        // HDD -> best NTFS SSD volume with >= 20 GiB free space.
+        // HDD -> best SSD volume with >= 20 GiB free space.
         for disk in disks {
             if disk.id == selected.id || !is_ssd_disk(disk) {
                 continue;
@@ -558,13 +615,10 @@ fn find_companion(disks: &[Disk], selected: &Disk, letter: &str) -> (Option<&'st
                 let Some(v_letter) = vol["letter"].as_str() else {
                     continue;
                 };
-                if v_letter.len() != 1
-                    || !v_letter.as_bytes()[0].is_ascii_uppercase()
-                    || v_letter.eq_ignore_ascii_case(letter)
-                {
+                if !platform::is_valid_volume_id(v_letter) || volume_id_eq(v_letter, letter) {
                     continue;
                 }
-                if vol["filesystem"].as_str() != Some("NTFS") {
+                if !volume_supports_tiering(vol) {
                     continue;
                 }
                 let free = vol["free_bytes"].as_u64().unwrap_or(0);
@@ -597,7 +651,7 @@ fn volume_space_info(selected: &Disk, letter: &str, allow_live_fallback: bool) -
     if let Some(vol) = selected.volumes.iter().find(|v| {
         v["letter"]
             .as_str()
-            .is_some_and(|l| l.eq_ignore_ascii_case(letter))
+            .is_some_and(|l| volume_id_eq(l, letter))
     }) {
         let size = vol["size_bytes"].as_u64().unwrap_or(0);
         let free = vol["free_bytes"].as_u64().unwrap_or(0);
@@ -611,7 +665,13 @@ fn volume_space_info(selected: &Disk, letter: &str, allow_live_fallback: bool) -
             return (size, free);
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    if allow_live_fallback && letter.starts_with('/') {
+        if let Some((size, free)) = crate::platform_linux::statvfs_bytes(Path::new(letter)) {
+            return (size, free);
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = allow_live_fallback;
     (0, 0)
 }
@@ -710,7 +770,7 @@ impl ScanState {
     }
 
     fn sample_extents(&mut self, path: &Path, size_bytes: u64) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             if self.extent_samples >= ANALYZE_EXTENT_SAMPLE_LIMIT
                 || size_bytes < 64 * 1024
@@ -719,7 +779,11 @@ impl ScanState {
                 return;
             }
             self.extent_samples += 1;
-            if let Some(count) = win::query_path_extent_count(path) {
+            #[cfg(windows)]
+            let ext_count = win::query_path_extent_count(path);
+            #[cfg(target_os = "linux")]
+            let ext_count = crate::platform_linux::fiemap_extents(path).map(|v| v.len());
+            if let Some(count) = ext_count {
                 let c = count as u64;
                 if c > self.worst_extents {
                     self.worst_extents = c;
@@ -729,7 +793,7 @@ impl ScanState {
                 }
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = (path, size_bytes);
         }
@@ -739,6 +803,11 @@ impl ScanState {
 /// Rolls up total size, file count, and most recent touch age (`min days_untouched`)
 /// inside `dir`, strictly respecting scan entry/time budgets and skipping reparse points.
 fn rollup_directory(dir: &Path, root: &Path, state: &mut ScanState) -> (u64, u64, u64) {
+    #[cfg(unix)]
+    let root_dev = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(root).map(|m| m.dev()).ok()
+    };
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
     let mut total_bytes = 0u64;
     let mut file_count = 0u64;
@@ -771,6 +840,13 @@ fn rollup_directory(dir: &Path, root: &Path, state: &mut ScanState) -> (u64, u64
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
+            #[cfg(unix)]
+            if let Some(r_dev) = root_dev {
+                use std::os::unix::fs::MetadataExt;
+                if meta.dev() != r_dev {
+                    continue;
+                }
+            }
             if meta.is_dir() {
                 if depth < 6 && stack.len() < 1024 {
                     stack.push((p, depth + 1));
@@ -843,8 +919,8 @@ pub fn analyze_volume(
     letter: &str,
     active_moves: &[Value],
 ) -> Result<Value, String> {
-    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
-        return Err("Geçersiz bölüm harfi.".into());
+    if !platform::is_valid_volume_id(letter) {
+        return Err("Geçersiz bölüm/bağlama noktası.".into());
     }
     let root = platform::volume_root(letter)?;
     analyze_volume_root(&root, disks, selected, letter, active_moves, 10 * MIB)
@@ -937,7 +1013,10 @@ pub fn analyze_volume_root(
             }
             let name = item_path
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
+                .map(|n| {
+                    let s = n.to_string_lossy();
+                    s.rsplit(['/', '\\']).next().unwrap_or(&s).to_owned()
+                })
                 .unwrap_or_else(|| item_path.to_string_lossy().into_owned());
             raw_candidates.push((
                 score,
@@ -958,9 +1037,29 @@ pub fn analyze_volume_root(
             ));
         };
 
-    // 1. Scan safe user profile locations: <root>\Users\<profile>\<Downloads|Videos|Documents|Desktop|Music|Pictures>
-    let users_dir = root.join("Users");
-    if users_dir.is_dir() && !is_existing_reparse(&users_dir) {
+    // 1. Scan safe user profile locations:
+    //    - Windows: <root>\Users\<profile>\<Downloads|Videos|...>
+    //    - Linux: <root>/home/<user>/<Downloads|Videos|...> (or <root>/<user>/... if root IS /home)
+    #[cfg(unix)]
+    let root_dev = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(root).map(|m| m.dev()).ok()
+    };
+    let mut profile_roots: Vec<PathBuf> = Vec::new();
+    let win_users = root.join("Users");
+    if win_users.is_dir() && !is_existing_reparse(&win_users) {
+        profile_roots.push(win_users);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let linux_home = root.join("home");
+        if linux_home.is_dir() && !is_existing_reparse(&linux_home) {
+            profile_roots.push(linux_home);
+        } else if root.file_name().is_some_and(|n| n == "home") {
+            profile_roots.push(root.to_path_buf());
+        }
+    }
+    for users_dir in profile_roots {
         if let Ok(profiles) = std::fs::read_dir(&users_dir) {
             for profile in profiles.filter_map(Result::ok) {
                 if state.budget_exhausted() {
@@ -969,13 +1068,20 @@ pub fn analyze_volume_root(
                 let p_name = profile.file_name().to_string_lossy().to_ascii_lowercase();
                 if matches!(
                     p_name.as_str(),
-                    "default" | "default user" | "all users" | "defaultapppool"
+                    "default" | "default user" | "all users" | "defaultapppool" | "lost+found"
                 ) {
                     continue;
                 }
                 let p_path = profile.path();
                 if !p_path.is_dir() || is_existing_reparse(&p_path) {
                     continue;
+                }
+                #[cfg(unix)]
+                if let Some(r_dev) = root_dev {
+                    use std::os::unix::fs::MetadataExt;
+                    if std::fs::metadata(&p_path).is_ok_and(|m| m.dev() != r_dev) {
+                        continue;
+                    }
                 }
                 for sub in USER_SUBLOCATIONS {
                     if state.budget_exhausted() {
@@ -1017,7 +1123,7 @@ pub fn analyze_volume_root(
                 continue;
             }
             let name_lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if name_lower == "users" {
+            if name_lower == "users" || (cfg!(target_os = "linux") && name_lower == "home") {
                 continue;
             }
             let Ok(rel) = p.strip_prefix(root) else {
@@ -1026,6 +1132,13 @@ pub fn analyze_volume_root(
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
+            #[cfg(unix)]
+            if let Some(r_dev) = root_dev {
+                use std::os::unix::fs::MetadataExt;
+                if meta.dev() != r_dev {
+                    continue;
+                }
+            }
             if has_forbidden_components(rel, Some(meta.is_dir())) {
                 continue;
             }
@@ -1118,10 +1231,25 @@ fn drive_letter_of(path: &Path) -> Option<String> {
     let s = norm.to_string_lossy();
     let bytes = s.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        Some((bytes[0].to_ascii_uppercase() as char).to_string())
-    } else {
-        None
+        return Some((bytes[0].to_ascii_uppercase() as char).to_string());
     }
+    #[cfg(target_os = "linux")]
+    if s.starts_with('/') {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        let mounts = crate::platform_linux::parse_mountinfo_str(&mountinfo);
+        let best = mounts
+            .into_iter()
+            .filter(|m| {
+                let mp = m.mount_point.as_str();
+                mp == "/" || s == mp || s.strip_prefix(mp).is_some_and(|rest| rest.starts_with('/'))
+            })
+            .max_by_key(|m| m.mount_point.len());
+        if let Some(m) = best {
+            return Some(m.mount_point);
+        }
+        return Some("/".into());
+    }
+    None
 }
 
 struct CopyProgress<'a> {
@@ -1187,7 +1315,19 @@ fn copy_file_verified_with(
     let copy_phase = format!("Kopyalanıyor · {file_name}");
     let verify_phase = format!("SHA-256 doğrulanıyor · {file_name}");
 
-    let mut buf = vec![0u8; 256 * 1024];
+    let mut buf = vec![
+        0u8;
+        if cfg!(target_os = "linux") {
+            1024 * 1024
+        } else {
+            256 * 1024
+        }
+    ];
+    #[cfg(target_os = "linux")]
+    unsafe {
+        use std::os::unix::io::AsRawFd;
+        libc::posix_fadvise(reader.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+    }
     let mut src_hasher = Sha256::new();
     let mut src_total = 0u64;
     loop {
@@ -1397,8 +1537,8 @@ pub fn relocate_item_with_progress(
     if !matches!(direction, "to_hdd" | "to_ssd" | "to_archive") {
         return Err("Geçersiz katmanlama yönü (to_hdd, to_ssd veya to_archive olmalı).".into());
     }
-    if target_letter.len() != 1 || !target_letter.as_bytes()[0].is_ascii_uppercase() {
-        return Err("Geçersiz hedef bölüm harfi.".into());
+    if !platform::is_valid_volume_id(target_letter) {
+        return Err("Geçersiz hedef bölüm/bağlama noktası.".into());
     }
     if is_forbidden_path(source_path) {
         return Err("Sistem veya yasaklı yol katmanlama için reddedildi.".into());
@@ -1409,10 +1549,10 @@ pub fn relocate_item_with_progress(
     if has_forbidden_components(source_path, Some(is_dir)) || platform::reparse(source_path) {
         return Err("Sistem klasörü veya reparse point taşınamaz.".into());
     }
-    let source_letter =
-        drive_letter_of(source_path).ok_or("Kaynak yol geçerli bir sürücü harfi içermiyor.")?;
-    if source_letter.eq_ignore_ascii_case(target_letter) {
-        return Err("Kaynak ve hedef sürücü harfi farklı olmalıdır.".into());
+    let source_letter = drive_letter_of(source_path)
+        .ok_or("Kaynak yol geçerli bir sürücü/bağlama noktası içermiyor.")?;
+    if volume_id_eq(&source_letter, target_letter) {
+        return Err("Kaynak ve hedef sürücü/bölüm farklı olmalıdır.".into());
     }
     let target_root = platform::volume_root(target_letter)?;
     #[cfg(windows)]
@@ -1424,13 +1564,34 @@ pub fn relocate_item_with_progress(
         }
     }
 
-    let rel_from_drive = source_path
-        .strip_prefix(format!("{source_letter}:\\"))
-        .or_else(|_| source_path.strip_prefix(format!("{}:\\", source_letter.to_ascii_lowercase())))
-        .map_err(|_| "Kaynak yol sürücü kökünden ayrıştırılamadı.".to_owned())?;
+    let rel_from_drive = if source_letter.starts_with('/') {
+        let stripped = if source_letter == "/" {
+            source_path.strip_prefix("/")
+        } else {
+            source_path.strip_prefix(&source_letter)
+        };
+        stripped.map_err(|_| "Kaynak yol bağlama noktasından ayrıştırılamadı.".to_owned())?
+    } else {
+        source_path
+            .strip_prefix(format!("{source_letter}:\\"))
+            .or_else(|_| {
+                source_path.strip_prefix(format!("{}:\\", source_letter.to_ascii_lowercase()))
+            })
+            .map_err(|_| "Kaynak yol sürücü kökünden ayrıştırılamadı.".to_owned())?
+    };
+    let archive_tag = if source_letter.starts_with('/') {
+        let trimmed = source_letter.trim_matches('/').replace('/', "_");
+        if trimmed.is_empty() {
+            "root".to_owned()
+        } else {
+            trimmed
+        }
+    } else {
+        source_letter.clone()
+    };
     let archive_target = target_root
         .join(ARCHIVE_ROOT_NAME)
-        .join(&source_letter)
+        .join(&archive_tag)
         .join(rel_from_drive);
     let target_base = archive_target
         .parent()
@@ -1539,10 +1700,14 @@ fn relocate_core(
     };
 
     if min_reserve_bytes > 0 || strict_drive_check {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
-            let check_path = if strict_drive_check {
-                format!("{target_letter}:\\")
+            let check_path_buf: PathBuf = if strict_drive_check {
+                if cfg!(windows) {
+                    PathBuf::from(format!("{target_letter}:\\"))
+                } else {
+                    PathBuf::from(target_letter)
+                }
             } else {
                 let mut probe = target_base;
                 while !probe.exists() {
@@ -1551,9 +1716,13 @@ fn relocate_core(
                         None => break,
                     }
                 }
-                probe.to_string_lossy().into_owned()
+                probe.to_path_buf()
             };
-            if let Some((_, free_avail)) = win::volume_free_space(&check_path) {
+            #[cfg(windows)]
+            let space = win::volume_free_space(&check_path_buf.to_string_lossy());
+            #[cfg(target_os = "linux")]
+            let space = crate::platform_linux::statvfs_bytes(&check_path_buf);
+            if let Some((_, free_avail)) = space {
                 let required = item_size.saturating_add(min_reserve_bytes);
                 if free_avail < required {
                     return Err(format!(
@@ -1848,13 +2017,17 @@ pub fn run_smart_tier_job(
             {
                 win::run_ssd_extent_optimize(core, request, root)
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            {
+                linux_tier::run_ssd_extent_optimize(core, request, disk, root)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
             {
                 let _ = (core, request, root);
                 Err(core
                     .t(
-                        "SSD Akıllı Parça Temizliği yalnız Windows NTFS'te desteklenir.",
-                        "SSD Smart Extent Consolidation is supported on Windows NTFS only.",
+                        "SSD Akıllı Parça Temizliği bu platformda desteklenmiyor.",
+                        "SSD Smart Extent Consolidation is not supported on this platform.",
                     )
                     .into())
             }
@@ -1881,13 +2054,17 @@ pub fn run_smart_tier_job(
             {
                 win::run_hdd_outer_optimize(core, request, root)
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            {
+                linux_tier::run_hdd_outer_optimize(core, request, disk, root)
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
             {
                 let _ = (core, request, root);
                 Err(core
                     .t(
-                        "HDD Dış-İz Hızlı Yerleşim yalnız Windows NTFS'te desteklenir.",
-                        "HDD Outer-Track Placement is supported on Windows NTFS only.",
+                        "HDD Dış-İz Hızlı Yerleşim bu platformda desteklenmiyor.",
+                        "HDD Outer-Track Placement is not supported on this platform.",
                     )
                     .into())
             }
@@ -2662,6 +2839,332 @@ mod win {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux_tier {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    fn collect_safe_linux_files(
+        core: &Core,
+        root: &Path,
+        min_bytes: u64,
+        max_bytes: u64,
+        limit: usize,
+    ) -> Result<Vec<(PathBuf, u64, u64)>, String> {
+        let now = SystemTime::now();
+        let root_dev = std::fs::metadata(root).map(|m| m.dev()).ok();
+        let mut stack = Vec::new();
+        let home = root.join("home");
+        if home.is_dir() && !is_existing_reparse(&home) {
+            stack.push(home);
+        } else {
+            stack.push(root.to_path_buf());
+        }
+        let mut out = Vec::new();
+        let mut visited = 0usize;
+        while let Some(dir) = stack.pop() {
+            cancelled(core)?;
+            if out.len() >= limit || visited > 40_000 {
+                break;
+            }
+            if is_existing_reparse(&dir) || is_forbidden_path(&dir) {
+                continue;
+            }
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in rd.filter_map(Result::ok) {
+                visited += 1;
+                if out.len() >= limit || visited > 40_000 {
+                    break;
+                }
+                let p = entry.path();
+                if is_existing_reparse(&p) {
+                    continue;
+                }
+                if let Ok(rel) = p.strip_prefix(root) {
+                    if has_forbidden_components(rel, None) {
+                        continue;
+                    }
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if let Some(r_dev) = root_dev {
+                    if meta.dev() != r_dev {
+                        continue;
+                    }
+                }
+                if meta.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    if !matches!(name.as_str(), "proc" | "sys" | "dev" | "run" | "snap")
+                        && stack.len() < 1024
+                    {
+                        stack.push(p);
+                    }
+                } else if meta.is_file() {
+                    let sz = meta.len();
+                    if sz >= min_bytes && sz <= max_bytes {
+                        let days = days_since_touched(&meta, now);
+                        out.push((p, sz, days));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn rewrite_file_contiguously(path: &Path, meta: &std::fs::Metadata) -> Result<u64, String> {
+        let parent = path.parent().ok_or("Üst klasör bulunamadı.")?;
+        let tmp = parent.join(format!(
+            ".sentinel-extent-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let res = (|| -> Result<u64, String> {
+            let mut src = File::open(path).map_err(|e| e.to_string())?;
+            let mut dst = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; 512 * 1024];
+            let mut written = 0u64;
+            loop {
+                let n = src.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                dst.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                written += n as u64;
+            }
+            dst.sync_all().map_err(|e| e.to_string())?;
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+            std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+            Ok(written)
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        res
+    }
+
+    pub fn run_ssd_extent_optimize(
+        core: &Core,
+        request: &JobRequest,
+        _disk: &Disk,
+        root: &Path,
+    ) -> Result<(), String> {
+        lock(&core.job)["total"] = json!(100);
+        phase_bi(
+            core,
+            "1/3 · Aşırı parçalanmış (>=50 parça) Linux SSD dosyaları taranıyor",
+            "1/3 · Scanning heavily fragmented (>=50 extents) Linux SSD files",
+        );
+
+        let files = collect_safe_linux_files(core, root, 64 * 1024, 512 * MIB, 25_000)?;
+        let mut targets: Vec<(PathBuf, usize, u64)> = Vec::new();
+        for (idx, (path, sz, _)) in files.iter().enumerate() {
+            if idx.is_multiple_of(64) {
+                cancelled(core)?;
+                let pct = ((idx as u64) * 30 / files.len().max(1) as u64).min(30);
+                let mut job = lock(&core.job);
+                job["completed"] = json!(pct);
+                job["progress"] = json!(pct);
+            }
+            if let Some(exts) = crate::platform_linux::fiemap_extents(path) {
+                if exts.len() >= SSD_EXTENT_THRESHOLD {
+                    targets.push((path.clone(), exts.len(), *sz));
+                }
+            }
+        }
+        targets.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+        phase_bi(
+            core,
+            "2/3 · Aşırı parçalanmış SSD dosyaları birleştiriliyor (en fazla 2 GiB yazma sınırı)",
+            "2/3 · Consolidating heavily fragmented SSD files (2 GiB write cap)",
+        );
+        let mut files_consolidated = 0u64;
+        let mut extents_before = 0u64;
+        let mut extents_after = 0u64;
+        let mut bytes_written = 0u64;
+        let target_total = targets.len().max(1) as u64;
+
+        for (i, (path, ext_cnt, sz)) in targets.iter().enumerate() {
+            cancelled(core)?;
+            if bytes_written >= SSD_WRITE_BUDGET_BYTES {
+                break;
+            }
+            if bytes_written.saturating_add(*sz) > SSD_WRITE_BUDGET_BYTES {
+                continue;
+            }
+            let pct = 30 + ((i as u64) * 45 / target_total).min(45);
+            {
+                let mut job = lock(&core.job);
+                job["completed"] = json!(pct);
+                job["progress"] = json!(pct);
+                job["write_bytes"] = json!(bytes_written);
+            }
+            let Ok(meta) = std::fs::metadata(path) else {
+                continue;
+            };
+            if rewrite_file_contiguously(path, &meta).is_ok() {
+                let after =
+                    crate::platform_linux::fiemap_extents(path).map_or(1, |v| v.len()) as u64;
+                files_consolidated += 1;
+                extents_before += *ext_cnt as u64;
+                extents_after += after;
+                bytes_written = bytes_written.saturating_add(*sz);
+            }
+        }
+
+        cancelled(core)?;
+        phase_bi(
+            core,
+            "3/3 · SSD TRIM (FITRIM/fstrim) uygulanıyor",
+            "3/3 · Applying SSD TRIM (FITRIM/fstrim)",
+        );
+        {
+            let mut job = lock(&core.job);
+            job["completed"] = json!(80);
+            job["progress"] = json!(80);
+            job["write_bytes"] = json!(bytes_written);
+        }
+        let retrim_ok = crate::platform_linux::fstrim_volume(&request.letter).is_ok();
+
+        let mut job = lock(&core.job);
+        job["completed"] = json!(100);
+        job["progress"] = json!(100);
+        job["write_bytes"] = json!(bytes_written);
+        job["repair_summary"] = json!({
+            "mode": "ssd_extent_optimize",
+            "files_consolidated": files_consolidated,
+            "extents_before": extents_before,
+            "extents_after": extents_after,
+            "bytes_written": bytes_written,
+            "retrim_ok": retrim_ok,
+            "scope": if core.is_en() {
+                "SSD Smart Extent Consolidation (Linux): only files with >=50 extents (FIEMAP) were rewritten (2 GiB write cap) and FITRIM/fstrim was applied; no classic defrag was run."
+            } else {
+                "SSD Akıllı Parça Temizliği (Linux): Yalnız >=50 parçalı (FIEMAP) dosyalar (en fazla 2 GiB yazma sınırı) birleştirildi ve FITRIM/fstrim uygulandı; klasik defrag yapılmadı."
+            }
+        });
+        Ok(())
+    }
+
+    pub fn run_hdd_outer_optimize(
+        core: &Core,
+        request: &JobRequest,
+        disk: &Disk,
+        root: &Path,
+    ) -> Result<(), String> {
+        lock(&core.job)["total"] = json!(100);
+        phase_bi(
+            core,
+            "1/3 · Sıcak ve parçalanmış Linux HDD dosyaları taranıyor",
+            "1/3 · Scanning hot and fragmented Linux HDD files",
+        );
+
+        let files = collect_safe_linux_files(core, root, 64 * 1024, GIB, 25_000)?;
+        let mut candidates: Vec<(u32, PathBuf, usize, u64)> = Vec::new();
+        for (idx, (path, sz, days)) in files.iter().enumerate() {
+            if idx.is_multiple_of(64) {
+                cancelled(core)?;
+                let pct = ((idx as u64) * 30 / files.len().max(1) as u64).min(30);
+                let mut job = lock(&core.job);
+                job["completed"] = json!(pct);
+                job["progress"] = json!(pct);
+            }
+            let Some(exts) = crate::platform_linux::fiemap_extents(path) else {
+                continue;
+            };
+            if exts.len() < 2 && *days > 14 {
+                continue;
+            }
+            let mut prio = 60u32.saturating_sub((*days as u32).saturating_mul(3));
+            prio += (exts.len() as u32).min(40);
+            candidates.push((prio, path.clone(), exts.len(), *sz));
+        }
+        candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.2.cmp(&a.2)));
+
+        phase_bi(
+            core,
+            "2/3 · Parçalanmış HDD dosyaları bitişik bloklara yerleştiriliyor (4 GiB sınırı)",
+            "2/3 · Consolidating fragmented HDD files into contiguous extents (4 GiB cap)",
+        );
+        let mut files_placed_outer = 0u64;
+        let mut extents_before = 0u64;
+        let mut extents_after = 0u64;
+        let mut bytes_moved = 0u64;
+        let total = candidates.len().max(1) as u64;
+
+        for (i, (_, path, ext_cnt, sz)) in candidates.iter().enumerate() {
+            cancelled(core)?;
+            if bytes_moved >= HDD_OUTER_MOVE_BUDGET_BYTES {
+                break;
+            }
+            if bytes_moved.saturating_add(*sz) > HDD_OUTER_MOVE_BUDGET_BYTES {
+                continue;
+            }
+            let pct = 30 + ((i as u64) * 55 / total).min(55);
+            {
+                let mut job = lock(&core.job);
+                job["completed"] = json!(pct);
+                job["progress"] = json!(pct);
+                job["write_bytes"] = json!(bytes_moved);
+            }
+            let Ok(meta) = std::fs::metadata(path) else {
+                continue;
+            };
+            if rewrite_file_contiguously(path, &meta).is_ok() {
+                let after =
+                    crate::platform_linux::fiemap_extents(path).map_or(1, |v| v.len()) as u64;
+                files_placed_outer += 1;
+                extents_before += *ext_cnt as u64;
+                extents_after += after;
+                bytes_moved = bytes_moved.saturating_add(*sz);
+            }
+        }
+
+        let fs = disk
+            .volumes
+            .iter()
+            .find(|v| v["letter"] == request.letter)
+            .and_then(|v| v["filesystem"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        if !fs.is_empty() {
+            let _ = crate::linux_priv::call(crate::linux_priv::HelperOp::FsDefrag {
+                path: request.letter.clone(),
+                fstype: fs,
+            });
+        }
+
+        phase_bi(
+            core,
+            "3/3 · HDD optimizasyon özeti kaydediliyor",
+            "3/3 · Saving the HDD optimization summary",
+        );
+        let mut job = lock(&core.job);
+        job["completed"] = json!(100);
+        job["progress"] = json!(100);
+        job["write_bytes"] = json!(bytes_moved);
+        job["repair_summary"] = json!({
+            "mode": "hdd_outer_optimize",
+            "files_placed_outer": files_placed_outer,
+            "extents_before": extents_before,
+            "extents_after": extents_after,
+            "bytes_moved": bytes_moved,
+            "scope": if core.is_en() {
+                "HDD Optimization (Linux): SMART safety guard verified; hot and fragmented files were consolidated up to 4 GiB."
+            } else {
+                "HDD Optimizasyonu (Linux): SMART güvenlik koruması doğrulandı; sıcak ve parçalanmış dosyalar en fazla 4 GiB sınırıyla birleştirildi."
+            }
+        });
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2964,6 +3467,7 @@ mod tests {
     #[test]
     fn directory_relocate_with_ntfs_junction_and_safe_rollback_roundtrip() {
         let src_parent = tempfile::tempdir().unwrap();
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let dst_parent = tempfile::tempdir().unwrap();
         let folder = src_parent.path().join("MyVideos");
         let sub = folder.join("2025");
@@ -3010,6 +3514,7 @@ mod tests {
     #[test]
     fn relocate_rejects_forbidden_folder_inside_sandbox() {
         let src_parent = tempfile::tempdir().unwrap();
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let dst_parent = tempfile::tempdir().unwrap();
         let win_dir = src_parent.path().join("Windows");
         std::fs::create_dir_all(&win_dir).unwrap();
@@ -3022,6 +3527,7 @@ mod tests {
     #[test]
     fn relocate_rejects_insufficient_reserve_and_invalid_inputs_without_touching_source() {
         let src_parent = tempfile::tempdir().unwrap();
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let dst_parent = tempfile::tempdir().unwrap();
         let sample = src_parent.path().join("keep_me.mkv");
         std::fs::write(&sample, b"precious-data").unwrap();
@@ -3107,6 +3613,7 @@ mod tests {
     #[test]
     fn relocate_with_progress_streams_updates_and_honors_cancellation_cleanly() {
         let src_parent = tempfile::tempdir().unwrap();
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let dst_parent = tempfile::tempdir().unwrap();
         let folder = src_parent.path().join("BigFolder");
         std::fs::create_dir_all(&folder).unwrap();

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>SSD Sentinel</vendor>
+  <vendor_url>https://github.com/yuefdev/ssd-sentinel</vendor_url>
+
+  <action id="com.ssdsentinel.desktop.privileged-helper">
+    <description>Run privileged storage diagnostics and repair helper for SSD Sentinel</description>
+    <description xml:lang="tr">SSD Sentinel için yetkili disk tanılama ve onarım yardımcısını çalıştır</description>
+    <message>Authentication is required to access raw block devices and hardware SMART registers</message>
+    <message xml:lang="tr">Ham blok aygıtlarına ve SMART donanım kayıtlarına erişmek için kimlik doğrulama gerekiyor</message>
+    <icon_name>com.ssdsentinel.desktop</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/ssd-sentinel</annotate>
+  </action>
+
+  <action id="com.ssdsentinel.desktop.privileged-helper.local">
+    <description>Run privileged storage diagnostics and repair helper for local SSD Sentinel install</description>
+    <description xml:lang="tr">Yerel SSD Sentinel kurulumu için yetkili disk tanılama yardımcısını çalıştır</description>
+    <message>Authentication is required to access raw block devices and hardware SMART registers</message>
+    <message xml:lang="tr">Ham blok aygıtlarına ve SMART donanım kayıtlarına erişmek için kimlik doğrulama gerekiyor</message>
+    <icon_name>com.ssdsentinel.desktop</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/ssd-sentinel</annotate>
+  </action>
+</policyconfig>

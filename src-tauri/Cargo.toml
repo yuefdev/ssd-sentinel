@@ -2,7 +2,7 @@
 name = "ssd-sentinel"
 version = "1.11.0"
 edition = "2021"
-description = "Windows disk health and diagnostics desktop application"
+description = "Cross-platform SSD/HDD health, diagnostics, benchmark, surface repair and recovery suite"
 license = "MIT"
 
 [lib]
@@ -12,14 +12,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "ssd-sentinel"
 path = "src/main.rs"
-required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification", "dep:tauri-plugin-single-instance"]
+native-gui = ["dep:eframe", "dep:egui", "dep:egui_plot", "dep:rfd", "dep:image"]
 
 [build-dependencies]
-tauri-build = { version = "2", optional = true , features = [] }
+tauri-build = { version = "2", optional = true, features = [] }
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -32,10 +32,21 @@ tempfile = "3"
 getrandom = "0.3"
 same-file = "1"
 uuid = { version = "1", features = ["v4"] }
+eframe = { version = "0.31", optional = true, default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
+egui = { version = "0.31", optional = true, default-features = false, features = ["default_fonts"] }
+egui_plot = { version = "0.31", optional = true }
+rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "async-std"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 tauri = { version = "2.11.5", features = ["tray-icon", "image-png"], optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+io-uring = "0.7"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -57,7 +68,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [profile.release]
-opt-level = "s"
-lto = false
-codegen-units = 16
+opt-level = 3
+lto = "thin"
+codegen-units = 1
 strip = true

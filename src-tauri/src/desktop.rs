@@ -249,13 +249,20 @@ fn restart_as_admin(app: tauri::AppHandle, core: State<'_, Arc<Core>>) -> Result
             Ok(json!({"relaunching":false,"cancelled":true}))
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (app, en);
+        crate::linux_priv::authenticate()?;
+        core.refresh();
+        Ok(json!({"relaunching": false, "elevated": true}))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = app;
         Err(crate::i18n::pick(
             en,
-            "Yönetici yükseltmesi yalnız Windows'ta desteklenir.",
-            "Administrator elevation is supported on Windows only.",
+            "Yönetici yükseltmesi yalnız Windows veya Linux Polkit üzerinde desteklenir.",
+            "Administrator elevation requires Windows UAC or Linux Polkit.",
         )
         .into())
     }
@@ -818,15 +825,74 @@ async fn check_updates(core: State<'_, Arc<Core>>) -> Result<Value, String> {
                 }))
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let releases_fallback = format!("https://github.com/{repo}/releases");
+            let agent = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(6)))
+                .build()
+                .new_agent();
+            let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+            let Ok(mut resp) = agent
+                .get(&api_url)
+                .header("User-Agent", &format!("SSD-Sentinel/{current}"))
+                .header("Accept", "application/vnd.github+json")
+                .call()
+            else {
+                return Ok(json!({
+                    "repo": repo,
+                    "current": current,
+                    "status": "unreachable",
+                    "latest": null,
+                    "url": releases_fallback,
+                    "message": "GitHub Releases API erişilemedi.",
+                    "message_en": "Could not reach GitHub Releases API (offline or timed out)."
+                }));
+            };
+            let parsed: Value = resp.body_mut().read_json().unwrap_or(Value::Null);
+            let Some(tag) = parsed["tag_name"].as_str() else {
+                return Ok(json!({
+                    "repo": repo,
+                    "current": current,
+                    "status": "no_release",
+                    "latest": null,
+                    "url": releases_fallback,
+                    "message": "Yeni sürüm kaydı bulunamadı.",
+                    "message_en": "No release tag was found."
+                }));
+            };
+            let url = parsed["html_url"].as_str().unwrap_or(&releases_fallback);
+            if parse_semver(tag) > parse_semver(current) {
+                Ok(json!({
+                    "repo": repo,
+                    "current": current,
+                    "status": "update_available",
+                    "latest": tag,
+                    "url": url,
+                    "message": format!("Yeni sürüm mevcut: {tag}"),
+                    "message_en": format!("A new version is available: {tag}")
+                }))
+            } else {
+                Ok(json!({
+                    "repo": repo,
+                    "current": current,
+                    "status": "up_to_date",
+                    "latest": tag,
+                    "url": url,
+                    "message": "Güncel sürümü kullanıyorsunuz.",
+                    "message_en": "You are using the latest version."
+                }))
+            }
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             Ok(json!({
                 "repo": repo,
                 "current": current,
                 "status": "unreachable",
                 "latest": null,
-                "message": "Yalnız Windows'ta desteklenir.",
-                "message_en": "Supported on Windows only."
+                "message": "Bu platformda sürüm denetimi desteklenmiyor.",
+                "message_en": "Update check not supported on this platform."
             }))
         }
     })
@@ -871,13 +937,29 @@ async fn open_release_url(core: State<'_, Arc<Core>>, url: String) -> Result<(),
         }
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        for bin in ["/usr/bin/xdg-open", "/bin/xdg-open", "xdg-open"] {
+            if std::process::Command::new(bin)
+                .arg(&url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err(crate::i18n::pick(en, "Tarayıcı açılamadı.", "Could not open the browser.").into())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = url;
         Err(crate::i18n::pick(
             en,
-            "Yalnız Windows'ta desteklenir.",
-            "Supported on Windows only.",
+            "Tarayıcı açma bu platformda desteklenmiyor.",
+            "Opening browser not supported on this platform.",
         )
         .into())
     }
@@ -1440,6 +1522,15 @@ pub fn resolve_storage_paths(
 }
 
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && Path::new("/proc/driver/nvidia/version").exists()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    {
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
     let elevated_relaunch = std::env::args().any(|a| a == "--elevated-relaunch");
     let start_minimized = std::env::args().any(|a| a == "--minimized");
     let is_replay_cli = std::env::args().any(|a| a == "--snapshot-dir");
@@ -1509,6 +1600,8 @@ pub fn run() {
                 resource
             } else if let Some(sibling) = exe_sibling.filter(|p| p.is_file()) {
                 sibling
+            } else if cfg!(target_os = "linux") {
+                crate::platform::discover_smartctl()
             } else {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../tools/smartmontools/bin/smartctl.exe")
@@ -1658,9 +1751,26 @@ pub fn run() {
             {
                 let core = core.clone();
                 let w = window.clone();
+                #[cfg(target_os = "linux")]
+                let tray_supported = zbus::blocking::Connection::session()
+                    .ok()
+                    .and_then(|c| {
+                        c.call_method(
+                            Some("org.freedesktop.DBus"),
+                            "/org/freedesktop/DBus",
+                            Some("org.freedesktop.DBus"),
+                            "NameHasOwner",
+                            &("org.kde.StatusNotifierWatcher",),
+                        )
+                        .ok()
+                    })
+                    .and_then(|r| r.body().deserialize::<bool>().ok())
+                    .unwrap_or(false);
+                #[cfg(not(target_os = "linux"))]
+                let tray_supported = true;
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        if core.minimise_to_tray.load(Ordering::SeqCst) {
+                        if tray_supported && core.minimise_to_tray.load(Ordering::SeqCst) {
                             api.prevent_close();
                             let _ = w.hide();
                         }

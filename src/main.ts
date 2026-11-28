@@ -515,7 +515,7 @@ function overview(d: Disk): string {
                 v.size_bytes && v.free_bytes !== null
                   ? Math.round((1 - v.free_bytes / v.size_bytes) * 100)
                   : null;
-              return `<div class="volume"><span class="volume-letter">${e(v.letter)}:</span><div><strong>${e(v.label || L("Yerel Disk", "Local Disk"))}<small>${e(v.filesystem)}</small></strong><div class="volume-track"><span style="width:${used ?? 0}%" class="${used !== null && used > 90 ? "warning" : ""}"></span></div><p>${fmtBytes(v.free_bytes)} ${L("boş", "free")} <span>/ ${fmtBytes(v.size_bytes)}</span></p></div><b>${used === null ? "—" : used + "%"}</b></div>`;
+              return `<div class="volume"><span class="volume-letter">${e(fmtVolume(v.letter))}</span><div><strong>${e(v.label || L("Yerel Disk", "Local Disk"))}<small>${e(v.filesystem)}</small></strong><div class="volume-track"><span style="width:${used ?? 0}%" class="${used !== null && used > 90 ? "warning" : ""}"></span></div><p>${fmtBytes(v.free_bytes)} ${L("boş", "free")} <span>/ ${fmtBytes(v.size_bytes)}</span></p></div><b>${used === null ? "—" : used + "%"}</b></div>`;
             })
             .join("")}</div>`
         : `<div class="inline-empty">${icon("info")}${
@@ -622,6 +622,12 @@ function deepRecoveryEstimate(d: Disk): string {
   );
 }
 
+function fmtVolume(v?: string | null): string {
+  const s = (v ?? "").trim();
+  if (!s) return "";
+  return s.startsWith("/") ? s : `${s.replace(/:$/, "")}:`;
+}
+
 function metricCard(
   label: string,
   value: string,
@@ -676,7 +682,7 @@ function volumeSelect(
     d.volumes.length
       ? d.volumes.map((v) => [
           v.letter,
-          `${v.letter}: ${v.label || L("Yerel Disk", "Local Disk")} · ${fmtBytes(v.free_bytes)} ${L("boş", "free")}`,
+          `${fmtVolume(v.letter)} ${v.label || L("Yerel Disk", "Local Disk")} · ${fmtBytes(v.free_bytes)} ${L("boş", "free")}`,
         ])
       : [["", L("Eşleşen bölüm yok", "No mapped volume")]],
     letter,
@@ -898,7 +904,7 @@ function autopilotHero(d: Disk): string {
     d.volumes.length > 1
       ? `<div class="autopilot-volume">${volumeSelect(d, "autopilot-volume", L("Hedef bölüm", "Target volume"), 'data-volume-select="autopilot"')}</div>`
       : d.volumes.length === 1
-        ? `<div class="autopilot-vol-badge">${pill(L(`Hedef bölüm: ${d.volumes[0].letter}: (${fmtBytes(d.volumes[0].free_bytes)} boş)`, `Target volume: ${d.volumes[0].letter}: (${fmtBytes(d.volumes[0].free_bytes)} free)`), "ok")}</div>`
+        ? `<div class="autopilot-vol-badge">${pill(L(`Hedef bölüm: ${fmtVolume(d.volumes[0].letter)} (${fmtBytes(d.volumes[0].free_bytes)} boş)`, `Target volume: ${fmtVolume(d.volumes[0].letter)} (${fmtBytes(d.volumes[0].free_bytes)} free)`), "ok")}</div>`
         : "";
   return `<section class="autopilot-hero" aria-label="${L("Otomatik Politika Profili", "Automated Policy Profile")}">
     <div class="autopilot-hero-main">
@@ -1026,8 +1032,8 @@ function smartTierCard(
       lang,
     );
     const actionLabel = isHdd
-      ? L(`SSD'ye Terfi Et (${analysis?.companion?.letter ?? ""}:)`, `Promote to SSD (${analysis?.companion?.letter ?? ""}:)`, lang)
-      : L(`HDD'ye Taşı (${analysis?.companion?.letter ?? ""}:)`, `Offload to HDD (${analysis?.companion?.letter ?? ""}:)`, lang);
+      ? L(`SSD'ye Terfi Et (${fmtVolume(analysis?.companion?.letter)})`, `Promote to SSD (${fmtVolume(analysis?.companion?.letter)})`, lang)
+      : L(`HDD'ye Taşı (${fmtVolume(analysis?.companion?.letter)})`, `Offload to HDD (${fmtVolume(analysis?.companion?.letter)})`, lang);
     const reason = tTier?.reasons.get(cand.id) ?? cand.reason_tr;
     return `<div class="tier-candidate-row">
       <div class="tier-cand-main">
@@ -1158,7 +1164,7 @@ function smartTierCard(
       }
       ${
         companion
-          ? `<span class="tier-companion-chip">${icon("folder")}<span>${L("Hedef:", "Target:", lang)} <b>${e(companion.letter)}:</b> (${e(companion.model)} · ${fmtBytes(companion.free_bytes)} ${L("boş", "free", lang)})</span></span>`
+          ? `<span class="tier-companion-chip">${icon("folder")}<span>${L("Hedef:", "Target:", lang)} <b>${e(fmtVolume(companion.letter))}</b> (${e(companion.model)} · ${fmtBytes(companion.free_bytes)} ${L("boş", "free", lang)})</span></span>`
           : ""
       }
     </div>
@@ -1294,7 +1300,7 @@ function devWorkspaceCard(
                              <div class="dev-cache-actions">
                                ${
                                  c.can_offload && target
-                                   ? `<button type="button" class="button compact primary" data-dev-offload-id="${e(c.id)}" ${!diskVolOk || busyNow ? "disabled" : ""}>${icon("arrow")}<span>${L(`Junction ile Taşı (${target.letter}:)`, `Offload Junction (${target.letter}:)`, lang)}</span></button>`
+                                   ? `<button type="button" class="button compact primary" data-dev-offload-id="${e(c.id)}" ${!diskVolOk || busyNow ? "disabled" : ""}>${icon("arrow")}<span>${L(`Junction ile Taşı (${fmtVolume(target.letter)})`, `Offload Junction (${fmtVolume(target.letter)})`, lang)}</span></button>`
                                    : ""
                                }
                                ${
@@ -1354,7 +1360,7 @@ function devWorkspaceCard(
       ${devCustomRoot ? `<span class="tier-companion-chip">${icon("folder")}<span class="mono">${e(devCustomRoot)}</span><button type="button" class="button compact quiet" data-action="clear-dev-root" aria-label="${L("Özel klasörü temizle", "Clear custom folder")}">×</button></span>` : ""}
       ${
         target
-          ? `<span class="tier-companion-chip">${icon("disk")}<span>${L("Taşıma hedefi:", "Offload target:", lang)} <b>${e(target.letter)}:</b> (${e(target.model)} · ${fmtBytes(target.free_bytes)} ${L("boş", "free", lang)})</span></span>`
+          ? `<span class="tier-companion-chip">${icon("disk")}<span>${L("Taşıma hedefi:", "Offload target:", lang)} <b>${e(fmtVolume(target.letter))}</b> (${e(target.model)} · ${fmtBytes(target.free_bytes)} ${L("boş", "free", lang)})</span></span>`
           : ""
       }
     </div>
@@ -1965,7 +1971,7 @@ const blockStatus = (b: Block) =>
 
 function jobHistory(jobs: Job[], kind: string): string {
   const lang = getLang();
-  return `<article class="card saved-jobs"><div class="section-title"><div><h2>${kind === "benchmark" ? L("Önceki hız testleri", "Previous benchmarks", lang) : L("Önceki doğrulamalar", "Previous surface scans", lang)}</h2><p>${L("Son 20 yerel sonuç", "Latest 20 local runs", lang)}</p></div>${button(`export-${kind}`, L("Dışa aktar", "Export", lang), "export", "compact", !jobs.length)}</div>${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>${L("Tarih", "Date", lang)}</th><th>${L("Hedef", "Target", lang)}</th><th>${L("Durum", "Status", lang)}</th><th>${L("Mod", "Mode", lang)}</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${date(j.started_at)}</td><td>${e(j.letter)}: · ${e(j.model)}</td><td>${pill(statusText(j.status), j.status === "completed" ? "ok" : j.status === "failed" ? "warning" : "")}</td><td>${j.options?.profile === "slc" ? `SLC · ${e(j.options.write_budget_gib)} GiB` : e(j.options?.mode)}</td><td><button class="text-button" data-view-job="${e(j.id)}" data-kind="${kind}">${L("İncele", "Inspect", lang)} ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="inline-empty">${icon("history")}${L("Henüz kaydedilmiş bir test yok.", "No recorded runs yet.", lang)}</div>`}</article>`;
+  return `<article class="card saved-jobs"><div class="section-title"><div><h2>${kind === "benchmark" ? L("Önceki hız testleri", "Previous benchmarks", lang) : L("Önceki doğrulamalar", "Previous surface scans", lang)}</h2><p>${L("Son 20 yerel sonuç", "Latest 20 local runs", lang)}</p></div>${button(`export-${kind}`, L("Dışa aktar", "Export", lang), "export", "compact", !jobs.length)}</div>${jobs.length ? `<div class="table-wrap"><table><thead><tr><th>${L("Tarih", "Date", lang)}</th><th>${L("Hedef", "Target", lang)}</th><th>${L("Durum", "Status", lang)}</th><th>${L("Mod", "Mode", lang)}</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${date(j.started_at)}</td><td>${e(fmtVolume(j.letter))} · ${e(j.model)}</td><td>${pill(statusText(j.status), j.status === "completed" ? "ok" : j.status === "failed" ? "warning" : "")}</td><td>${j.options?.profile === "slc" ? `SLC · ${e(j.options.write_budget_gib)} GiB` : e(j.options?.mode)}</td><td><button class="text-button" data-view-job="${e(j.id)}" data-kind="${kind}">${L("İncele", "Inspect", lang)} ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="inline-empty">${icon("history")}${L("Henüz kaydedilmiş bir test yok.", "No recorded runs yet.", lang)}</div>`}</article>`;
 }
 
 function recoveryAppsPanel(job: Job): string {
@@ -2054,7 +2060,7 @@ function recoveryAppsPanel(job: Job): string {
                   </div>
                   <div class="inline-actions">
                     ${pill(catLabel, catCls)}
-                    ${app.drive_letter ? pill(`${app.drive_letter}:`) : ""}
+                    ${app.drive_letter ? pill(fmtVolume(app.drive_letter)) : ""}
                   </div>
                 </div>
                 <div class="app-status-row">
@@ -2273,7 +2279,7 @@ function recoveryView(d: Disk): string {
           ${tabs.map(([key, label, ico, count]) => `<button type="button" role="tab" id="rec-tab-${key}" aria-selected="${activeTab === key}" tabindex="${activeTab === key ? 0 : -1}" ${hasResults && activeTab === key ? `aria-controls="rec-panel-${key}"` : ""} class="rec-tab ${activeTab === key ? "selected" : ""}" data-rec-tab="${key}" ${hasResults ? "" : "disabled"}>${icon(ico)}<span>${label}</span><span class="rec-tab-count">${fmt(count)}</span></button>`).join("")}
         </div>
         <div class="recovery-scan-meta">
-          <span>${job.letter ? `${e(job.letter.replace(/:$/, ""))}: · ` : ""}${date(job.finished_at ?? job.started_at)}</span>
+          <span>${job.letter ? `${e(fmtVolume(job.letter))} · ` : ""}${date(job.finished_at ?? job.started_at)}</span>
           ${recoveryScanDetails(job, lang)}
         </div>
       </div>` : ""}
@@ -2429,7 +2435,7 @@ function render() {
     page !== "tools"
       ? `<div class="update-banner" role="status"><div class="update-banner-main">${icon("info")}<div><strong>${L(`Yeni sürüm hazır: ${e(updateStatus.latest ?? "")}`, `New release available: ${e(updateStatus.latest ?? "")}`, lang)}</strong><p>${(isPortableEdition() ? L("Resmi taşınabilir .zip, SHA-256 ile doğrulanarak .\\data\\updates klasörüne indirilir.", "The official portable .zip is downloaded to .\\data\\updates and verified with SHA-256.", lang) : L("Resmi GitHub sürümü SHA-256 doğrulaması ile tek tıkla kurulabilir.", "Official GitHub release verified with SHA-256 — one click to install.", lang))}</p></div></div><div class="inline-actions">${updateStatus.download_url && updateStatus.asset_name ? button("install-update", (isPortableEdition() ? L("Taşınabilir .zip İndir (SHA-256)", "Download Portable .zip (SHA-256)", lang) : L("İndir ve Güncelle (SHA-256)", "Download &amp; Update (SHA-256)", lang)), "export", "compact primary", pending) : ""}${updateStatus.url ? button("open-release", L("Sürüm Notları", "Release Notes", lang), "arrow", "compact quiet", pending) : ""}${button("dismiss-update-banner", L("Daha sonra", "Later", lang), "stop", "compact quiet", false)}</div></div>`
       : "";
-  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(connectionError, lang))}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(state.error, lang))}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.11.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(state.job.letter)}:</strong><small>${e(translateJobPhase(state.job.phase, lang))}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
+  root.innerHTML = `${navigation()}<div class="workspace">${header(d)}<main id="main" tabindex="-1">${connectionError ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(connectionError, lang))}</div>` : ""}${state?.error ? `<div class="error-banner">${icon("alert")}${e(translateBackendError(state.error, lang))}</div>` : ""}${partialBanner}${updateBanner}${state?.source === "replay" ? `<div class="replay-banner">${icon("history")}${L("Kaydedilmiş SMART ölçümleri görüntüleniyor. Canlı disk işlemleri devre dışı.", "Snapshot replay active. Live disk operations are disabled.", lang)}</div>` : ""}${content}<footer class="page-footer"><span>${icon("shield")}SSD Sentinel <b>v${e(state?.version ?? "1.11.0")}</b></span><span>${L("Yerel ölçüm. Açık veri. Bilinçli karar.", "Local telemetry. Transparent data. Informed action.", lang)}</span><span class="rust-badge">Rust <i>+</i> Tauri</span></footer></main>${state?.job && active(state.job) ? `<div class="active-job-bar"><span class="live-dot"></span><div><strong>${e(state.job.model)} · ${e(fmtVolume(state.job.letter))}</strong><small>${e(translateJobPhase(state.job.phase, lang))}</small></div><progress max="100" value="${state.job.progress}"></progress><b>${state.job.progress}%</b>${button("cancel-job", L("Durdur", "Stop", lang), "stop", "compact danger", state.job.status === "cancelling")}</div>` : ""}</div>`;
   const recoveryPageCheckbox = root.querySelector<HTMLInputElement>("#rec-select-page[data-partial]");
   if (recoveryPageCheckbox) recoveryPageCheckbox.indeterminate = true;
   document.querySelector("#main")!.scrollTop = scroll;

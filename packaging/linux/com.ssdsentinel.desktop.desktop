@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=SSD Sentinel
+GenericName=Storage Diagnostics & Recovery
+GenericName[tr]=Disk Tanılama ve Veri Kurtarma
+Comment=Monitor NVMe/SATA health, benchmark with io_uring, repair surfaces, and recover files
+Comment[tr]=NVMe/SATA sağlığını izleyin, hız testi yapın, yüzey onarın ve dosya kurtarın
+Exec=ssd-sentinel %U
+Icon=com.ssdsentinel.desktop
+Terminal=false
+Categories=System;Utility;Monitor;HardwareSettings;
+Keywords=ssd;nvme;hdd;smart;health;benchmark;recovery;disk;io_uring;
+StartupNotify=true
+StartupWMClass=com.ssdsentinel.desktop
+SingleMainWindow=true

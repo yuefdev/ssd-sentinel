@@ -218,6 +218,7 @@ pub fn deduplicate_live_aliases_lang(
     Ok(kept)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn inventory_pd_targets(inventory: &Value) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     for disk in inventory["disks"].as_array().into_iter().flatten() {
@@ -354,7 +355,16 @@ impl Core {
     pub fn state(&self) -> Value {
         let mut data = lock(&self.data).clone();
         data["version"] = json!(env!("CARGO_PKG_VERSION"));
-        data["backend"] = json!("Rust · Tauri 2");
+        data["backend"] = json!(if cfg!(target_os = "linux") {
+            if cfg!(all(feature = "desktop", not(feature = "native-gui"))) {
+                "Rust · Tauri 2 (Linux)"
+            } else {
+                "Rust · Native Linux"
+            }
+        } else {
+            "Rust · Tauri 2"
+        });
+        data["is_admin"] = json!(platform::is_admin());
         data["job"] = lock(&self.job).clone();
         data["engine"] = jobs::engine_info();
         data["profiles"] = json!(jobs::profiles());
@@ -562,7 +572,14 @@ impl Core {
             }
             let mut used_pd_fallback = false;
             if targets.is_empty() {
-                targets = inventory_pd_targets(&inv_val);
+                #[cfg(target_os = "linux")]
+                {
+                    targets = crate::platform_linux::resolve_linux_disk_targets(&inv_val);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    targets = inventory_pd_targets(&inv_val);
+                }
                 used_pd_fallback = true;
             }
             for (name, kind) in targets {
@@ -580,7 +597,11 @@ impl Core {
                 }
             }
             if snapshots.is_empty() && !used_pd_fallback {
-                for (name, kind) in inventory_pd_targets(&inv_val) {
+                #[cfg(target_os = "linux")]
+                let fallback_targets = crate::platform_linux::resolve_linux_disk_targets(&inv_val);
+                #[cfg(not(target_os = "linux"))]
+                let fallback_targets = inventory_pd_targets(&inv_val);
+                for (name, kind) in fallback_targets {
                     if self.stop.load(Ordering::SeqCst) {
                         return Err(crate::process::CANCELLED.into());
                     }
@@ -592,6 +613,50 @@ impl Core {
                             }
                             skipped_warnings.push(format!("{name}: {e}"));
                         }
+                    }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let any_incomplete = snapshots
+                    .iter()
+                    .any(|s| s["smartctl"]["exit_status"].as_u64().unwrap_or(0) & 7 != 0);
+                if snapshots.is_empty() || any_incomplete {
+                    let udisks = crate::linux_udisks::collect_smart_snapshots();
+                    if !udisks.is_empty() {
+                        if snapshots.is_empty() {
+                            snapshots = udisks;
+                        } else {
+                            for u in udisks {
+                                let u_dev = u["device"]["name"].as_str().unwrap_or("");
+                                if let Some(slot) = snapshots.iter_mut().find(|s| {
+                                    s["device"]["name"].as_str() == Some(u_dev)
+                                        && s["smartctl"]["exit_status"].as_u64().unwrap_or(0) & 7
+                                            != 0
+                                }) {
+                                    *slot = u;
+                                } else if !snapshots
+                                    .iter()
+                                    .any(|s| s["device"]["name"].as_str() == Some(u_dev))
+                                {
+                                    snapshots.push(u);
+                                }
+                            }
+                        }
+                    }
+                }
+                if snapshots.is_empty() {
+                    let fallback =
+                        crate::platform_linux::synthesize_sysfs_fallback_snapshots(&inv_val);
+                    if !fallback.is_empty() {
+                        skipped_warnings.push(
+                            self.t(
+                                "smartctl veya UDisks2 SMART verisi okunamadı; salt-okunur çekirdek envanteri gösteriliyor. Tam SMART için Polkit yetkisi verin veya smartmontools kurun.",
+                                "Could not read SMART from smartctl or UDisks2; showing kernel block inventory. Authenticate via Polkit or install smartmontools for full SMART telemetry.",
+                            )
+                            .into(),
+                        );
+                        snapshots = fallback;
                     }
                 }
             }
@@ -809,9 +874,12 @@ impl Core {
 
     pub fn start_job(self: &Arc<Self>, mut request: JobRequest) -> Result<Value, String> {
         jobs::validate_options(&request.kind, &request.options)?;
-        if request.letter.len() != 1 || !request.letter.as_bytes()[0].is_ascii_uppercase() {
+        if !platform::is_valid_volume_id(&request.letter) {
             return Err(self
-                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .t(
+                    "Geçersiz bölüm/bağlama noktası.",
+                    "Invalid volume identifier.",
+                )
                 .into());
         }
         let expected = match request.kind.as_str() {
@@ -913,8 +981,8 @@ impl Core {
         {
             return Err(self
                 .t(
-                    "Windows bölüm/disk kimliği doğrulanamadı.",
-                    "The Windows volume/drive identity could not be verified.",
+                    "Bölüm/disk kimliği doğrulanamadı.",
+                    "The volume/drive identity could not be verified.",
                 )
                 .into());
         }
@@ -1069,19 +1137,26 @@ impl Core {
             }
             let letter = letter.ok_or(self.t("Bölüm seçin.", "Select a volume."))?;
             jobs::validate_target(self, &disk, letter, 0, false, false)?;
-            let mut args = vec![
-                "-DriveLetter".into(),
-                letter.into(),
-                "-ExpectedSerial".into(),
-                disk.os_serial.unwrap_or_default(),
-                "-ExpectedModel".into(),
-                disk.os_model.unwrap_or(disk.model),
-            ];
-            if let Some(num) = disk.os_disk_number {
-                args.push("-ExpectedDiskNumber".into());
-                args.push(num.to_string());
+            #[cfg(target_os = "linux")]
+            {
+                return crate::platform_linux::fstrim_volume(letter);
             }
-            return platform::powershell("ReTrim", &args, &self.stop, 180);
+            #[cfg(not(target_os = "linux"))]
+            {
+                let mut args = vec![
+                    "-DriveLetter".into(),
+                    letter.into(),
+                    "-ExpectedSerial".into(),
+                    disk.os_serial.unwrap_or_default(),
+                    "-ExpectedModel".into(),
+                    disk.os_model.unwrap_or(disk.model),
+                ];
+                if let Some(num) = disk.os_disk_number {
+                    args.push("-ExpectedDiskNumber".into());
+                    args.push(num.to_string());
+                }
+                return platform::powershell("ReTrim", &args, &self.stop, 180);
+            }
         }
         if disk.capabilities["self_test"] != true {
             return Err(self
@@ -1308,8 +1383,47 @@ impl Core {
         lock(&self.store).list_tier_moves()
     }
 
+    fn volume_matches(v_letter: &str, expected: &str) -> bool {
+        if expected.starts_with('/') {
+            v_letter == expected
+        } else {
+            v_letter.eq_ignore_ascii_case(expected)
+        }
+    }
+
+    fn resolve_source_volume(disk: &Disk, source_path: &str) -> Option<String> {
+        let trimmed = source_path.trim();
+        let bytes = trimmed.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return Some((bytes[0] as char).to_ascii_uppercase().to_string());
+        }
+        if trimmed.starts_with('/') {
+            let best = disk
+                .volumes
+                .iter()
+                .filter_map(|v| v["letter"].as_str())
+                .filter(|mp| {
+                    *mp == "/"
+                        || trimmed == *mp
+                        || trimmed
+                            .strip_prefix(mp)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .max_by_key(|mp| mp.len());
+            if let Some(mp) = best {
+                return Some(mp.to_owned());
+            }
+            return crate::dev_workspace::drive_letter(trimmed);
+        }
+        None
+    }
+
     pub fn analyze_storage_tiering(&self, disk_id: &str, letter: &str) -> Result<Value, String> {
-        let clean_letter = letter.trim().trim_end_matches(':').to_ascii_uppercase();
+        let clean_letter = platform::normalize_volume_id(letter);
         let disks = self.disks()?;
         let selected = disks
             .iter()
@@ -1321,12 +1435,11 @@ impl Core {
             .cloned()
             .unwrap_or_default();
         if self.config.snapshot_dir.is_some() || lock(&self.data)["source"] == "replay" {
-            let replay_letter =
-                if clean_letter.len() == 1 && clean_letter.as_bytes()[0].is_ascii_uppercase() {
-                    clean_letter.as_str()
-                } else {
-                    ""
-                };
+            let replay_letter = if platform::is_valid_volume_id(&clean_letter) {
+                clean_letter.as_str()
+            } else {
+                ""
+            };
             return Ok(crate::tiering::analyze_volume_replay(
                 &disks,
                 selected,
@@ -1334,15 +1447,18 @@ impl Core {
                 &active_moves,
             ));
         }
-        if clean_letter.len() != 1 || !clean_letter.as_bytes()[0].is_ascii_uppercase() {
+        if !platform::is_valid_volume_id(&clean_letter) {
             return Err(self
-                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .t(
+                    "Geçersiz bölüm/bağlama noktası.",
+                    "Invalid volume identifier.",
+                )
                 .into());
         }
         if !selected.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
-                .is_some_and(|l| l.eq_ignore_ascii_case(&clean_letter))
+                .is_some_and(|l| Self::volume_matches(l, &clean_letter))
         }) {
             return Err(self
                 .t(
@@ -1362,15 +1478,12 @@ impl Core {
         direction: &str,
         confirmation: &str,
     ) -> Result<Value, String> {
-        let clean_target = target_letter
-            .trim()
-            .trim_end_matches(':')
-            .to_ascii_uppercase();
-        if clean_target.len() != 1 || !clean_target.as_bytes()[0].is_ascii_uppercase() {
+        let clean_target = platform::normalize_volume_id(target_letter);
+        if !platform::is_valid_volume_id(&clean_target) {
             return Err(self
                 .t(
-                    "Geçersiz hedef bölüm harfi.",
-                    "Invalid target volume letter.",
+                    "Geçersiz hedef bölüm/bağlama noktası.",
+                    "Invalid target volume identifier.",
                 )
                 .into());
         }
@@ -1393,31 +1506,24 @@ impl Core {
         }
         let disk = self.live_disk(disk_id)?;
         self.require_write_unlocked("tier_relocate")?;
+        #[cfg(windows)]
         if !platform::is_admin() {
             return Err(
                 self.t("Katmanlama taşıması ve NTFS Junction oluşturma için Yönetici yetkisi gereklidir.", "Administrator rights are required for tier relocation and NTFS Junction creation.")
                     .into(),
             );
         }
-        let src_bytes = source_path.as_bytes();
-        let src_letter = if src_bytes.len() >= 3
-            && src_bytes[0].is_ascii_alphabetic()
-            && src_bytes[1] == b':'
-            && (src_bytes[2] == b'\\' || src_bytes[2] == b'/')
-        {
-            (src_bytes[0] as char).to_ascii_uppercase().to_string()
-        } else {
-            return Err(self
-                .t(
-                    "Geçersiz kaynak dosya/klasör yolu.",
-                    "Invalid source file/folder path.",
-                )
-                .into());
-        };
+        let src_letter = Self::resolve_source_volume(&disk, source_path).ok_or_else(|| {
+            self.t(
+                "Geçersiz kaynak dosya/klasör yolu.",
+                "Invalid source file/folder path.",
+            )
+            .to_owned()
+        })?;
         if !disk.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
-                .is_some_and(|l| l.eq_ignore_ascii_case(&src_letter))
+                .is_some_and(|l| Self::volume_matches(l, &src_letter))
         }) {
             return Err(self
                 .t(
@@ -1434,7 +1540,7 @@ impl Core {
                     && d.volumes.iter().any(|v| {
                         v["letter"]
                             .as_str()
-                            .is_some_and(|l| l.eq_ignore_ascii_case(&clean_target))
+                            .is_some_and(|l| Self::volume_matches(l, &clean_target))
                     })
             })
             .ok_or(self.t(
@@ -1680,34 +1786,36 @@ impl Core {
         letter: &str,
         custom_root: Option<&str>,
     ) -> Result<Value, String> {
-        let clean_letter = letter.trim().trim_end_matches(':').to_ascii_uppercase();
+        let clean_letter = platform::normalize_volume_id(letter);
         let disks = self.disks()?;
         let selected = disks
             .iter()
             .find(|d| d.id == disk_id)
             .ok_or(self.t("Disk bulunamadı.", "Drive not found."))?;
         if self.config.snapshot_dir.is_some() || lock(&self.data)["source"] == "replay" {
-            let replay_letter =
-                if clean_letter.len() == 1 && clean_letter.as_bytes()[0].is_ascii_uppercase() {
-                    clean_letter.as_str()
-                } else {
-                    ""
-                };
+            let replay_letter = if platform::is_valid_volume_id(&clean_letter) {
+                clean_letter.as_str()
+            } else {
+                ""
+            };
             return Ok(crate::dev_workspace::analyze_dev_workspace_replay(
                 &disks,
                 selected,
                 replay_letter,
             ));
         }
-        if clean_letter.len() != 1 || !clean_letter.as_bytes()[0].is_ascii_uppercase() {
+        if !platform::is_valid_volume_id(&clean_letter) {
             return Err(self
-                .t("Geçersiz bölüm harfi.", "Invalid volume letter.")
+                .t(
+                    "Geçersiz bölüm/bağlama noktası.",
+                    "Invalid volume identifier.",
+                )
                 .into());
         }
         if !selected.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
-                .is_some_and(|l| l.eq_ignore_ascii_case(&clean_letter))
+                .is_some_and(|l| Self::volume_matches(l, &clean_letter))
         }) {
             return Err(self
                 .t(
@@ -1745,14 +1853,17 @@ impl Core {
         }
         let disk = self.live_disk(disk_id)?;
         self.require_write_unlocked("dev_clean")?;
-        let src_letter = crate::dev_workspace::drive_letter(path_str).ok_or(self.t(
-            "Geçersiz temizlik klasör yolu.",
-            "Invalid cleanup folder path.",
-        ))?;
+        let src_letter = Self::resolve_source_volume(&disk, path_str).ok_or_else(|| {
+            self.t(
+                "Geçersiz temizlik klasör yolu.",
+                "Invalid cleanup folder path.",
+            )
+            .to_owned()
+        })?;
         if !disk.volumes.iter().any(|v| {
             v["letter"]
                 .as_str()
-                .is_some_and(|l| l.eq_ignore_ascii_case(&src_letter))
+                .is_some_and(|l| Self::volume_matches(l, &src_letter))
         }) {
             return Err(self
                 .t(

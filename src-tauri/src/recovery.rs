@@ -323,7 +323,7 @@ fn apply_usa_fixup(record: &[u8]) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn extract_mft_runs(record: &[u8], cluster_bytes: u64) -> Option<Vec<(i64, u64)>> {
     let _ = cluster_bytes;
     let buf = apply_usa_fixup(record)?;
@@ -931,7 +931,9 @@ pub fn category_for_file(
     match lower_ext.as_str() {
         "exe" if is_game_path(&lower_path) => ("game_portable", "Oyun Çalıştırıcısı (.exe)".into()),
         "exe" => ("exe_setup", "Windows Uygulaması (.exe)".into()),
-        "msi" | "msix" | "appx" | "apk" => ("exe_setup", format!("Kurulum Paketi (.{lower_ext})")),
+        "msi" | "msix" | "appx" | "apk" | "appimage" | "deb" | "rpm" | "flatpakref" => {
+            ("exe_setup", format!("Kurulum Paketi (.{lower_ext})"))
+        }
         "pak" if is_game_path(&lower_path) => ("game_portable", "Oyun Veri Paketi (.pak)".into()),
         "pdf" => ("document", "PDF Belgesi".into()),
         "docx" | "doc" | "odt" | "rtf" => ("document", format!("Metin Belgesi (.{lower_ext})")),
@@ -975,6 +977,12 @@ pub fn category_for_file(
         _ if bytes.starts_with(b"%PDF-") => ("document", "PDF Belgesi".into()),
         _ if bytes.starts_with(b"SQLite format 3\0") => {
             ("database_code", "SQLite 3 Veritabanı".into())
+        }
+        _ if bytes.len() >= 20
+            && bytes.starts_with(b"\x7FELF")
+            && u16::from_le_bytes([bytes[16], bytes[17]]) == 2 =>
+        {
+            ("exe_setup", "Linux ELF Çalıştırıcı".into())
         }
         _ => ("other", "Diğer Kullanıcı Dosyası".into()),
     }
@@ -1585,6 +1593,38 @@ fn drive_letter_of(path: &Path) -> Option<char> {
     (c0.is_ascii_alphabetic() && c1 == ':').then(|| c0.to_ascii_uppercase())
 }
 
+fn same_source_volume(source_id: &str, dest_path: &Path) -> bool {
+    let trimmed = source_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if trimmed.starts_with('/') {
+        let src_norm = platform::normalize_volume_id(trimmed);
+        let dest_str = dest_path.to_string_lossy();
+        let best = crate::platform_linux::mounted_volumes()
+            .into_iter()
+            .filter(|v| {
+                let mp = v.mount_point.as_str();
+                mp == "/" || dest_str == mp || dest_str.starts_with(&format!("{mp}/"))
+            })
+            .max_by_key(|v| v.mount_point.len());
+        return best.is_some_and(|v| platform::normalize_volume_id(&v.mount_point) == src_norm);
+    }
+    if let Some(src_char) = trimmed
+        .chars()
+        .next()
+        .filter(|c| c.is_ascii_alphabetic() && trimmed.trim_end_matches(':').len() == 1)
+        .map(|c| c.to_ascii_uppercase())
+    {
+        #[cfg(windows)]
+        return drive_letter_of(dest_path) == Some(src_char);
+        #[cfg(not(windows))]
+        return drive_letter_of(dest_path).unwrap_or('C') == src_char;
+    }
+    false
+}
+
 fn read_item_bytes_readonly(
     source_letter: &str,
     item: &Value,
@@ -1625,21 +1665,31 @@ fn read_item_bytes_readonly(
             Ok((data, total))
         }
         "mft_nonresident" | "carved" => {
-            let src_char = source_letter
-                .chars()
-                .next()
-                .map(|c| c.to_ascii_uppercase())
-                .ok_or("Kaynak bölüm harfi geçersiz.")?;
+            let src_trim = source_letter.trim();
+            if src_trim.is_empty() {
+                return Err("Kaynak bölüm bilgisi geçersiz.".into());
+            }
             #[cfg(windows)]
             {
+                let src_char = src_trim
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase())
+                    .ok_or("Kaynak bölüm harfi geçersiz.")?;
                 let data = win::read_raw_bytes_from_volume(src_char, item, max_bytes)?;
                 let total = reported_size.max(data.len() as u64);
                 Ok((data, total))
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
             {
-                let _ = src_char;
-                Err("Ham sektör önizlemesi yalnız Windows'ta desteklenir.".into())
+                let data = linux_rec::read_raw_bytes_from_volume(src_trim, item, max_bytes)?;
+                let total = reported_size.max(data.len() as u64);
+                Ok((data, total))
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
+            {
+                let _ = src_trim;
+                Err("Ham sektör önizlemesi bu işletim sisteminde desteklenmiyor.".into())
             }
         }
         _ => Err("Bu kurtarma kaynağı için doğrudan okuma desteklenmiyor.".into()),
@@ -2180,11 +2230,10 @@ pub fn restore_item(source_letter: &str, item: &Value, dest_path: &Path) -> Resu
                 .into(),
         );
     }
-    let src_char = source_letter
-        .chars()
-        .next()
-        .map(|c| c.to_ascii_uppercase())
-        .ok_or("Kaynak bölüm harfi geçersiz.")?;
+    let src_trim = source_letter.trim();
+    if src_trim.is_empty() {
+        return Err("Kaynak bölüm bilgisi geçersiz.".into());
+    }
     let source = item["source"].as_str().unwrap_or("");
     let parent = dest_path
         .parent()
@@ -2196,7 +2245,7 @@ pub fn restore_item(source_letter: &str, item: &Value, dest_path: &Path) -> Resu
         .unwrap_or_else(|_| parent.to_path_buf());
     let dest_check = canon_parent.join(dest_path.file_name().ok_or("Hedef dosya adı eksik.")?);
     if !matches!(source, "recycle_bin" | "vss_shadow" | "installer_cache")
-        && drive_letter_of(&dest_check) == Some(src_char)
+        && same_source_volume(src_trim, &dest_check)
     {
         return Err(
             "Silinen sektörlerin üzerine yazılmasını önlemek için kurtarılan dosyayı FARKLI bir diske veya USB belleğe kaydedin."
@@ -2262,12 +2311,23 @@ pub fn restore_item(source_letter: &str, item: &Value, dest_path: &Path) -> Resu
         "mft_nonresident" | "carved" => {
             #[cfg(windows)]
             {
+                let src_char = src_trim
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase())
+                    .ok_or("Kaynak bölüm harfi geçersiz.")?;
                 win::restore_raw_from_volume(src_char, item, &tmp, &mut hasher)?
             }
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
             {
-                let _ = (&src_char, &tmp);
-                return Err("Ham disk kümesi kurtarma yalnız Windows'ta desteklenir.".into());
+                linux_rec::restore_raw_from_volume(src_trim, item, &tmp, &mut hasher)?
+            }
+            #[cfg(not(any(windows, target_os = "linux")))]
+            {
+                let _ = (&src_trim, &tmp);
+                return Err(
+                    "Ham disk kümesi kurtarma bu işletim sisteminde desteklenmiyor.".into(),
+                );
             }
         }
         _ => return Err("Desteklenmeyen kurtarma kaynağı.".into()),
@@ -2361,7 +2421,6 @@ pub fn restore_batch(job: &Value, item_ids: &[String], dest_dir: &Path) -> Resul
     let canon_dest = dest_dir
         .canonicalize()
         .unwrap_or_else(|_| dest_dir.to_path_buf());
-    let dest_drive = drive_letter_of(&canon_dest);
 
     let mut by_id: HashMap<&str, &Value> = HashMap::new();
     if let Some(arr) = job["recovery_items"].as_array() {
@@ -2398,10 +2457,8 @@ pub fn restore_batch(job: &Value, item_ids: &[String], dest_dir: &Path) -> Resul
             .filter(|s| !s.is_empty())
             .or_else(|| job["letter"].as_str())
             .unwrap_or("");
-        let src_char = item_letter.chars().next().map(|c| c.to_ascii_uppercase());
         if !matches!(source, "recycle_bin" | "vss_shadow" | "installer_cache")
-            && src_char.is_some()
-            && dest_drive == src_char
+            && same_source_volume(item_letter, &canon_dest)
         {
             return Err(
                 "Silinen sektörlerin üzerine yazılmasını önlemek için kurtarma klasörü olarak FARKLI bir disk veya USB bellek seçin."
@@ -2566,9 +2623,10 @@ fn build_recycle_file_item(
         }
     }
 
-    let name = Path::new(&original_path)
-        .file_name()
-        .and_then(|s| s.to_str())
+    let name = original_path
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or(fallback_name)
         .to_owned();
     let status_label = match media_status.as_deref() {
@@ -2623,7 +2681,12 @@ fn walk_recycled_dir(
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let trimmed_base = orig_base.trim_end_matches('\\');
+    let sep = if orig_base.starts_with('/') {
+        '/'
+    } else {
+        '\\'
+    };
+    let trimmed_base = orig_base.trim_end_matches(['\\', '/']);
     for entry in entries.flatten() {
         if *per_dir_count >= 120 || out.len() >= max_total {
             break;
@@ -2635,7 +2698,11 @@ fn walk_recycled_dir(
         let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        let child_orig = format!("{trimmed_base}\\{fname}");
+        let child_orig = if trimmed_base.is_empty() && sep == '/' {
+            format!("/{fname}")
+        } else {
+            format!("{trimmed_base}{sep}{fname}")
+        };
         if p.is_dir() {
             walk_recycled_dir(
                 &p,
@@ -2652,14 +2719,21 @@ fn walk_recycled_dir(
             );
         } else if p.is_file() {
             let ext = extension_of(fname);
-            if apps_only && !matches!(ext.as_str(), "exe" | "msi" | "msix") {
+            if apps_only
+                && !matches!(
+                    ext.as_str(),
+                    "exe" | "msi" | "msix" | "appimage" | "deb" | "rpm"
+                )
+            {
                 continue;
             }
             if is_junk_noise_path(&child_orig, &ext) {
                 continue;
             }
-            if matches!(ext.as_str(), "exe" | "msi" | "msix")
-                && forensics::is_noise_app_exe(&child_orig, None)
+            if matches!(
+                ext.as_str(),
+                "exe" | "msi" | "msix" | "appimage" | "deb" | "rpm"
+            ) && forensics::is_noise_app_exe(&child_orig, None)
             {
                 continue;
             }
@@ -2780,7 +2854,14 @@ pub fn scan_recycle_bin_dir(
 
 fn scan_recycle_bin(core: &Core, root: &Path, letter: &str, is_ssd: bool) -> Vec<RecoveredItem> {
     let cancel_fn = || core.job_cancel.load(Ordering::SeqCst) || core.stop.load(Ordering::SeqCst);
-    scan_recycle_bin_dir(root, letter, is_ssd, false, &cancel_fn)
+    #[cfg(target_os = "linux")]
+    {
+        linux_rec::scan_xdg_trash(root, letter, is_ssd, &cancel_fn)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        scan_recycle_bin_dir(root, letter, is_ssd, false, &cancel_fn)
+    }
 }
 
 fn recovery_source_rank(source: &str, trim_zeroed: bool) -> u8 {
@@ -2799,17 +2880,22 @@ fn recovery_source_rank(source: &str, trim_zeroed: bool) -> u8 {
 
 fn is_setup_like_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    let fname = lower.rsplit('\\').next().unwrap_or(&lower);
+    let fname = lower.rsplit(['\\', '/']).next().unwrap_or(&lower);
     lower.contains("\\downloads\\")
+        || lower.contains("/downloads/")
         || lower.contains("\\windows\\installer\\")
         || fname.contains("setup")
         || fname.contains("installer")
         || fname.ends_with(".msi")
         || fname.ends_with(".msix")
+        || fname.ends_with(".appimage")
+        || fname.ends_with(".deb")
+        || fname.ends_with(".rpm")
+        || fname.ends_with(".flatpakref")
 }
 
 /// Correlates, noise-filters, deduplicates, categorizes, and ranks all deleted apps & games
-/// from recoverable binaries, multi-source Windows forensic traces, and surviving AppData folders.
+/// from recoverable binaries, multi-source Windows/Linux forensic traces, and surviving AppData folders.
 pub fn build_deleted_app_bundles(
     selected_letter: &str,
     items: &[RecoveredItem],
@@ -2825,10 +2911,7 @@ pub fn build_deleted_app_bundles(
         appdata_seen: HashSet<String>,
     }
 
-    let selected_upper = selected_letter
-        .trim()
-        .trim_end_matches(':')
-        .to_ascii_uppercase();
+    let selected_upper = platform::normalize_volume_id(selected_letter);
     let mut accs: Vec<Acc> = Vec::new();
     let mut idx_by_canon: HashMap<String, usize> = HashMap::new();
 
@@ -2860,7 +2943,10 @@ pub fn build_deleted_app_bundles(
     // 1. Index directly recoverable EXE/MSI/MSIX binaries (VSS, Recycle Bin, MSI/Downloads Cache, $MFT, Carved)
     for item in items {
         let is_app_item = matches!(item.category.as_str(), "exe_setup" | "game_portable")
-            || matches!(item.extension.as_str(), "exe" | "msi" | "msix");
+            || matches!(
+                item.extension.as_str(),
+                "exe" | "msi" | "msix" | "appimage" | "deb" | "rpm"
+            );
         if !is_app_item {
             continue;
         }
@@ -2902,9 +2988,10 @@ pub fn build_deleted_app_bundles(
         let is_full_restore = rank >= 4;
         let is_game = item.category == "game_portable";
         let real_exe = !is_setup_like_path(&item.original_path)
-            && item.original_path.to_ascii_lowercase().ends_with(".exe");
+            && (item.original_path.to_ascii_lowercase().ends_with(".exe")
+                || (item.original_path.starts_with('/') && !item.original_path.ends_with('/')));
         let item_drive = forensics::extract_drive_letter(&item.original_path)
-            .unwrap_or_else(|| item.source_letter.to_ascii_uppercase());
+            .unwrap_or_else(|| platform::normalize_volume_id(&item.source_letter));
         let display_name = forensics::clean_app_display_name(raw_name, &item.original_path);
 
         if let Some(&idx) = idx_by_canon.get(&canon) {
@@ -2943,7 +3030,12 @@ pub fn build_deleted_app_bundles(
         let install_dir = forensics::extract_install_dir(&item.original_path);
         let category =
             forensics::classify_app_category(&canon, &item.original_path, &display_name, is_game);
-        let winget_hint = forensics::winget_command_for_app(&canon, &display_name);
+        let winget_hint = forensics::reinstall_command_for_app(
+            &canon,
+            &display_name,
+            &item.original_path,
+            selected_letter,
+        );
         let recovery_status = if is_full_restore {
             "full_restore"
         } else if is_restorable {
@@ -3006,8 +3098,9 @@ pub fn build_deleted_app_bundles(
 
         let vss_id = vss_by_path.get(&tr.exe_path.to_ascii_lowercase()).cloned();
         let tr_real_exe = !is_setup_like_path(&tr.exe_path)
-            && forensics::extract_drive_letter(&tr.exe_path).is_some()
-            && tr.exe_path.to_ascii_lowercase().ends_with(".exe");
+            && ((forensics::extract_drive_letter(&tr.exe_path).is_some()
+                && tr.exe_path.to_ascii_lowercase().ends_with(".exe"))
+                || tr.exe_path.starts_with('/'));
         let display_name = forensics::clean_app_display_name(&tr.name, &tr.exe_path);
 
         if let Some(&idx) = idx_by_canon.get(&canon) {
@@ -3074,7 +3167,12 @@ pub fn build_deleted_app_bundles(
         };
         let category =
             forensics::classify_app_category(&canon, &tr.exe_path, &display_name, tr.is_game);
-        let winget_hint = forensics::winget_command_for_app(&canon, &display_name);
+        let winget_hint = forensics::reinstall_command_for_app(
+            &canon,
+            &display_name,
+            &tr.exe_path,
+            selected_letter,
+        );
         let mut appdata_seen = HashSet::new();
         let mut appdata_paths = Vec::new();
         for ap in &tr.appdata_paths {
@@ -3142,7 +3240,12 @@ pub fn build_deleted_app_bundles(
             } else {
                 "reinstall_only".into()
             };
-            acc.bundle.winget_hint = forensics::winget_command_for_app(&canon, &acc.bundle.name);
+            acc.bundle.winget_hint = forensics::reinstall_command_for_app(
+                &canon,
+                &acc.bundle.name,
+                &acc.bundle.exe_path,
+                selected_letter,
+            );
             if acc.bundle.drive_letter.is_empty() {
                 acc.bundle.drive_letter = forensics::extract_drive_letter(&acc.bundle.exe_path)
                     .unwrap_or_else(|| selected_upper.clone());
@@ -3269,16 +3372,33 @@ fn prioritize_recovery_results(
 pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Result<(), String> {
     let mode = request.options["mode"].as_str().unwrap_or("quick");
     if mode == "deep" && !platform::is_admin() {
+        #[cfg(target_os = "linux")]
+        if !linux_rec::can_read_volume_device(&request.letter) {
+            return Err("Derin ham sektör imza kazıma taraması Yönetici yetkisi veya aygıt okuma izni gerektirir.".into());
+        }
+        #[cfg(not(target_os = "linux"))]
         return Err("Derin ham sektör imza kazıma taraması Yönetici yetkisi gerektirir.".into());
     }
     let is_ssd = disk.kind != "HDD";
     let mut items = Vec::new();
     let mut mft_scanned = 0u64;
     let mut dir_map: HashMap<u64, (u64, String)> = HashMap::new();
+    #[allow(unused_mut)]
     let mut usn_deleted_count = 0usize;
     let mut indx_ghost_count = 0usize;
 
-    phase_bi(core, "1/5 · Geri Dönüşüm Kutusu (dosya & klasörler), VSS Gölge Kopyaları ve adli kaynaklar taranıyor", "1/5 · Scanning Recycle Bin (files & folders), VSS shadow copies and forensic sources");
+    #[cfg(target_os = "linux")]
+    phase_bi(
+        core,
+        "1/5 · XDG Çöp Kutusu, Btrfs/ZFS/Timeshift anlık görüntüleri ve Linux adli kaynakları taranıyor",
+        "1/5 · Scanning XDG Trash, Btrfs/ZFS/Timeshift snapshots and Linux forensic sources",
+    );
+    #[cfg(not(target_os = "linux"))]
+    phase_bi(
+        core,
+        "1/5 · Geri Dönüşüm Kutusu (dosya & klasörler), VSS Gölge Kopyaları ve adli kaynaklar taranıyor",
+        "1/5 · Scanning Recycle Bin (files & folders), VSS shadow copies and forensic sources",
+    );
     items.extend(scan_recycle_bin(core, root, &request.letter, is_ssd));
 
     // Also inspect SystemDrive $Recycle.Bin for deleted apps/installers if user scanned a secondary drive
@@ -3300,6 +3420,7 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         }
     }
 
+    #[allow(unused_mut)]
     let mut forensic = forensics::collect_forensic_sweep(&request.letter);
     let mut vss_by_path: HashMap<String, String> = HashMap::new();
     let mut head_probe = vec![0u8; 64 * 1024];
@@ -3523,7 +3644,82 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         lock(&core.job)["progress"] = json!(85);
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        let raw_readable = linux_rec::can_read_volume_device(&request.letter);
+        let is_ntfs = disk.volumes.iter().any(|v| {
+            v["letter"] == request.letter
+                && v["filesystem"]
+                    .as_str()
+                    .is_some_and(|fs| fs.to_ascii_lowercase().contains("ntfs"))
+        });
+        if is_ntfs && (platform::is_admin() || raw_readable) {
+            phase_bi(
+                core,
+                "2/5 · NTFS $MFT tam kapsam dizin ağacı okunuyor",
+                "2/5 · Reading the full NTFS $MFT directory tree",
+            );
+            let max_records = if mode == "deep" { 1_200_000 } else { 350_000 };
+            if let Ok((mft_items, scanned, dirs)) = linux_rec::scan_ntfs_mft(
+                core,
+                &request.letter,
+                mode == "apps_only",
+                mode == "dev",
+                is_ssd,
+                max_records,
+            ) {
+                items.extend(mft_items);
+                mft_scanned = scanned;
+                dir_map = dirs;
+            }
+        }
+        lock(&core.job)["progress"] = json!(45);
+
+        if (mode == "deep" || mode == "apps_only") && (platform::is_admin() || raw_readable) {
+            let size_mib = request.options["size_mib"].as_u64().unwrap_or(16_384);
+            let budget_bytes = if size_mib == 0 {
+                FULL_SCAN_CAP_BYTES
+            } else if mode == "apps_only" {
+                4 * 1024 * 1024 * 1024u64
+            } else {
+                size_mib * 1024 * 1024
+            };
+            phase_bi(
+                core,
+                if mode == "apps_only" {
+                    "3/5 · Ham sektörlerde kayıp uygulama/paket imzaları aranıyor"
+                } else {
+                    "3/5 · Derin ham sektör imza kazıma ve medya onarım analizi (ELF / PE / Foto / Video / Belge)"
+                },
+                if mode == "apps_only" {
+                    "3/5 · Scanning raw sectors for lost application/package signatures"
+                } else {
+                    "3/5 · Deep raw-sector signature carving and media repair analysis (ELF / PE / Photo / Video / Document)"
+                },
+            );
+            if let Ok((carved, ghosts)) = linux_rec::scan_signature_carving(
+                core,
+                &request.letter,
+                budget_bytes,
+                mode == "apps_only",
+                is_ssd,
+                &dir_map,
+            ) {
+                indx_ghost_count = ghosts;
+                items.extend(carved);
+            }
+        }
+        lock(&core.job)["progress"] = json!(85);
+    }
+
     cancelled(core)?;
+    #[cfg(target_os = "linux")]
+    phase_bi(
+        core,
+        "4/5 · Linux adli uygulama korelasyonu (XBEL, .desktop, Steam/Lutris/Heroic, paket günlükleri, anlık görüntüler)",
+        "4/5 · Linux forensic app correlation (XBEL, .desktop, Steam/Lutris/Heroic, package logs, snapshots)",
+    );
+    #[cfg(not(target_os = "linux"))]
     phase_bi(core, "4/5 · 11 Kaynaklı Kayıp Uygulama Korelasyonu (Firewall, GameConfigStore, Prefetch, ShimCache, UserAssist, BAM, AppData, VSS)", "4/5 · 11-source lost-app correlation (Firewall, GameConfigStore, Prefetch, ShimCache, UserAssist, BAM, AppData, VSS)");
 
     // Append MuiCache / AppCompatFlags traces (across ALL local drive letters!)
@@ -3568,7 +3764,10 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         .collect();
     for item in &items {
         if matches!(item.category.as_str(), "exe_setup" | "game_portable")
-            || matches!(item.extension.as_str(), "exe" | "msi" | "msix")
+            || matches!(
+                item.extension.as_str(),
+                "exe" | "msi" | "msix" | "appimage" | "deb" | "rpm"
+            )
         {
             let k =
                 forensics::canonical_app_key(item.product_name.as_deref().unwrap_or(&item.name));
@@ -3688,9 +3887,84 @@ pub fn run(core: &Core, request: &JobRequest, disk: &Disk, root: &Path) -> Resul
         "media_unrecoverable": media_unrecoverable,
         "deleted_apps": apps.len(),
         "dev_files_found": dev_files_found,
-        "scope": if core.is_en() { "11-source forensic detection and media repair engine (VSS, Recycle Bin, $MFT, $UsnJrnl, $I30, PE/Media carving, Prefetch, GameConfigStore, Firewall, ShimCache, UserAssist, BAM, AppData, .lnk, orphan records)." } else { "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt)." }
+        "scope": if cfg!(target_os = "linux") {
+            if core.is_en() {
+                "Linux forensic detection and media repair engine (XDG Trash, Btrfs/ZFS/Timeshift snapshots, NTFS $MFT, raw sector carving, XBEL recently-used, .desktop, Steam/Lutris/Heroic, package logs, orphaned ~/.config)."
+            } else {
+                "Linux adli tespit ve medya onarım motoru (XDG Çöp Kutusu, Btrfs/ZFS/Timeshift anlık görüntüleri, NTFS $MFT, ham sektör kazıma, XBEL, .desktop, Steam/Lutris/Heroic, paket günlükleri, yetim ~/.config)."
+            }
+        } else if core.is_en() {
+            "11-source forensic detection and media repair engine (VSS, Recycle Bin, $MFT, $UsnJrnl, $I30, PE/Media carving, Prefetch, GameConfigStore, Firewall, ShimCache, UserAssist, BAM, AppData, .lnk, orphan records)."
+        } else {
+            "11 kaynaklı adli tespit ve medya onarım motoru (VSS, Geri Dönüşüm, $MFT, $UsnJrnl, $I30, PE/Medya Kazıma, Prefetch, GameConfigStore, Güvenlik Duvarı, ShimCache, UserAssist, BAM, AppData, .lnk, Yetim Kayıt)."
+        }
     });
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct MftCandidate {
+    parsed: ParsedMftDeleted,
+    full_path: String,
+    priority: (bool, priority::FileKind, u8),
+}
+
+fn candidate_priority(
+    name: &str,
+    full_path: &str,
+    ext: &str,
+    size: u64,
+    dev_only: bool,
+) -> (bool, priority::FileKind, u8) {
+    let category = category_for_file(ext, full_path, &[], None).0;
+    let kind = priority::file_kind(name, full_path, ext, category, true);
+    let lower_path = full_path.to_ascii_lowercase();
+    let mut score = if is_game_path(&lower_path) { 40 } else { 0 };
+    if lower_path.contains("\\users\\")
+        || lower_path.contains("/home/")
+        || lower_path.contains("\\downloads\\")
+        || lower_path.contains("/downloads/")
+        || lower_path.contains("\\desktop\\")
+        || lower_path.contains("/desktop/")
+        || lower_path.contains("\\documents\\")
+        || lower_path.contains("/documents/")
+    {
+        score += 35;
+    }
+    if size >= 128 * 1024 {
+        score += 20;
+    }
+    (dev_only && is_env_filename(name), kind, score)
+}
+
+fn limit_mft_candidates(candidates: &mut Vec<MftCandidate>, mixed_scan: bool) {
+    if !mixed_scan || candidates.len() <= MAX_MFT_PROBE {
+        candidates.truncate(MAX_MFT_PROBE);
+        return;
+    }
+
+    let count = |kind, limit| {
+        candidates
+            .iter()
+            .filter(|file| file.priority.1 == kind)
+            .take(limit)
+            .count()
+    };
+    let mut projects = count(priority::FileKind::Project, RESERVED_PROJECT_RESULTS);
+    let mut installers = count(priority::FileKind::Installer, 48);
+    let mut remaining = MAX_MFT_PROBE - projects - installers;
+    candidates.retain(|candidate| {
+        let slots = match candidate.priority.1 {
+            priority::FileKind::Project if projects > 0 => &mut projects,
+            priority::FileKind::Installer if installers > 0 => &mut installers,
+            _ => &mut remaining,
+        };
+        if *slots == 0 {
+            return false;
+        }
+        *slots -= 1;
+        true
+    });
 }
 
 #[cfg(windows)]
@@ -4011,66 +4285,6 @@ mod win {
         }
         let end = (skip + max_len).min(got);
         Some(pbuf.as_mut()[skip..end].to_vec())
-    }
-
-    fn candidate_priority(
-        name: &str,
-        full_path: &str,
-        ext: &str,
-        size: u64,
-        dev_only: bool,
-    ) -> (bool, priority::FileKind, u8) {
-        let category = category_for_file(ext, full_path, &[], None).0;
-        let kind = priority::file_kind(name, full_path, ext, category, true);
-        let lower_path = full_path.to_ascii_lowercase();
-        let mut score = if is_game_path(&lower_path) { 40 } else { 0 };
-        if lower_path.contains("\\users\\")
-            || lower_path.contains("\\downloads\\")
-            || lower_path.contains("\\desktop\\")
-            || lower_path.contains("\\documents\\")
-        {
-            score += 35;
-        }
-        if size >= 128 * 1024 {
-            score += 20;
-        }
-        (dev_only && is_env_filename(name), kind, score)
-    }
-
-    struct MftCandidate {
-        parsed: ParsedMftDeleted,
-        full_path: String,
-        priority: (bool, priority::FileKind, u8),
-    }
-
-    fn limit_mft_candidates(candidates: &mut Vec<MftCandidate>, mixed_scan: bool) {
-        if !mixed_scan || candidates.len() <= MAX_MFT_PROBE {
-            candidates.truncate(MAX_MFT_PROBE);
-            return;
-        }
-
-        let count = |kind, limit| {
-            candidates
-                .iter()
-                .filter(|file| file.priority.1 == kind)
-                .take(limit)
-                .count()
-        };
-        let mut projects = count(priority::FileKind::Project, RESERVED_PROJECT_RESULTS);
-        let mut installers = count(priority::FileKind::Installer, 48);
-        let mut remaining = MAX_MFT_PROBE - projects - installers;
-        candidates.retain(|candidate| {
-            let slots = match candidate.priority.1 {
-                priority::FileKind::Project if projects > 0 => &mut projects,
-                priority::FileKind::Installer if installers > 0 => &mut installers,
-                _ => &mut remaining,
-            };
-            if *slots == 0 {
-                return false;
-            }
-            *slots -= 1;
-            true
-        });
     }
 
     pub type MftScanResult = (Vec<RecoveredItem>, u64, HashMap<u64, (u64, String)>);
@@ -4903,9 +5117,1105 @@ mod win {
 }
 
 impl CarvedSignature {
-    #[cfg(windows)]
     fn original_filename_missing(&self) -> bool {
         self.suggested_name.is_none()
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub mod linux_rec {
+    use super::*;
+    use crate::linux_priv::{self, HelperOp};
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::io::AsRawFd;
+
+    const MAX_HELPER_READ_CHUNK: usize = 2 * 1024 * 1024;
+    const BLKGETSIZE64: libc::Ioctl = 0x8008_1272u32 as libc::Ioctl;
+
+    pub fn parse_trashinfo(text: &str) -> Option<(String, Option<String>)> {
+        let mut in_section = false;
+        let mut raw_path: Option<String> = None;
+        let mut deleted_at: Option<String> = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if line.starts_with('[') {
+                in_section = line == "[Trash Info]";
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            if let Some(val) = line.strip_prefix("Path=") {
+                raw_path = Some(percent_decode_utf8(val.trim()));
+            } else if let Some(val) = line.strip_prefix("DeletionDate=") {
+                let d = val.trim();
+                if !d.is_empty() {
+                    let norm = if d.ends_with('Z') || d.contains('+') {
+                        d.to_owned()
+                    } else if d.len() == 19 {
+                        format!("{d}Z")
+                    } else {
+                        d.to_owned()
+                    };
+                    deleted_at = Some(norm);
+                }
+            }
+        }
+        raw_path.filter(|p| !p.is_empty()).map(|p| (p, deleted_at))
+    }
+
+    fn percent_decode_utf8(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let h1 = (bytes[i + 1] as char).to_digit(16);
+                let h2 = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(a), Some(b)) = (h1, h2) {
+                    out.push(((a << 4) | b) as u8);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    pub fn resolve_block_device_for_source(source_id: &str) -> Option<String> {
+        let trimmed = source_id.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.starts_with("/dev/") {
+            let canon = std::fs::canonicalize(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed));
+            let s = canon.to_string_lossy().into_owned();
+            if s.starts_with("/dev/") && !s.contains("..") {
+                return Some(s);
+            }
+            return None;
+        }
+        let target_norm = platform::normalize_volume_id(trimmed);
+        let entries = crate::platform_linux::mounted_volumes();
+        let best = entries
+            .into_iter()
+            .filter(|m| m.source.starts_with("/dev/"))
+            .find(|m| platform::normalize_volume_id(&m.mount_point) == target_norm)?;
+        let canon =
+            std::fs::canonicalize(&best.source).unwrap_or_else(|_| PathBuf::from(&best.source));
+        let dev = canon.to_string_lossy().into_owned();
+        if dev.starts_with("/dev/") {
+            Some(dev)
+        } else {
+            Some(best.source)
+        }
+    }
+
+    pub fn can_read_volume_device(source_id: &str) -> bool {
+        let Some(dev) = resolve_block_device_for_source(source_id) else {
+            return false;
+        };
+        OpenOptions::new().read(true).open(dev).is_ok()
+    }
+
+    fn linux_mount_for_path(path: &str, fallback_letter: &str) -> String {
+        if let Some(win_l) = forensics::extract_drive_letter(path) {
+            return win_l;
+        }
+        if !path.starts_with('/') {
+            return platform::normalize_volume_id(fallback_letter);
+        }
+        crate::platform_linux::mounted_volumes()
+            .into_iter()
+            .filter(|v| {
+                let mp = v.mount_point.as_str();
+                mp == "/" || path == mp || path.starts_with(&format!("{mp}/"))
+            })
+            .max_by_key(|v| v.mount_point.len())
+            .map(|v| platform::normalize_volume_id(&v.mount_point))
+            .unwrap_or_else(|| platform::normalize_volume_id(fallback_letter))
+    }
+
+    pub fn scan_xdg_trash_dir(
+        trash_dir: &Path,
+        letter: &str,
+        is_ssd: bool,
+        cancel_fn: &dyn Fn() -> bool,
+    ) -> Vec<RecoveredItem> {
+        let mut items = Vec::new();
+        let info_dir = trash_dir.join("info");
+        let files_dir = trash_dir.join("files");
+        let Ok(entries) = std::fs::read_dir(&info_dir) else {
+            return items;
+        };
+        let max_total = 500usize;
+        let mut head_buf = vec![0u8; 64 * 1024];
+
+        for entry in entries.flatten() {
+            if cancel_fn() || items.len() >= max_total {
+                break;
+            }
+            let info_path = entry.path();
+            if platform::reparse(&info_path) {
+                continue;
+            }
+            let Some(fname) = info_path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(item_key) = fname.strip_suffix(".trashinfo") else {
+                continue;
+            };
+            let data_path = files_dir.join(item_key);
+            if !data_path.exists() || platform::reparse(&data_path) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&info_path) else {
+                continue;
+            };
+            let Some((raw_orig, deleted_at)) = parse_trashinfo(&text) else {
+                continue;
+            };
+            let original_path = if raw_orig.starts_with('/') {
+                raw_orig
+            } else {
+                let base = letter.trim_end_matches('/');
+                if base.is_empty() {
+                    format!("/{raw_orig}")
+                } else {
+                    format!("{base}/{raw_orig}")
+                }
+            };
+            let item_letter = linux_mount_for_path(&original_path, letter);
+            if data_path.is_file() {
+                let sz = std::fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
+                items.push(build_recycle_file_item(
+                    &data_path,
+                    original_path,
+                    item_key,
+                    sz,
+                    deleted_at,
+                    &item_letter,
+                    is_ssd,
+                    &mut head_buf,
+                ));
+            } else if data_path.is_dir() {
+                let mut per_dir = 0usize;
+                walk_recycled_dir(
+                    &data_path,
+                    &original_path,
+                    0,
+                    false,
+                    &deleted_at,
+                    &item_letter,
+                    is_ssd,
+                    &mut head_buf,
+                    &mut items,
+                    &mut per_dir,
+                    max_total,
+                );
+            }
+        }
+        items
+    }
+
+    pub fn scan_xdg_trash(
+        root: &Path,
+        letter: &str,
+        is_ssd: bool,
+        cancel_fn: &dyn Fn() -> bool,
+    ) -> Vec<RecoveredItem> {
+        let uid = unsafe { libc::geteuid() };
+        let root_dev = std::fs::metadata(root).ok().map(|m| m.dev());
+        let mut candidate_dirs = vec![
+            root.join(format!(".Trash-{uid}")),
+            root.join(".Trash").join(uid.to_string()),
+        ];
+
+        let mut home_trash_candidates = Vec::new();
+        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+            home_trash_candidates.push(PathBuf::from(xdg).join("Trash"));
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            home_trash_candidates.push(PathBuf::from(home).join(".local/share/Trash"));
+        }
+        home_trash_candidates.push(PathBuf::from("/root/.local/share/Trash"));
+        if let Ok(homes) = std::fs::read_dir("/home") {
+            for ent in homes.flatten() {
+                if !platform::reparse(&ent.path()) {
+                    home_trash_candidates.push(ent.path().join(".local/share/Trash"));
+                }
+            }
+        }
+
+        for td in home_trash_candidates {
+            if !td.is_dir() || platform::reparse(&td) {
+                continue;
+            }
+            let same_fs = root_dev
+                .is_none_or(|rd| std::fs::metadata(&td).ok().is_some_and(|m| m.dev() == rd));
+            if same_fs || letter.trim() == "/" && td.starts_with(root) {
+                candidate_dirs.push(td);
+            }
+        }
+
+        let mut seen = HashSet::new();
+        let mut all = Vec::new();
+        for dir in candidate_dirs {
+            if cancel_fn() || all.len() >= 500 {
+                break;
+            }
+            if !dir.is_dir() || platform::reparse(&dir) {
+                continue;
+            }
+            let Ok(canon) = dir.canonicalize() else {
+                continue;
+            };
+            if seen.insert(canon.clone()) {
+                all.extend(scan_xdg_trash_dir(&canon, letter, is_ssd, cancel_fn));
+            }
+        }
+        all.truncate(500);
+        all
+    }
+
+    struct LinuxRawReader {
+        device: String,
+        direct_file: Option<File>,
+    }
+
+    impl LinuxRawReader {
+        fn open(device: String) -> Result<Self, String> {
+            let direct_file = OpenOptions::new().read(true).open(&device).ok();
+            if direct_file.is_none() && !linux_priv::is_elevated() {
+                return Err(format!(
+                    "{device} ham okuması için Yönetici (Polkit) izni veya disk grubu erişimi gereklidir."
+                ));
+            }
+            Ok(Self {
+                device,
+                direct_file,
+            })
+        }
+
+        fn size_bytes(&self) -> Result<u64, String> {
+            if let Some(ref f) = self.direct_file {
+                let mut bytes: u64 = 0;
+                let rc = unsafe { libc::ioctl(f.as_raw_fd(), BLKGETSIZE64 as _, &mut bytes) };
+                if rc == 0 && bytes > 0 {
+                    return Ok(bytes);
+                }
+                if let Ok(m) = f.metadata() {
+                    if m.len() > 0 {
+                        return Ok(m.len());
+                    }
+                }
+            }
+            let res = linux_priv::call(HelperOp::RawDeviceSize {
+                device: self.device.clone(),
+            })?;
+            Ok(res["bytes"].as_u64().unwrap_or(0))
+        }
+
+        fn read_exact_at(&self, offset: u64, dst: &mut [u8]) -> Result<usize, String> {
+            if dst.is_empty() {
+                return Ok(0);
+            }
+            if let Some(ref f) = self.direct_file {
+                let fd = f.as_raw_fd();
+                let rc = unsafe {
+                    libc::pread(
+                        fd,
+                        dst.as_mut_ptr().cast::<libc::c_void>(),
+                        dst.len(),
+                        offset as libc::off_t,
+                    )
+                };
+                if rc < 0 {
+                    return Err(format!(
+                        "Ham okuma hatası ({} @ {offset}): {}",
+                        self.device,
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                return Ok(rc as usize);
+            }
+
+            let mut filled = 0usize;
+            while filled < dst.len() {
+                let chunk = (dst.len() - filled).min(MAX_HELPER_READ_CHUNK);
+                let aligned_chunk = chunk.div_ceil(512) * 512;
+                let res = linux_priv::call(HelperOp::RawDeviceRead {
+                    device: self.device.clone(),
+                    offset: offset.saturating_add(filled as u64),
+                    len: aligned_chunk,
+                    direct: false,
+                    include_data: true,
+                })?;
+                let hex = res["data_hex"]
+                    .as_str()
+                    .ok_or("Yardımcı süreç ham okuma verisi döndürmedi.")?;
+                let raw = decode_hex(hex)?;
+                let take = raw.len().min(chunk);
+                if take == 0 {
+                    break;
+                }
+                dst[filled..filled + take].copy_from_slice(&raw[..take]);
+                filled += take;
+                if take < chunk {
+                    break;
+                }
+            }
+            Ok(filled)
+        }
+
+        fn read_runs(&self, runs: &[(i64, u64)], cluster_bytes: u64, cap: usize) -> Vec<u8> {
+            let mut out = Vec::with_capacity(cap.min(2 * 1024 * 1024));
+            let mut rem = cap;
+            for &(lcn, cnt) in runs {
+                if lcn < 0 || cnt == 0 || rem == 0 {
+                    continue;
+                }
+                let mut run_off = (lcn as u64).saturating_mul(cluster_bytes);
+                let mut run_rem = cnt.saturating_mul(cluster_bytes).min(rem as u64) as usize;
+                let mut buf = vec![0u8; run_rem.min(512 * 1024)];
+                while run_rem > 0 {
+                    let want = run_rem.min(buf.len());
+                    let Ok(got) = self.read_exact_at(run_off, &mut buf[..want]) else {
+                        return out;
+                    };
+                    if got == 0 {
+                        return out;
+                    }
+                    out.extend_from_slice(&buf[..got]);
+                    run_off += got as u64;
+                    run_rem -= got;
+                    rem -= got;
+                }
+            }
+            out
+        }
+    }
+
+    fn device_for_item(source_id: &str, item: &Value) -> Result<String, String> {
+        if let Some(dev) = item["locator"]["dev_path"]
+            .as_str()
+            .filter(|s| s.starts_with("/dev/") && !s.contains(".."))
+        {
+            return Ok(dev.to_owned());
+        }
+        resolve_block_device_for_source(source_id)
+            .ok_or_else(|| format!("'{source_id}' bölümü için ham blok aygıtı eşleştirilemedi."))
+    }
+
+    fn stream_raw_item(
+        reader: &LinuxRawReader,
+        item: &Value,
+        max_bytes: u64,
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+    ) -> Result<u64, String> {
+        let mut remaining = item["size_bytes"]
+            .as_u64()
+            .unwrap_or(max_bytes)
+            .min(max_bytes);
+        let mut written = 0u64;
+        let mut buf = vec![0u8; 1024 * 1024];
+
+        if item["source"] == "carved" {
+            let mut cur_off = item["locator"]["offset_bytes"]
+                .as_u64()
+                .ok_or("Kazınmış veri ofseti eksik.")?;
+            while remaining > 0 {
+                let want = (remaining as usize).min(buf.len());
+                let got = reader.read_exact_at(cur_off, &mut buf[..want])?;
+                if got == 0 {
+                    break;
+                }
+                sink(&buf[..got])?;
+                written += got as u64;
+                cur_off += got as u64;
+                remaining = remaining.saturating_sub(got as u64);
+            }
+        } else {
+            let cluster_bytes = item["locator"]["cluster_bytes"]
+                .as_u64()
+                .unwrap_or(4096)
+                .max(512);
+            let runs = item["locator"]["runs"]
+                .as_array()
+                .ok_or("MFT küme haritası eksik.")?;
+            for run in runs {
+                if remaining == 0 {
+                    break;
+                }
+                let arr = run.as_array().ok_or("Geçersiz küme kaydı.")?;
+                let lcn = arr.first().and_then(Value::as_i64).unwrap_or(-1);
+                let cnt = arr.get(1).and_then(Value::as_u64).unwrap_or(0);
+                if lcn < 0 || cnt == 0 {
+                    continue;
+                }
+                let mut run_rem = cnt.saturating_mul(cluster_bytes).min(remaining);
+                let mut run_off = (lcn as u64).saturating_mul(cluster_bytes);
+                while run_rem > 0 {
+                    let want = (run_rem as usize).min(buf.len());
+                    let got = reader.read_exact_at(run_off, &mut buf[..want])?;
+                    if got == 0 {
+                        break;
+                    }
+                    sink(&buf[..got])?;
+                    written += got as u64;
+                    run_off += got as u64;
+                    run_rem = run_rem.saturating_sub(got as u64);
+                    remaining = remaining.saturating_sub(got as u64);
+                }
+            }
+        }
+        Ok(written)
+    }
+
+    pub fn read_raw_bytes_from_volume(
+        source_id: &str,
+        item: &Value,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        let dev = device_for_item(source_id, item)?;
+        let reader = LinuxRawReader::open(dev)?;
+        let mut out = Vec::with_capacity(max_bytes.min(1024 * 1024));
+        stream_raw_item(&reader, item, max_bytes as u64, &mut |chunk| {
+            out.extend_from_slice(chunk);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    pub fn restore_raw_from_volume(
+        source_id: &str,
+        item: &Value,
+        tmp_path: &Path,
+        hasher: &mut Sha256,
+    ) -> Result<u64, String> {
+        let dev = device_for_item(source_id, item)?;
+        let reader = LinuxRawReader::open(dev)?;
+        let mut wf = File::create(tmp_path).map_err(|e| e.to_string())?;
+        let written = stream_raw_item(&reader, item, MAX_RESTORE_BYTES, &mut |chunk| {
+            wf.write_all(chunk).map_err(|e| e.to_string())?;
+            hasher.update(chunk);
+            Ok(())
+        })?;
+        wf.sync_all().map_err(|e| e.to_string())?;
+        Ok(written)
+    }
+
+    fn probe_pe_rsrc_linux(
+        reader: &LinuxRawReader,
+        base_vol_off: u64,
+        rsrc_off: u64,
+        rsrc_sz: u64,
+        info: &mut PeIntelligence,
+    ) {
+        if rsrc_off >= MAX_RESTORE_BYTES {
+            return;
+        }
+        let target = base_vol_off.saturating_add(rsrc_off);
+        let read_len = (rsrc_sz as usize).clamp(4096, 128 * 1024);
+        let mut buf = vec![0u8; read_len];
+        if let Ok(got) = reader.read_exact_at(target, &mut buf) {
+            if got > 0 {
+                extract_pe_metadata(&buf[..got], info);
+            }
+        }
+    }
+
+    fn linux_mft_display_path(
+        mount_id: &str,
+        parent_ref: u64,
+        file_name: &str,
+        dirs: &HashMap<u64, (u64, String)>,
+    ) -> String {
+        let win_rel = reconstruct_mft_path("X", parent_ref, file_name, dirs);
+        let rel = win_rel
+            .strip_prefix("X:\\")
+            .unwrap_or(&win_rel)
+            .replace('\\', "/");
+        let base = mount_id.trim_end_matches('/');
+        if base.is_empty() {
+            format!("/{rel}")
+        } else {
+            format!("{base}/{rel}")
+        }
+    }
+
+    pub type MftScanResult = (Vec<RecoveredItem>, u64, HashMap<u64, (u64, String)>);
+
+    pub fn scan_ntfs_mft(
+        core: &Core,
+        letter: &str,
+        apps_only: bool,
+        dev_only: bool,
+        is_ssd: bool,
+        max_records: usize,
+    ) -> Result<MftScanResult, String> {
+        let dev_path = resolve_block_device_for_source(letter)
+            .ok_or_else(|| format!("'{letter}' bölümü için aygıt bulunamadı."))?;
+        let reader = LinuxRawReader::open(dev_path.clone())?;
+        let mut bpb = [0u8; 512];
+        reader.read_exact_at(0, &mut bpb)?;
+        if &bpb[3..11] != b"NTFS    " {
+            return Err("Bölüm geçerli bir NTFS başlığı taşımıyor.".into());
+        }
+        let bps = u64::from(u16::from_le_bytes([bpb[11], bpb[12]])).max(512);
+        let spc = u64::from(bpb[13]).max(1);
+        let cluster_bytes = bps * spc;
+        let mft_lcn = u64::from_le_bytes(bpb[48..56].try_into().map_err(|_| "BPB hatası")?);
+        let mft_start_byte = mft_lcn.saturating_mul(cluster_bytes);
+
+        let mut rec0 = [0u8; 1024];
+        let mft_runs = match reader.read_exact_at(mft_start_byte, &mut rec0) {
+            Ok(n) if n >= 1024 => extract_mft_runs(&rec0, cluster_bytes).unwrap_or_else(|| {
+                vec![(
+                    mft_lcn as i64,
+                    (max_records as u64 * 1024).div_ceil(cluster_bytes),
+                )]
+            }),
+            _ => vec![(
+                mft_lcn as i64,
+                (max_records as u64 * 1024).div_ceil(cluster_bytes),
+            )],
+        };
+
+        let chunk_bytes = 1024 * 1024usize;
+        let mut buf = vec![0u8; chunk_bytes];
+        let mut dirs: HashMap<u64, (u64, String)> = HashMap::new();
+        let mut raw_deleted: Vec<ParsedMftDeleted> = Vec::new();
+        let mut scanned = 0u64;
+        let mut total_read = 0u64;
+        let mut last_ui = Instant::now();
+
+        'extents: for (lcn, cluster_cnt) in mft_runs {
+            if lcn < 0 || cluster_cnt == 0 {
+                continue;
+            }
+            let run_bytes = cluster_cnt.saturating_mul(cluster_bytes);
+            let mut off_in_run = 0u64;
+            while off_in_run < run_bytes && (scanned as usize) < max_records {
+                if cancelled(core).is_err() {
+                    break 'extents;
+                }
+                let wanted = ((run_bytes - off_in_run) as usize).min(chunk_bytes);
+                let Ok(valid) = reader.read_exact_at(
+                    (lcn as u64) * cluster_bytes + off_in_run,
+                    &mut buf[..wanted],
+                ) else {
+                    break;
+                };
+                if valid < 1024 {
+                    break;
+                }
+                total_read = total_read.saturating_add(valid as u64);
+                let recs = valid / 1024;
+                for r in 0..recs {
+                    let rec_idx = scanned + r as u64;
+                    let rec = &buf[r * 1024..(r + 1) * 1024];
+                    if let Some(entry) = parse_mft_entry(rec, rec_idx, cluster_bytes) {
+                        match entry {
+                            MftEntry::Directory {
+                                record_index,
+                                parent_record,
+                                name,
+                            } => {
+                                if dirs.len() < MAX_MFT_DIRS {
+                                    dirs.insert(record_index, (parent_record, name));
+                                }
+                            }
+                            MftEntry::DeletedFile(f) => {
+                                if raw_deleted.len() < MAX_MFT_COLLECT * 3 {
+                                    raw_deleted.push(f);
+                                }
+                            }
+                        }
+                    }
+                }
+                scanned += recs as u64;
+                off_in_run += valid as u64;
+                if last_ui.elapsed().as_millis() >= 200 {
+                    last_ui = Instant::now();
+                    let mut job = lock(&core.job);
+                    job["read_bytes"] = json!(total_read);
+                    job["progress"] =
+                        json!(15 + ((scanned * 25) / max_records.max(1) as u64).min(25));
+                }
+            }
+        }
+
+        let mut candidates: Vec<MftCandidate> = raw_deleted
+            .into_iter()
+            .filter_map(|parsed| {
+                let full_path =
+                    linux_mft_display_path(letter, parsed.parent_record, &parsed.name, &dirs);
+                let ext = extension_of(&parsed.name);
+                if is_junk_noise_path(&full_path, &ext) {
+                    return None;
+                }
+                if apps_only && !matches!(ext.as_str(), "exe" | "msi" | "msix") {
+                    return None;
+                }
+                if dev_only && !is_dev_project_file(&full_path, &ext) {
+                    return None;
+                }
+                let priority =
+                    candidate_priority(&parsed.name, &full_path, &ext, parsed.real_size, dev_only);
+                Some(MftCandidate {
+                    parsed,
+                    full_path,
+                    priority,
+                })
+            })
+            .collect();
+
+        candidates.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| b.parsed.deleted_at.cmp(&a.parsed.deleted_at))
+        });
+        limit_mft_candidates(&mut candidates, !apps_only && !dev_only);
+
+        let mut probe = vec![0u8; 64 * 1024];
+        let mut out = Vec::with_capacity(candidates.len());
+        let mut media_probes = 0usize;
+        for cand in candidates {
+            if cancelled(core).is_err() {
+                break;
+            }
+            let parsed = cand.parsed;
+            let ext = extension_of(&parsed.name);
+            let (src_kind, sample_slice, locator, mut pe) = if let Some(res_bytes) =
+                &parsed.resident_bytes
+            {
+                (
+                    "mft_resident",
+                    res_bytes.clone(),
+                    json!({"resident_hex": encode_hex(res_bytes)}),
+                    analyze_pe_binary(res_bytes),
+                )
+            } else if let Some((lcn0, _)) = parsed.runs.first().copied() {
+                let first_vol_off = (lcn0 as u64).saturating_mul(cluster_bytes);
+                let got_probe = reader.read_exact_at(first_vol_off, &mut probe).unwrap_or(0);
+                total_read = total_read.saturating_add(got_probe as u64);
+                let mut pe_info = analyze_pe_binary(&probe[..got_probe]);
+                if let Some(ref mut p_info) = pe_info {
+                    if let Some((rsrc_off, rsrc_sz)) = p_info.rsrc_offset {
+                        if rsrc_off >= got_probe as u64 {
+                            probe_pe_rsrc_linux(&reader, first_vol_off, rsrc_off, rsrc_sz, p_info);
+                        }
+                    }
+                }
+                (
+                    "mft_nonresident",
+                    probe[..got_probe.min(8192)].to_vec(),
+                    json!({"cluster_bytes": cluster_bytes, "runs": parsed.runs, "dev_path": dev_path}),
+                    pe_info,
+                )
+            } else {
+                continue;
+            };
+
+            let (_, mut conf, trim_zeroed, mut ai_summary) =
+                classify_buffer_ai(&sample_slice, &ext, src_kind, true, is_ssd);
+            let (refined_cat, mut sub_type) =
+                category_for_file(&ext, &cand.full_path, &sample_slice, pe.as_ref());
+            if let Some(ref prod) = pe.as_ref().and_then(|p| p.product_name.clone()) {
+                ai_summary = format!("{sub_type} · Ürün: {prod}. {ai_summary}");
+            }
+
+            let (media_status, openable, repair_note) = if trim_zeroed {
+                if media_repair::is_supported_media_ext(&ext) {
+                    (
+                        Some("unrecoverable".into()),
+                        false,
+                        Some("Sektörler SSD TRIM tarafından sıfırlandı; açılamaz.".into()),
+                    )
+                } else {
+                    (None, false, None)
+                }
+            } else if media_repair::is_supported_media_ext(&ext) {
+                let media_buf = if src_kind == "mft_nonresident"
+                    && parsed.real_size > sample_slice.len() as u64
+                    && media_probes < 120
+                {
+                    media_probes += 1;
+                    let cap = (parsed.real_size as usize).min(2 * 1024 * 1024);
+                    reader.read_runs(&parsed.runs, cluster_bytes, cap)
+                } else {
+                    sample_slice.clone()
+                };
+                let (st, op, note, dims) =
+                    inspect_media_bytes(&ext, &media_buf, parsed.real_size, false);
+                if let Some((w, h)) = dims {
+                    if !sub_type.contains('×') {
+                        sub_type = format!("{sub_type} ({w}×{h})");
+                    }
+                }
+                if !op {
+                    conf = conf.min(10);
+                }
+                if let Some(ref n) = note {
+                    ai_summary = format!("{n} {ai_summary}");
+                }
+                (st, op, note)
+            } else {
+                (None, true, None)
+            };
+
+            let status_label = if trim_zeroed {
+                "TRIM Sıfırlanmış".into()
+            } else {
+                match media_status.as_deref() {
+                    Some("repaired") => "Otomatik Onarılacak ($MFT)".into(),
+                    Some("thumbnail_rescued") => "Önizleme Kurtarılabilir ($MFT)".into(),
+                    Some("unrecoverable") => "Bozuk Medya (Açılamaz)".into(),
+                    _ if conf >= 80 => "Yüksek Bütünlük ($MFT)".into(),
+                    _ => "Kısmi Riskli ($MFT)".into(),
+                }
+            };
+
+            out.push(RecoveredItem {
+                id: format!("mft-{}", parsed.record_index),
+                name: parsed.name,
+                original_path: cand.full_path,
+                extension: ext,
+                category: refined_cat.to_owned(),
+                sub_type,
+                product_name: pe.as_mut().and_then(|p| p.product_name.take()),
+                publisher: pe.as_mut().and_then(|p| p.company_name.take()),
+                size_bytes: parsed.real_size,
+                deleted_at: parsed.deleted_at,
+                source: src_kind.into(),
+                confidence: conf,
+                status_label,
+                entropy: shannon_entropy(&sample_slice),
+                trim_zeroed,
+                ai_summary,
+                source_letter: letter.to_owned(),
+                locator,
+                media_status,
+                openable,
+                repair_note,
+            });
+        }
+        lock(&core.job)["read_bytes"] = json!(total_read);
+        Ok((out, scanned, dirs))
+    }
+
+    fn detect_elf_signature(slice: &[u8]) -> Option<CarvedSignature> {
+        if slice.len() < 64 || !slice.starts_with(b"\x7FELF") {
+            return None;
+        }
+        let class = slice[4];
+        let endian = slice[5];
+        if !matches!(class, 1 | 2) || endian != 1 {
+            return None;
+        }
+        let e_type = u16::from_le_bytes([slice[16], slice[17]]);
+        if e_type != 2 {
+            return None;
+        }
+        let est = if class == 2 && slice.len() >= 64 {
+            let e_shoff = u64::from_le_bytes(slice[40..48].try_into().ok()?);
+            let e_shentsize = u16::from_le_bytes([slice[58], slice[59]]) as u64;
+            let e_shnum = u16::from_le_bytes([slice[60], slice[61]]) as u64;
+            let end = e_shoff.saturating_add(e_shentsize.saturating_mul(e_shnum));
+            if (4096..=64 * 1024 * 1024).contains(&end) {
+                end
+            } else {
+                256 * 1024
+            }
+        } else {
+            128 * 1024
+        };
+        Some(CarvedSignature {
+            ext: "elf",
+            category: "exe_setup",
+            sub_type: if class == 2 {
+                "Linux 64-bit ELF Çalıştırıcı".into()
+            } else {
+                "Linux 32-bit ELF Çalıştırıcı".into()
+            },
+            estimated_size: est,
+            product_name: None,
+            publisher: None,
+            suggested_name: None,
+            rsrc_offset: None,
+        })
+    }
+
+    pub fn scan_signature_carving(
+        core: &Core,
+        letter: &str,
+        budget_bytes: u64,
+        apps_only: bool,
+        is_ssd: bool,
+        _dirs: &HashMap<u64, (u64, String)>,
+    ) -> Result<(Vec<RecoveredItem>, usize), String> {
+        let dev_path = resolve_block_device_for_source(letter)
+            .ok_or_else(|| format!("'{letter}' bölümü için aygıt bulunamadı."))?;
+        let reader = LinuxRawReader::open(dev_path.clone())?;
+        let dev_bytes = reader.size_bytes().unwrap_or(budget_bytes).max(4096);
+        let target_scan_bytes = budget_bytes.min(dev_bytes).max(4096);
+
+        let chunk_size = 2 * 1024 * 1024usize;
+        let mut buf = vec![0u8; chunk_size];
+        let mut out = Vec::new();
+        let mut sys_count = 0usize;
+        let mut exe_count = 0usize;
+        let mut media_extra_probes = 0usize;
+        let mut vol_off = 0u64;
+        let mut total_read = lock(&core.job)["read_bytes"].as_u64().unwrap_or(0);
+        let mut skip_until_vol_off = 0u64;
+        let started_at = Instant::now();
+        let mut last_ui = Instant::now();
+
+        while vol_off < target_scan_bytes && out.len() < MAX_CARVED_ITEMS {
+            if cancelled(core).is_err() {
+                break;
+            }
+            if vol_off + (chunk_size as u64) <= skip_until_vol_off {
+                vol_off += chunk_size as u64;
+                continue;
+            }
+            let want = ((target_scan_bytes - vol_off) as usize).min(chunk_size);
+            let Ok(got) = reader.read_exact_at(vol_off, &mut buf[..want]) else {
+                vol_off += chunk_size as u64;
+                continue;
+            };
+            if got < 4096 {
+                break;
+            }
+            total_read = total_read.saturating_add(got as u64);
+            let slice = &buf[..got];
+            let step = 4096usize;
+            let mut offset = 0usize;
+
+            while offset + 4096 <= slice.len() && out.len() < MAX_CARVED_ITEMS {
+                let abs_off = vol_off + offset as u64;
+                if abs_off < skip_until_vol_off {
+                    offset += step;
+                    continue;
+                }
+                let sector = &slice[offset..offset + 64];
+                if sector.iter().all(|&b| b == 0) {
+                    offset += step;
+                    continue;
+                }
+                let b0 = sector[0];
+                let b1 = sector[1];
+                let is_elf = b0 == 0x7F && b1 == b'E' && sector.starts_with(b"\x7FELF");
+                let maybe_sig = is_elf
+                    || matches!(
+                        (b0, b1),
+                        (b'M', b'Z')
+                            | (0xD0, 0xCF)
+                            | (b'P', b'K')
+                            | (b'7', b'z')
+                            | (b'R', b'a')
+                            | (b'%', b'P')
+                            | (0x89, b'P')
+                            | (0xFF, 0xD8)
+                            | (b'G', b'I')
+                            | (b'B', b'M')
+                            | (b'R', b'I')
+                            | (b'S', b'Q')
+                    )
+                    || &sector[4..8] == b"ftyp";
+
+                if maybe_sig {
+                    let sig_opt = detect_carved_signature(&slice[offset..])
+                        .or_else(|| detect_elf_signature(&slice[offset..]));
+                    if let Some(mut sig) = sig_opt {
+                        if let Some((rsrc_off, rsrc_sz)) = sig.rsrc_offset {
+                            if sig.product_name.is_none() || sig.original_filename_missing() {
+                                if let Some(mut pe) = analyze_pe_binary(
+                                    &slice[offset..slice.len().min(offset + 65536)],
+                                ) {
+                                    if rsrc_off >= (slice.len() - offset) as u64 {
+                                        probe_pe_rsrc_linux(
+                                            &reader, abs_off, rsrc_off, rsrc_sz, &mut pe,
+                                        );
+                                        if let Some(orig) = pe.original_filename.clone() {
+                                            let clean = sanitize_filename(&orig);
+                                            if clean.len() >= 4 {
+                                                sig.suggested_name = Some(clean);
+                                            }
+                                        }
+                                        sig.product_name = pe.product_name;
+                                        sig.publisher = pe.company_name;
+                                    }
+                                }
+                            }
+                        }
+
+                        if apps_only && !matches!(sig.category, "exe_setup" | "game_portable") {
+                            offset += step;
+                            continue;
+                        }
+                        if sig.category == "system_lib" {
+                            if sys_count >= MAX_SYSTEM_CARVED {
+                                offset += step;
+                                continue;
+                            }
+                            sys_count += 1;
+                        }
+                        if matches!(sig.category, "exe_setup" | "game_portable") {
+                            exe_count += 1;
+                        }
+
+                        let avail_in_chunk = slice.len() - offset;
+                        let mut media_owned: Option<Vec<u8>> = None;
+                        if media_repair::is_supported_media_ext(sig.ext)
+                            && (sig.estimated_size as usize >= avail_in_chunk
+                                || matches!(sig.ext, "mp4" | "mov" | "jpg"))
+                            && media_extra_probes < 100
+                        {
+                            let want_probe = (sig.estimated_size as usize)
+                                .clamp(avail_in_chunk, 4 * 1024 * 1024);
+                            if want_probe > avail_in_chunk {
+                                media_extra_probes += 1;
+                                let mut extra = vec![0u8; want_probe];
+                                if let Ok(n) = reader.read_exact_at(abs_off, &mut extra) {
+                                    extra.truncate(n);
+                                    let refined = match sig.ext {
+                                        "jpg" => media_repair::find_jpeg_end(&extra),
+                                        "png" => media_repair::find_png_end(&extra),
+                                        "mp4" | "mov" => media_repair::find_mp4_size(&extra),
+                                        "webp" | "avi" | "wav" => {
+                                            media_repair::find_riff_size(&extra)
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(exact_sz) = refined {
+                                        sig.estimated_size =
+                                            (exact_sz as u64).clamp(4096, MAX_RESTORE_BYTES);
+                                    }
+                                    media_owned = Some(extra);
+                                }
+                            }
+                        }
+
+                        let idx = out.len() + 1;
+                        let sample_bytes = &slice[offset..(offset + 8192).min(slice.len())];
+                        let name = sig.suggested_name.clone().unwrap_or_else(|| {
+                            semantic_name_from_bytes(sample_bytes, sig.ext, idx)
+                        });
+                        let (_, mut conf, trim_zeroed, mut ai_summary) =
+                            classify_buffer_ai(sample_bytes, sig.ext, "carved", true, is_ssd);
+                        ai_summary = format!("{}. {ai_summary}", sig.sub_type);
+
+                        let (media_status, openable, repair_note) =
+                            if media_repair::is_supported_media_ext(sig.ext) {
+                                let inspect_slice = if let Some(ref full_buf) = media_owned {
+                                    &full_buf[..(sig.estimated_size as usize).min(full_buf.len())]
+                                } else {
+                                    &slice[offset
+                                        ..(offset + sig.estimated_size as usize).min(slice.len())]
+                                };
+                                let (st, op, note, dims) = inspect_media_bytes(
+                                    sig.ext,
+                                    inspect_slice,
+                                    sig.estimated_size,
+                                    false,
+                                );
+                                if let Some((w, h)) = dims {
+                                    if !sig.sub_type.contains('×') {
+                                        sig.sub_type = format!("{} ({w}×{h})", sig.sub_type);
+                                    }
+                                }
+                                if !op {
+                                    conf = conf.min(10);
+                                }
+                                (st, op, note)
+                            } else {
+                                (None, true, None)
+                            };
+
+                        let status_label = match media_status.as_deref() {
+                            Some("intact") => "Derin Kazıma · Sağlam Medya".into(),
+                            Some("repaired") => "Otomatik Onarılacak (Derin Kazıma)".into(),
+                            Some("thumbnail_rescued") => "Önizleme Kurtarılabilir (EXIF)".into(),
+                            Some("unrecoverable") => "Bozuk Medya (Açılamaz)".into(),
+                            _ => "Derin İmza Kazıma (Yapı Doğrulandı)".into(),
+                        };
+
+                        let aligned_sz = sig.estimated_size.div_ceil(4096) * 4096;
+                        skip_until_vol_off = abs_off.saturating_add(aligned_sz);
+                        let orig_path = if letter.ends_with('/') {
+                            format!("{letter}{name}")
+                        } else {
+                            format!("{letter}/{name}")
+                        };
+
+                        out.push(RecoveredItem {
+                            id: format!("carv-{abs_off}"),
+                            name,
+                            original_path: orig_path,
+                            extension: sig.ext.into(),
+                            category: sig.category.into(),
+                            sub_type: sig.sub_type,
+                            product_name: sig.product_name,
+                            publisher: sig.publisher,
+                            size_bytes: sig.estimated_size,
+                            deleted_at: None,
+                            source: "carved".into(),
+                            confidence: conf,
+                            status_label,
+                            entropy: shannon_entropy(sample_bytes),
+                            trim_zeroed,
+                            ai_summary,
+                            source_letter: letter.to_owned(),
+                            locator: json!({
+                                "offset_bytes": abs_off,
+                                "size_bytes": sig.estimated_size,
+                                "dev_path": dev_path
+                            }),
+                            media_status,
+                            openable,
+                            repair_note,
+                        });
+                        offset += aligned_sz.min(slice.len() as u64) as usize;
+                        continue;
+                    }
+                }
+                offset += step;
+            }
+
+            if last_ui.elapsed().as_millis() >= 200 {
+                last_ui = Instant::now();
+                let secs = started_at.elapsed().as_secs_f64().max(0.1);
+                let mb_s = (total_read as f64 / 1_000_000.0) / secs;
+                let scanned_gib = vol_off as f64 / (1024.0 * 1024.0 * 1024.0);
+                let target_gib = target_scan_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                let mut job = lock(&core.job);
+                job["read_bytes"] = json!(total_read);
+                job["progress"] = json!(45 + ((vol_off * 38) / target_scan_bytes).min(38));
+                job["phase"] = json!(if core.is_en() {
+                    format!(
+                        "3/5 · Deep carving: {scanned_gib:.2} / {target_gib:.2} GiB · {mb_s:.0} MB/s · {exe_count} apps · {} files",
+                        out.len()
+                    )
+                } else {
+                    format!(
+                        "3/5 · Derin kazıma: {scanned_gib:.2} / {target_gib:.2} GiB · {mb_s:.0} MB/sn · {exe_count} uygulama · {} dosya",
+                        out.len()
+                    )
+                });
+            }
+            vol_off += got as u64;
+        }
+        lock(&core.job)["read_bytes"] = json!(total_read);
+        Ok((out, 0))
     }
 }
 

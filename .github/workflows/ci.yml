@@ -128,3 +128,69 @@ jobs:
 
       - name: Run RustSec vulnerability audit
         run: cargo audit -f src-tauri/Cargo.lock
+
+  linux-native-ci:
+    name: Linux Native Rust GUI + CLI + i18n + Packaging CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Guard TR/EN localization and run TS checks
+        run: |
+          npm run check:i18n
+          npm test
+          npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Run Clippy lints (Linux native-gui + core + tests)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features --features native-gui --all-targets -- -D warnings
+
+      - name: Run Rust unit & integration tests (core, no-default-features)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --no-fail-fast
+
+      - name: Run Rust unit & integration tests (native-gui)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features native-gui --no-fail-fast
+
+      - name: Build Linux release binary (native-gui)
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --locked --no-default-features --features native-gui
+
+      - name: Verify zero forbidden C UI/SSL/D-Bus shared-library links
+        run: |
+          ldd src-tauri/target/release/ssd-sentinel
+          if ldd src-tauri/target/release/ssd-sentinel | grep -Eiq "webkit|gtk|adwaita|qt|ssl|dbus|ayatana"; then
+            echo "Forbidden runtime library link detected"
+            exit 1
+          fi
+
+      - name: Run CLI fixture smoke test
+        run: |
+          ./src-tauri/target/release/ssd-sentinel --version
+          ./src-tauri/target/release/ssd-sentinel --cli status --snapshot-dir src-tauri/tests/fixtures --json >/dev/null
+
+      - name: Verify Linux packaging scripts and build .deb package
+        run: |
+          bash -n packaging/linux/*.sh
+          ./packaging/linux/build-deb.sh
+          dpkg-deb --info dist/ssd-sentinel_*.deb

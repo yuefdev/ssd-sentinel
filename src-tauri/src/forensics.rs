@@ -1,8 +1,9 @@
 use chrono::{DateTime, TimeZone, Utc};
+#[cfg(windows)]
+use std::io::Read;
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::Read,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -648,11 +649,12 @@ pub fn parse_game_config_entry(
                 && !t.eq_ignore_ascii_case("window")
         })
         .map(str::to_owned);
-    let stem = Path::new(&normalized)
-        .file_stem()
-        .and_then(|s| s.to_str())
+    let fname_lower = normalized
+        .rsplit(['\\', '/'])
+        .next()
         .unwrap_or("")
         .to_ascii_lowercase();
+    let stem = fname_lower.trim_end_matches(".exe");
     const NON_GAME_FULLSCREEN: &[&str] = &[
         "chrome",
         "msedge",
@@ -684,7 +686,7 @@ pub fn parse_game_config_entry(
         "powerpnt",
         "acrobat",
     ];
-    let is_game = !NON_GAME_FULLSCREEN.iter().any(|&ng| stem == ng);
+    let is_game = !NON_GAME_FULLSCREEN.contains(&stem);
     Some(ParsedGameConfig {
         exe_path: normalized,
         title,
@@ -912,6 +914,10 @@ pub fn is_noise_app_exe(exe_path: &str, friendly_name: Option<&str>) -> bool {
         .strip_suffix(".exe")
         .or_else(|| file_name.strip_suffix(".msi"))
         .or_else(|| file_name.strip_suffix(".msix"))
+        .or_else(|| file_name.strip_suffix(".appimage"))
+        .or_else(|| file_name.strip_suffix(".deb"))
+        .or_else(|| file_name.strip_suffix(".rpm"))
+        .or_else(|| file_name.strip_suffix(".flatpakref"))
         .unwrap_or(file_name)
         .trim();
 
@@ -1964,6 +1970,51 @@ fn extract_app_folder_from_path(path: &str) -> Option<String> {
 
 /// Derives the app's install directory from an executable path, excluding `Downloads`/`Desktop`.
 pub fn extract_install_dir(exe_path: &str) -> Option<String> {
+    if exe_path.starts_with('/') {
+        let parent = Path::new(exe_path).parent()?;
+        let parent_str = parent.to_string_lossy().into_owned();
+        let pl = parent_str.to_ascii_lowercase();
+        if parent_str.len() <= 1
+            || matches!(
+                pl.as_str(),
+                "/" | "/bin"
+                    | "/sbin"
+                    | "/usr"
+                    | "/usr/bin"
+                    | "/usr/sbin"
+                    | "/usr/local/bin"
+                    | "/opt"
+            )
+            || pl.ends_with("/downloads")
+            || pl.ends_with("/desktop")
+            || pl.ends_with("/documents")
+            || pl.contains("/.local/share/trash")
+        {
+            return None;
+        }
+        let mut cur = parent;
+        for _ in 0..3 {
+            let Some(name) = cur.file_name().and_then(|s| s.to_str()) else {
+                break;
+            };
+            let nl = name.to_ascii_lowercase();
+            if matches!(
+                nl.as_str(),
+                "bin" | "bin64" | "bin32" | "lib" | "lib64" | "x64" | "x86"
+            ) {
+                if let Some(up) = cur.parent() {
+                    let up_s = up.to_string_lossy();
+                    if up_s.len() > 1 && up_s != "/usr" && up_s != "/usr/local" {
+                        cur = up;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+        let out = cur.to_string_lossy().into_owned();
+        return (out.len() > 1).then_some(out);
+    }
     let norm = exe_path.replace('/', "\\");
     extract_drive_letter(&norm)?;
     let parent = Path::new(&norm).parent()?;
@@ -2099,6 +2150,42 @@ pub fn winget_command_for_app(canonical_key: &str, display_name: &str) -> String
     format!("winget search \"{clean}\"")
 }
 
+/// Returns a native reinstall/search command for Linux package managers when the target
+/// lives on a POSIX mount/path, otherwise preserves `winget_command_for_app`.
+pub fn reinstall_command_for_app(
+    canonical_key: &str,
+    display_name: &str,
+    exe_path: &str,
+    selected_letter: &str,
+) -> String {
+    if !selected_letter.starts_with('/') && !exe_path.starts_with('/') {
+        return winget_command_for_app(canonical_key, display_name);
+    }
+    let clean_name = display_name.replace(['"', '\''], "").trim().to_owned();
+    let pkg_slug: String = canonical_key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let pkg = if pkg_slug.len() >= 2 {
+        pkg_slug.as_str()
+    } else {
+        clean_name.as_str()
+    };
+    if Path::new("/usr/bin/pacman").is_file() || Path::new("/bin/pacman").is_file() {
+        return format!("sudo pacman -S {pkg}  # or: pacman -Ss \"{clean_name}\"");
+    }
+    if Path::new("/usr/bin/apt-get").is_file() || Path::new("/usr/bin/apt").is_file() {
+        return format!("sudo apt install {pkg}  # or: apt search \"{clean_name}\"");
+    }
+    if Path::new("/usr/bin/dnf").is_file() {
+        return format!("sudo dnf install {pkg}  # or: dnf search \"{clean_name}\"");
+    }
+    if Path::new("/usr/bin/zypper").is_file() {
+        return format!("sudo zypper install {pkg}  # or: zypper search \"{clean_name}\"");
+    }
+    format!("flatpak search \"{clean_name}\"")
+}
+
 /// Returns a clean user-facing display name for an app, preferring known catalog names or
 /// stripping ugly installer/arch suffixes.
 pub fn clean_app_display_name(raw_name: &str, exe_path: &str) -> String {
@@ -2153,6 +2240,7 @@ pub fn clean_app_display_name(raw_name: &str, exe_path: &str) -> String {
     joined
 }
 
+#[cfg(windows)]
 fn clean_exe_from_command(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -2182,7 +2270,11 @@ pub fn collect_forensic_sweep(letter: &str) -> ForensicSweep {
     {
         win::collect_windows_forensics(letter)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_forensics::collect_linux_forensics(letter)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = letter;
         ForensicSweep::default()
@@ -3960,6 +4052,698 @@ mod win {
         results.reverse(); // Newest deletions first.
         results.truncate(max_records);
         results
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_forensics {
+    use super::*;
+    use crate::platform;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::MetadataExt;
+
+    fn linux_homes() -> Vec<PathBuf> {
+        let mut homes = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(h) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            let p = PathBuf::from(h);
+            if p.is_dir() && seen.insert(p.clone()) {
+                homes.push(p);
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir("/home") {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_dir() && !platform::reparse(&p) && seen.insert(p.clone()) {
+                    homes.push(p);
+                }
+            }
+        }
+        homes
+    }
+
+    fn linux_mount_for_path(path: &str, fallback_letter: &str) -> String {
+        if !path.starts_with('/') {
+            return platform::normalize_volume_id(fallback_letter);
+        }
+        crate::platform_linux::mounted_volumes()
+            .into_iter()
+            .filter(|v| {
+                let mp = v.mount_point.as_str();
+                mp == "/" || path == mp || path.starts_with(&format!("{mp}/"))
+            })
+            .max_by_key(|v| v.mount_point.len())
+            .map(|v| platform::normalize_volume_id(&v.mount_point))
+            .unwrap_or_else(|| platform::normalize_volume_id(fallback_letter))
+    }
+
+    fn bump_source(sweep: &mut ForensicSweep, name: &str) {
+        *sweep.source_counts.entry(name.to_owned()).or_insert(0) += 1;
+    }
+
+    fn read_tail(path: &Path, max_bytes: usize) -> Option<String> {
+        let mut f = File::open(path).ok()?;
+        let len = f.metadata().ok()?.len();
+        if len > max_bytes as u64 {
+            let _ = f.seek(SeekFrom::Start(len - max_bytes as u64));
+        }
+        let mut buf = String::new();
+        f.take(max_bytes as u64).read_to_string(&mut buf).ok()?;
+        Some(buf)
+    }
+
+    fn percent_decode_file_uri(href: &str) -> Option<String> {
+        let rest = href.strip_prefix("file://")?;
+        let bytes = rest.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let (Some(a), Some(b)) = (
+                    (bytes[i + 1] as char).to_digit(16),
+                    (bytes[i + 2] as char).to_digit(16),
+                ) {
+                    out.push(((a << 4) | b) as u8);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        let s = String::from_utf8_lossy(&out).into_owned();
+        s.starts_with('/').then_some(s)
+    }
+
+    fn command_binary_exists(cmd: &str) -> bool {
+        let tok = cmd
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        if tok.is_empty() {
+            return true;
+        }
+        if tok.starts_with('/') {
+            return Path::new(tok).exists();
+        }
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                if dir.join(tok).is_file() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn scan_snapshot_subtree(
+        snap_root: &Path,
+        sub_base: &Path,
+        live_prefix: &Path,
+        drive_letter: &str,
+        expected_dev: u64,
+        depth: usize,
+        sweep: &mut ForensicSweep,
+    ) {
+        if depth > 3 || sweep.vss_files.len() >= 150 || platform::reparse(snap_root) {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(snap_root) else {
+            return;
+        };
+        for ent in entries.flatten() {
+            if sweep.vss_files.len() >= 150 {
+                break;
+            }
+            let p = ent.path();
+            if platform::reparse(&p) {
+                continue;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(&p) else {
+                continue;
+            };
+            if meta.dev() != expected_dev {
+                continue;
+            }
+            let Ok(rel) = p.strip_prefix(sub_base) else {
+                continue;
+            };
+            let rel_s = rel.to_string_lossy();
+            if rel_s.starts_with("proc/")
+                || rel_s.starts_with("sys/")
+                || rel_s.starts_with("dev/")
+                || rel_s.starts_with("run/")
+                || rel_s.starts_with("usr/")
+                || rel_s.starts_with("var/cache/")
+            {
+                continue;
+            }
+            if meta.is_dir() {
+                scan_snapshot_subtree(
+                    &p,
+                    sub_base,
+                    live_prefix,
+                    drive_letter,
+                    expected_dev,
+                    depth + 1,
+                    sweep,
+                );
+            } else if meta.is_file() && meta.len() >= 512 {
+                let live_path = live_prefix.join(rel);
+                if !live_path.exists() {
+                    let modified_at = meta.modified().ok().and_then(system_time_to_rfc3339);
+                    bump_source(sweep, "Linux Snapshot");
+                    sweep.vss_files.push(VssSnapshotFile {
+                        original_path: live_path.to_string_lossy().into_owned(),
+                        vss_path: p.to_string_lossy().into_owned(),
+                        size_bytes: meta.len(),
+                        modified_at,
+                        drive_letter: drive_letter.to_owned(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn collect_linux_snapshots(letter: &str, sweep: &mut ForensicSweep) {
+        let mount = PathBuf::from(if letter.starts_with('/') { letter } else { "/" });
+        let candidates = [
+            mount.join(".snapshots"),
+            PathBuf::from("/.snapshots"),
+            mount.join(".zfs/snapshot"),
+            PathBuf::from("/run/timeshift/backup"),
+        ];
+        let mut seen = HashSet::new();
+        for base in candidates {
+            if !base.is_dir() || platform::reparse(&base) {
+                continue;
+            }
+            let Ok(canon) = base.canonicalize() else {
+                continue;
+            };
+            if !seen.insert(canon.clone()) {
+                continue;
+            }
+            let Ok(snaps) = std::fs::read_dir(&canon) else {
+                continue;
+            };
+            for snap in snaps.flatten().take(4) {
+                if sweep.vss_files.len() >= 150 {
+                    break;
+                }
+                let sp = snap.path();
+                if !sp.is_dir() || platform::reparse(&sp) {
+                    continue;
+                }
+                let snap_dir = if sp.join("snapshot").is_dir() {
+                    sp.join("snapshot")
+                } else if sp.join("localhost").is_dir() {
+                    sp.join("localhost")
+                } else {
+                    sp
+                };
+                if let Ok(meta) = std::fs::metadata(&snap_dir) {
+                    sweep.vss_shadows_found += 1;
+                    let home_sub = snap_dir.join("home");
+                    if home_sub.is_dir() && !platform::reparse(&home_sub) {
+                        if let Ok(hm) = std::fs::metadata(&home_sub) {
+                            scan_snapshot_subtree(
+                                &home_sub,
+                                &snap_dir,
+                                &mount,
+                                &platform::normalize_volume_id(letter),
+                                hm.dev(),
+                                0,
+                                sweep,
+                            );
+                        }
+                    } else {
+                        scan_snapshot_subtree(
+                            &snap_dir,
+                            &snap_dir,
+                            &mount,
+                            &platform::normalize_volume_id(letter),
+                            meta.dev(),
+                            0,
+                            sweep,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_desktop_and_xbel(home: &Path, letter: &str, sweep: &mut ForensicSweep) {
+        let apps_dir = home.join(".local/share/applications");
+        if let Ok(entries) = std::fs::read_dir(&apps_dir) {
+            for ent in entries.flatten().take(200) {
+                if sweep.traces.len() >= MAX_FORENSIC_APPS {
+                    break;
+                }
+                let p = ent.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("desktop") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let mut name = None;
+                let mut exec = None;
+                let mut is_game = false;
+                let mut no_display = false;
+                for line in content.lines() {
+                    let l = line.trim();
+                    if let Some(v) = l.strip_prefix("Name=") {
+                        name = Some(v.to_owned());
+                    } else if let Some(v) = l.strip_prefix("Exec=") {
+                        exec = Some(v.to_owned());
+                    } else if let Some(v) = l.strip_prefix("Categories=") {
+                        if v.to_ascii_lowercase().contains("game") {
+                            is_game = true;
+                        }
+                    } else if l == "NoDisplay=true" {
+                        no_display = true;
+                    }
+                }
+                if no_display {
+                    continue;
+                }
+                let Some(exec_cmd) = exec else {
+                    continue;
+                };
+                if !command_binary_exists(&exec_cmd) {
+                    let bin_path = exec_cmd
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(&exec_cmd)
+                        .trim_matches('"')
+                        .to_owned();
+                    let app_name = name.unwrap_or_else(|| friendly_name_from_path(&bin_path));
+                    let modified_at = ent
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(system_time_to_rfc3339);
+                    bump_source(sweep, ".desktop Kısayol");
+                    let dl = linux_mount_for_path(&bin_path, letter);
+                    sweep.traces.push(ForensicAppTrace {
+                        install_dir: extract_install_dir(&bin_path),
+                        exe_path: bin_path,
+                        name: app_name,
+                        publisher: None,
+                        sources: vec![".desktop".into()],
+                        run_count: None,
+                        last_run_at: modified_at,
+                        vss_path: None,
+                        drive_letter: dl,
+                        is_game,
+                        appdata_paths: Vec::new(),
+                        leftover_bytes: 0,
+                    });
+                }
+            }
+        }
+
+        let xbel = home.join(".local/share/recently-used.xbel");
+        if let Ok(xml) = std::fs::read_to_string(&xbel) {
+            if let Ok(doc) = roxmltree::Document::parse(&xml) {
+                for node in doc.descendants().filter(|n| n.has_tag_name("bookmark")) {
+                    if sweep.traces.len() >= MAX_FORENSIC_APPS {
+                        break;
+                    }
+                    let Some(href) = node.attribute("href") else {
+                        continue;
+                    };
+                    let Some(file_path) = percent_decode_file_uri(href) else {
+                        continue;
+                    };
+                    if Path::new(&file_path).exists() {
+                        continue;
+                    }
+                    let ext = Path::new(&file_path)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if matches!(ext.as_str(), "appimage" | "deb" | "rpm" | "exe" | "sh") {
+                        bump_source(sweep, "XBEL Son Kullanılan");
+                        let modified_at = node.attribute("modified").map(str::to_owned);
+                        let dl = linux_mount_for_path(&file_path, letter);
+                        sweep.traces.push(ForensicAppTrace {
+                            install_dir: extract_install_dir(&file_path),
+                            name: friendly_name_from_path(&file_path),
+                            exe_path: file_path,
+                            publisher: None,
+                            sources: vec!["recently-used.xbel".into()],
+                            run_count: None,
+                            last_run_at: modified_at,
+                            vss_path: None,
+                            drive_letter: dl,
+                            is_game: false,
+                            appdata_paths: Vec::new(),
+                            leftover_bytes: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_game_launchers(home: &Path, letter: &str, sweep: &mut ForensicSweep) {
+        let steam_dirs = [
+            home.join(".local/share/Steam/steamapps"),
+            home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps"),
+        ];
+        for sa in steam_dirs {
+            let Ok(entries) = std::fs::read_dir(&sa) else {
+                continue;
+            };
+            for ent in entries.flatten().take(120) {
+                if sweep.traces.len() >= MAX_FORENSIC_APPS {
+                    break;
+                }
+                let p = ent.path();
+                let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if !fname.starts_with("appmanifest_") || !fname.ends_with(".acf") {
+                    continue;
+                }
+                let Ok(txt) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let mut app_name = None;
+                let mut install_dir = None;
+                for line in txt.lines() {
+                    let parts: Vec<&str> = line.split('"').collect();
+                    if parts.len() >= 4 {
+                        match parts[1] {
+                            "name" => app_name = Some(parts[3].to_owned()),
+                            "installdir" => install_dir = Some(parts[3].to_owned()),
+                            _ => {}
+                        }
+                    }
+                }
+                let (Some(name), Some(dir_name)) = (app_name, install_dir) else {
+                    continue;
+                };
+                let game_path = sa.join("common").join(&dir_name);
+                if !game_path.exists() {
+                    bump_source(sweep, "Steam Manifest");
+                    let gp_str = game_path.to_string_lossy().into_owned();
+                    let dl = linux_mount_for_path(&gp_str, letter);
+                    sweep.traces.push(ForensicAppTrace {
+                        exe_path: format!("{gp_str}/{dir_name}"),
+                        name,
+                        publisher: Some("Steam".into()),
+                        sources: vec!["Steam ACF".into()],
+                        run_count: None,
+                        last_run_at: None,
+                        vss_path: None,
+                        drive_letter: dl,
+                        is_game: true,
+                        install_dir: Some(gp_str),
+                        appdata_paths: Vec::new(),
+                        leftover_bytes: 0,
+                    });
+                }
+            }
+        }
+
+        let lutris_dir = home.join(".config/lutris/games");
+        if let Ok(entries) = std::fs::read_dir(&lutris_dir) {
+            for ent in entries.flatten().take(80) {
+                if sweep.traces.len() >= MAX_FORENSIC_APPS {
+                    break;
+                }
+                let Ok(txt) = std::fs::read_to_string(ent.path()) else {
+                    continue;
+                };
+                let mut exe = None;
+                let mut name = None;
+                for line in txt.lines() {
+                    let t = line.trim();
+                    if let Some(v) = t.strip_prefix("exe:") {
+                        exe = Some(v.trim().trim_matches('"').to_owned());
+                    } else if let Some(v) = t.strip_prefix("name:") {
+                        name = Some(v.trim().trim_matches('"').to_owned());
+                    }
+                }
+                if let Some(exe_path) = exe.filter(|e| e.starts_with('/') && !Path::new(e).exists())
+                {
+                    bump_source(sweep, "Lutris");
+                    let dl = linux_mount_for_path(&exe_path, letter);
+                    sweep.traces.push(ForensicAppTrace {
+                        install_dir: extract_install_dir(&exe_path),
+                        name: name.unwrap_or_else(|| friendly_name_from_path(&exe_path)),
+                        exe_path,
+                        publisher: Some("Lutris".into()),
+                        sources: vec!["Lutris".into()],
+                        run_count: None,
+                        last_run_at: None,
+                        vss_path: None,
+                        drive_letter: dl,
+                        is_game: true,
+                        appdata_paths: Vec::new(),
+                        leftover_bytes: 0,
+                    });
+                }
+            }
+        }
+
+        let heroic_json = home.join(".config/heroic/installed.json");
+        if let Ok(raw) = std::fs::read_to_string(&heroic_json) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                for g in val["installed"].as_array().into_iter().flatten().take(80) {
+                    if sweep.traces.len() >= MAX_FORENSIC_APPS {
+                        break;
+                    }
+                    let Some(ip) = g["install_path"].as_str().filter(|s| s.starts_with('/')) else {
+                        continue;
+                    };
+                    if !Path::new(ip).exists() {
+                        bump_source(sweep, "Heroic Launcher");
+                        let title = g["title"].as_str().unwrap_or("Heroic Game").to_owned();
+                        let exe = g["executable"].as_str().unwrap_or("game");
+                        let full = format!("{ip}/{exe}");
+                        let dl = linux_mount_for_path(&full, letter);
+                        sweep.traces.push(ForensicAppTrace {
+                            exe_path: full,
+                            name: title,
+                            publisher: Some("Heroic".into()),
+                            sources: vec!["Heroic".into()],
+                            run_count: None,
+                            last_run_at: None,
+                            vss_path: None,
+                            drive_letter: dl,
+                            is_game: true,
+                            install_dir: Some(ip.to_owned()),
+                            appdata_paths: Vec::new(),
+                            leftover_bytes: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn bounded_dir_size(path: &Path, expected_dev: u64, limit: usize) -> u64 {
+        let mut stack = vec![path.to_path_buf()];
+        let mut total = 0u64;
+        let mut count = 0usize;
+        while let Some(cur) = stack.pop() {
+            if count >= limit {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&cur) else {
+                continue;
+            };
+            for ent in entries.flatten() {
+                if count >= limit {
+                    break;
+                }
+                let p = ent.path();
+                if platform::reparse(&p) {
+                    continue;
+                }
+                let Ok(m) = std::fs::symlink_metadata(&p) else {
+                    continue;
+                };
+                if m.dev() != expected_dev {
+                    continue;
+                }
+                if m.is_dir() {
+                    stack.push(p);
+                } else {
+                    total = total.saturating_add(m.len());
+                    count += 1;
+                }
+            }
+        }
+        total
+    }
+
+    fn collect_appdata_and_downloads(home: &Path, letter: &str, sweep: &mut ForensicSweep) {
+        for (sub, scope) in [(".config", "~/.config"), (".local/share", "~/.local/share")] {
+            let dir = home.join(sub);
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for ent in entries.flatten().take(120) {
+                let p = ent.path();
+                if !p.is_dir() || platform::reparse(&p) {
+                    continue;
+                }
+                let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let lower = fname.to_ascii_lowercase();
+                if matches!(
+                    lower.as_str(),
+                    "systemd"
+                        | "dconf"
+                        | "pulse"
+                        | "gtk-3.0"
+                        | "gtk-4.0"
+                        | "gnome-session"
+                        | "fontconfig"
+                        | "applications"
+                        | "trash"
+                        | "icons"
+                        | "mime"
+                        | "keyrings"
+                ) {
+                    continue;
+                }
+                let Ok(m) = std::fs::symlink_metadata(&p) else {
+                    continue;
+                };
+                let sz = bounded_dir_size(&p, m.dev(), 120);
+                if sz < 4096 {
+                    continue;
+                }
+                sweep.appdata_entries.push(AppDataEntry {
+                    folder_name: fname.to_owned(),
+                    path: p.to_string_lossy().into_owned(),
+                    size_bytes: sz,
+                    scope: scope.into(),
+                    is_installed: false,
+                    has_registry_key: false,
+                    modified_at: m.modified().ok().and_then(system_time_to_rfc3339),
+                });
+            }
+        }
+
+        let dl_dir = home.join("Downloads");
+        if let Ok(entries) = std::fs::read_dir(&dl_dir) {
+            for ent in entries.flatten().take(150) {
+                let p = ent.path();
+                if !p.is_file() || platform::reparse(&p) {
+                    continue;
+                }
+                let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(
+                    ext.as_str(),
+                    "appimage" | "deb" | "rpm" | "flatpakref" | "exe" | "msi"
+                ) {
+                    let meta = std::fs::metadata(&p).ok();
+                    let full = p.to_string_lossy().into_owned();
+                    let dl = linux_mount_for_path(&full, letter);
+                    sweep.downloads_installers.push(DownloadsInstaller {
+                        path: full,
+                        file_name: fname.to_owned(),
+                        size_bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                        modified_at: meta
+                            .and_then(|m| m.modified().ok())
+                            .and_then(system_time_to_rfc3339),
+                        drive_letter: dl,
+                    });
+                }
+            }
+        }
+    }
+
+    fn collect_package_removal_logs(sweep: &mut ForensicSweep) {
+        let mut push_pkg = |pkg: &str, src: &str, ts: Option<String>| {
+            if pkg.len() < 3
+                || pkg.starts_with("lib")
+                || pkg.ends_with("-dev")
+                || pkg.ends_with("-common")
+                || sweep.traces.len() >= MAX_FORENSIC_APPS
+            {
+                return;
+            }
+            if Path::new("/usr/bin").join(pkg).exists() {
+                return;
+            }
+            bump_source(sweep, src);
+            sweep.traces.push(ForensicAppTrace {
+                exe_path: format!("/usr/bin/{pkg}"),
+                name: pkg.to_owned(),
+                publisher: None,
+                sources: vec![src.to_owned()],
+                run_count: None,
+                last_run_at: ts,
+                vss_path: None,
+                drive_letter: "/".into(),
+                is_game: false,
+                install_dir: None,
+                appdata_paths: Vec::new(),
+                leftover_bytes: 0,
+            });
+        };
+
+        if let Some(txt) = read_tail(Path::new("/var/log/pacman.log"), 512 * 1024) {
+            for line in txt.lines().rev().take(400) {
+                if let Some(idx) = line.find("[ALPM] removed ") {
+                    let pkg = line[idx + 15..].split_whitespace().next().unwrap_or("");
+                    let ts = line
+                        .strip_prefix('[')
+                        .and_then(|s| s.split(']').next())
+                        .map(str::to_owned);
+                    push_pkg(pkg, "pacman.log", ts);
+                }
+            }
+        }
+        if let Some(txt) = read_tail(Path::new("/var/log/dpkg.log"), 512 * 1024) {
+            for line in txt.lines().rev().take(400) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 4 && parts[2] == "remove" {
+                    let pkg = parts[3].split(':').next().unwrap_or("");
+                    let ts = Some(format!("{}T{}", parts[0], parts[1]));
+                    push_pkg(pkg, "dpkg.log", ts);
+                }
+            }
+        }
+        if let Some(txt) = read_tail(Path::new("/var/log/dnf.log"), 512 * 1024) {
+            for line in txt.lines().rev().take(400) {
+                if let Some(idx) = line.find("Erased: ") {
+                    let raw = line[idx + 8..].split_whitespace().next().unwrap_or("");
+                    let pkg = raw.split('-').next().unwrap_or("");
+                    push_pkg(pkg, "dnf.log", None);
+                }
+            }
+        }
+    }
+
+    pub fn collect_linux_forensics(letter: &str) -> ForensicSweep {
+        let mut sweep = ForensicSweep::default();
+        collect_linux_snapshots(letter, &mut sweep);
+        for home in linux_homes() {
+            collect_desktop_and_xbel(&home, letter, &mut sweep);
+            collect_game_launchers(&home, letter, &mut sweep);
+            collect_appdata_and_downloads(&home, letter, &mut sweep);
+        }
+        collect_package_removal_logs(&mut sweep);
+        sweep
     }
 }
 

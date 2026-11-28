@@ -1,0 +1,8 @@
+# Optional udev rule: allow members of the `disk` group to read NVMe/SATA
+# block and character health nodes without invoking Polkit on every session.
+# Install carefully only for trusted desktop administrators:
+#   sudo cp 99-ssd-sentinel.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+SUBSYSTEM=="nvme", KERNEL=="nvme[0-9]*", GROUP="disk", MODE="0660"
+SUBSYSTEM=="block", KERNEL=="sd[a-z]*|nvme[0-9]*n[0-9]*", GROUP="disk", MODE="0660"
