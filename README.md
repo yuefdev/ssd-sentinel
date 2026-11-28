@@ -19,6 +19,8 @@ Built from scratch in **Rust & Tauri 2** as a transparent, ad-free, offline-firs
 
 </div>
 
+[Code signing policy](CODE_SIGNING.md) · [Privacy Policy](https://yuefdev.github.io/ssd-sentinel/privacy/)
+
 <br/>
 
 <p align="center">
@@ -93,6 +95,8 @@ gh attestation verify "SSD-Sentinel_<version>_x64-setup.exe" --owner yuefdev
 ```
 
 > **SmartScreen Notice:** Community installers are currently open-source unsigned builds (no commercial Authenticode certificate). Verify `SHA256SUMS.txt` or `gh attestation verify`, or inspect/build directly from source below.
+
+See the [Code signing policy](CODE_SIGNING.md) for signing status, scope, and approval roles.
 
 ---
 

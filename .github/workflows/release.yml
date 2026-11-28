@@ -166,6 +166,11 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
+      - name: Verify Windows binary identity and bundled smartctl
+        shell: pwsh
+        run: |
+          ./tools/verify_windows_release.ps1 -AssetDirectory release-assets -SmartctlSha256 $env:SMARTCTL_X64_SHA256
+
       - name: Upload staging artifact (manual workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -191,6 +196,8 @@ jobs:
         with:
           prerelease: ${{ steps.channel.outputs.prerelease == 'true' }}
           generate_release_notes: true
+          body: |
+            [Code signing policy](https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/CODE_SIGNING.md) · [Privacy Policy](https://yuefdev.github.io/ssd-sentinel/privacy/)
           files: |
             release-assets/*-setup.exe
             release-assets/*-portable.zip

@@ -79,6 +79,7 @@ const requiredFiles = [
   "nvme-lifespan/index.html",
   "benchmark/index.html",
   "faq/index.html",
+  "privacy/index.html",
 ];
 
 for (const rel of requiredFiles) {
@@ -98,6 +99,7 @@ const expectedUrls = [
   "https://yuefdev.github.io/ssd-sentinel/nvme-lifespan/",
   "https://yuefdev.github.io/ssd-sentinel/benchmark/",
   "https://yuefdev.github.io/ssd-sentinel/faq/",
+  "https://yuefdev.github.io/ssd-sentinel/privacy/",
 ];
 for (const url of expectedUrls) {
   assert(sitemap.includes(`<loc>${url}</loc>`), `sitemap.xml missing URL: ${url}`);

@@ -2,8 +2,7 @@
 
 > Free, open-source (MIT) SSD & HDD health monitor, SMART diagnostics, Win32 IOCP Direct-I/O disk benchmark, deterministic LBA surface scanner, SHA-256 NTFS tiering manager, and strictly read-only NTFS forensic file recovery suite for Windows 10 and Windows 11 (x64).
 
-- Latest Release: v1.10.1 (`SSD-Sentinel_1.10.1_x64-setup.exe`, ~3.7 MB NSIS installer)
-- SHA-256 (`SSD-Sentinel_1.10.1_x64-setup.exe`): `59F702BF91135EB1A64A9B8A5732BB4651D7EBA719C87D359E29C6A1806015BC`
+- [Latest Windows Release](https://github.com/yuefdev/ssd-sentinel/releases/latest) provides the NSIS installer, portable ZIP, and `SHA256SUMS.txt`.
 - Tech Stack: Rust + Tauri 2 + TypeScript + Win32/NTFS Kernel APIs + bundled `smartmontools 7.5` (`smartctl.exe`, GNU GPL-2.0-or-later)
 - Safety Model: Default Read-Only Guard (`read_only_guard = true` on fresh installs), structured Dry-Run Execution Manifest with deterministic IPC confirmation tokens, zero hidden telemetry, zero AI/ML models, SLSA Build Provenance attestations, and `SHA256SUMS.txt` verification.
 
@@ -24,3 +23,5 @@
 - [Architecture Specification](https://github.com/yuefdev/ssd-sentinel/blob/main/docs/ARCHITECTURE.md)
 - [Safety & Crash-Consistency Spec](https://github.com/yuefdev/ssd-sentinel/blob/main/docs/SAFETY_SPEC.md)
 - [Security Policy](https://github.com/yuefdev/ssd-sentinel/blob/main/SECURITY.md)
+- [Code signing policy](https://github.com/yuefdev/ssd-sentinel/blob/main/CODE_SIGNING.md)
+- [Privacy Policy](https://yuefdev.github.io/ssd-sentinel/privacy/)

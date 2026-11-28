@@ -81,7 +81,7 @@
             "name": "Does SSD Sentinel collect telemetry or send drive data over the internet?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "No. SSD Sentinel stores telemetry exclusively in local SQLite (%LOCALAPPDATA%\\SSD Sentinel\\history.sqlite3), embeds zero analytics or telemetry SDKs, and only connects to GitHub over HTTPS when you explicitly click Check for updates."
+              "text": "Disk measurements stay in local SQLite. The app checks GitHub Releases over HTTPS once on startup by default or when you ask it to check. Startup checks can be disabled under Tools & Settings."
             }
           },
           {
@@ -157,12 +157,12 @@
 
       <article class="faq-item">
         <h3>Why does Windows SmartScreen warn about an Unknown Publisher?</h3>
-        <p>Community installers are unsigned open-source builds (no paid EV Authenticode certificate). Always verify the installer against <code>SHA256SUMS.txt</code> or run <code>gh attestation verify "SSD-Sentinel_1.10.1_x64-setup.exe" --owner yuefdev</code> to verify GitHub's SLSA Build Provenance, or build locally from source.</p>
+        <p>The current installer is unsigned. Verify the release checksum or build provenance using the <a href="../#download">download and verification instructions</a>. For project signing status, see the <a href="https://github.com/yuefdev/ssd-sentinel/blob/main/CODE_SIGNING.md">Code signing policy</a>.</p>
       </article>
 
       <article class="faq-item">
         <h3>Does SSD Sentinel collect telemetry or use AI/ML models on my drives?</h3>
-        <p>No. SSD Sentinel contains zero analytics, zero cloud telemetry, and zero AI/ML models. Surface triage uses deterministic statistics and threshold rules (<code>surface_triage.rs</code>), and telemetry stays in <code>%LOCALAPPDATA%\SSD Sentinel\history.sqlite3</code>. Updates run only when you click <strong>Check for updates</strong>.</p>
+        <p>Disk measurements stay in local SQLite. Surface triage uses deterministic statistics and threshold rules. SSD Sentinel checks GitHub Releases once on startup by default or on request. Turn off startup checks in <strong>Tools &amp; Settings</strong>. See the <a href="../privacy/">Privacy Policy</a>.</p>
       </article>
 
       <article class="faq-item">
@@ -182,7 +182,7 @@
     </div>
 
     <div class="cta-row">
-      <a class="btn btn-primary" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Download SSD Sentinel v1.10.1</a>
+      <a class="btn btn-primary" href="../#download">Download SSD Sentinel</a>
       <a class="btn" href="https://github.com/yuefdev/ssd-sentinel/blob/main/docs/ARCHITECTURE.md">Read Architecture Spec</a>
     </div>
   </main>

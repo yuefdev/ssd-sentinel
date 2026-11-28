@@ -94,7 +94,7 @@ flowchart TB
 | `FSCTL_SET_REPARSE_POINT` (`0x000900A4`) | `tiering.rs` | Creates `IO_REPARSE_TAG_MOUNT_POINT` NTFS Directory Junctions natively (no `mklink` shell) |
 | `IOCTL_DISK_GET_CACHE_INFORMATION` / `IOCTL_DISK_SET_CACHE_INFORMATION` | `optimize.rs` | Reads and updates storage controller write-caching policy (`PhysicalDriveN`) |
 | `SetupDiGetClassDevsW`, `CM_Get_Parent`, `CM_Get_DevNode_PropertyW` | `platform.rs` | Queries PCIe link width & speed properties (`DEVPKEY_PciDevice_*`) read-only |
-| `WinHttp*` (`WinHttpOpen`, `WinHttpConnect`, etc.) | `desktop.rs` | User-initiated HTTPS release checks & SHA-256 verified update download (host allowlist enforced) |
+| `WinHttp*` (`WinHttpOpen`, `WinHttpConnect`, etc.) | `desktop.rs` | HTTPS release checks at startup when enabled or on demand, plus user-confirmed, SHA-256-verified downloads from allowed GitHub hosts |
 | `smartctl.exe` (`--scan-open`, `-i -H -A`, `-a`, `-t`, `-X`, `-s apm`) | `core.rs`, `platform.rs`, `optimize.rs` | SMART JSON telemetry, log reading, firmware self-test triggers, HDD APM level |
 | `RegSetKeyValueW` (`LongPathsEnabled`) | `optimize.rs` | Enables/disables Win32 >260-character path support with SQLite rollback |
 | `chkdsk.exe /scan`, `defrag.exe /A /O /X /L`, `fsutil.exe`, `powercfg.exe` | `jobs.rs`, `surface_heal.rs`, `tiering.rs`, `optimize.rs` | Invoked strictly via `System32` absolute path + `Command::arg` vectors |

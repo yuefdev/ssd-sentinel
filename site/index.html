@@ -32,11 +32,9 @@
         "name": "SSD Sentinel",
         "applicationCategory": "UtilitiesApplication",
         "operatingSystem": "Windows 10, Windows 11 (x64)",
-        "softwareVersion": "1.10.1",
-        "datePublished": "2026-11-26",
         "license": "https://github.com/yuefdev/ssd-sentinel/blob/main/LICENSE",
         "url": "https://yuefdev.github.io/ssd-sentinel/",
-        "downloadUrl": "https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe",
+        "downloadUrl": "https://yuefdev.github.io/ssd-sentinel/#download",
         "screenshot": "https://yuefdev.github.io/ssd-sentinel/assets/screenshots/overview-dark-en.png",
         "author": {
           "@type": "Person",
@@ -90,14 +88,13 @@
         <div class="pill-row">
           <span class="pill pill-ok">MIT Open Source</span>
           <span class="pill pill-accent">Windows 10 / 11 x64</span>
-          <span class="pill">v1.10.1 · ~3.7 MB</span>
         </div>
         <h1>SSD Sentinel — Free &amp; Open-Source SSD Health Monitor for Windows</h1>
         <p class="lead">
           Monitor NVMe &amp; SATA SMART health, project drive lifespan, run Win32 IOCP Direct-I/O benchmarks, inspect raw LBA surfaces, and recover deleted NTFS files read-only — with <strong>zero ads</strong>, <strong>zero hidden telemetry</strong>, and a hardware-safe <strong>Default Read-Only Guard</strong>.
         </p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="https://github.com/yuefdev/ssd-sentinel/releases/download/v1.10.1/SSD-Sentinel_1.10.1_x64-setup.exe">Download Installer (v1.10.1)</a>
+          <a class="btn btn-primary" href="#download">Download for Windows</a>
           <a class="btn" href="https://github.com/yuefdev/ssd-sentinel">View Source on GitHub</a>
           <a class="btn" href="./crystaldiskinfo-alternative/">Compare Alternatives</a>
         </div>
@@ -186,16 +183,16 @@
       </div>
     </section>
 
-    <section>
-      <h2>Inspect Safely &amp; Verify Every Release Binary</h2>
+    <section id="download">
+      <h2>Download SSD Sentinel for Windows</h2>
+      <p>Get the x64 installer or portable ZIP for Windows 10 and 11 from <a href="https://github.com/yuefdev/ssd-sentinel/releases/latest">the latest GitHub release</a>. Windows Settings → Apps can remove the installed edition.</p>
+      <p>SSD Sentinel plans to use SignPath Foundation for code signing. See the <a href="https://github.com/yuefdev/ssd-sentinel/blob/main/CODE_SIGNING.md">Code signing policy</a> and <a href="./privacy/">Privacy Policy</a>.</p>
       <div class="notice-amber">
-        <p><strong>Code Signing Transparency (SmartScreen):</strong> Community installers are currently open-source unsigned builds (no commercial EV Authenticode certificate), so Windows Defender SmartScreen may show an "Unknown Publisher" prompt on first launch. Verify every download cryptographically before running:</p>
+        <p>The current Windows installer is unsigned. Windows may show an "Unknown Publisher" prompt. Compare your file's SHA-256 with <code>SHA256SUMS.txt</code> from the same release or verify its build provenance with GitHub CLI.</p>
       </div>
       <div class="code-block">
         <button class="copy-btn" type="button" data-copy="verify-cmd">Copy</button>
-        <pre><code id="verify-cmd">gh attestation verify "SSD-Sentinel_1.10.1_x64-setup.exe" --owner yuefdev
-# Expected SHA-256 for v1.10.1 installer:
-# 59F702BF91135EB1A64A9B8A5732BB4651D7EBA719C87D359E29C6A1806015BC</code></pre>
+        <pre><code id="verify-cmd">gh attestation verify "&lt;downloaded-filename&gt;" --repo yuefdev/ssd-sentinel</code></pre>
       </div>
       <p>Want to explore the interface with <strong>zero physical disk access</strong>? Launch Snapshot Replay Mode against anonymized repo fixtures:</p>
       <div class="code-block">
@@ -263,6 +260,8 @@
           <ul>
             <li><a href="https://github.com/yuefdev/ssd-sentinel">GitHub Repository</a></li>
             <li><a href="https://github.com/yuefdev/ssd-sentinel/releases">Releases &amp; Checksums</a></li>
+            <li><a href="https://github.com/yuefdev/ssd-sentinel/blob/main/CODE_SIGNING.md">Code signing policy</a></li>
+            <li><a href="./privacy/">Privacy Policy</a></li>
             <li><a href="https://github.com/yuefdev/ssd-sentinel/blob/main/docs/ARCHITECTURE.md">Architecture Spec</a></li>
             <li><a href="https://github.com/yuefdev/ssd-sentinel/blob/main/docs/SAFETY_SPEC.md">Safety &amp; Crash Spec</a></li>
             <li><a href="./llms.txt">llms.txt</a></li>
@@ -271,7 +270,7 @@
       </div>
       <div class="footer-bottom">
         <span>Original code: MIT License · Bundled smartmontools 7.5: GNU GPL-2.0-or-later</span>
-        <span>Updated 2026-11-27 · yuefdev/ssd-sentinel</span>
+        <span>Updated 2026-11-28 · yuefdev/ssd-sentinel</span>
       </div>
     </div>
   </footer>

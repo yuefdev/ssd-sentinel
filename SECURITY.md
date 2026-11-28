@@ -9,11 +9,12 @@
 - **Default Read-Only Guard (`read_only_guard`):** Fresh installs start with Read-Only Guard enabled (`true`). Mutating disk operations (benchmarks, surface repair/isolation, partition shrink/extend, optimization toggles, NTFS tier relocation/rollback) are blocked inside `src-tauri/src/core.rs` and `src-tauri/src/optimize.rs` until explicitly unlocked by the user.
 - **Dry-Run Manifest & Confirmation Gate:** Every mutating operation requires explicit modal confirmation displaying the target, underlying Win32/CLI calls, write scope, rollback path, and deterministic IPC confirmation token checked in Rust.
 - **Strict Read-Only Scans & Forensics:** SMART polling, physical LBA surface scanning (`physical_scan`), NTFS forensic parsing (`$MFT`, `$UsnJrnl`, `$I30`, VSS, carving), and file preview open storage read-only; restored files save only to user-picked external locations.
-- **User-Initiated HTTPS Updater:** **Check for updates** in Settings is strictly user-triggered and defaults to the official repository (`yuefdev/ssd-sentinel`; set build/runtime `SSD_SENTINEL_UPDATE_REPO=none` to disable). Downloads allow HTTPS redirects only across official GitHub origins and enforce cryptographic `SHA256SUMS.txt` verification before launch.
+- **HTTPS Updates:** Live mode checks GitHub Releases once on startup by default. Disable this under **Tools & Settings → Check for updates automatically on startup**. **Check for updates** remains available for manual checks. Downloads require user confirmation and SHA-256 verification against `SHA256SUMS.txt`. The update repository defaults to `yuefdev/ssd-sentinel`. Set `SSD_SENTINEL_UPDATE_REPO=none` to disable built-in update requests. See the [Privacy Policy](https://yuefdev.github.io/ssd-sentinel/privacy/).
 - **Redacted Exports:** Snapshot exports redact device serial numbers and WWN/EUI-64 identifiers by default (`redact: true`).
 
 ## Supply-Chain & Binary Verification
 
+- The [Code signing policy](CODE_SIGNING.md) documents the intended signing scope and approval roles.
 - Pull requests and pushes run automated `npm audit --omit=dev` and `cargo audit` dependency vulnerability scans.
 - Official release installers (`v*` tags) publish `SHA256SUMS.txt` and SLSA GitHub Build Provenance attestations (`actions/attest-build-provenance@v2`). Verify any downloaded installer with:
 

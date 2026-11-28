@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — SSD Sentinel</title>
+  <meta name="description" content="How SSD Sentinel stores disk diagnostics locally, checks GitHub for updates, and uses Microsoft Edge WebView2." />
+  <link rel="canonical" href="https://yuefdev.github.io/ssd-sentinel/privacy/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Privacy Policy — SSD Sentinel" />
+  <meta property="og:description" content="Local data, GitHub update requests, and services used by SSD Sentinel." />
+  <meta property="og:url" content="https://yuefdev.github.io/ssd-sentinel/privacy/" />
+  <meta property="og:image" content="https://yuefdev.github.io/ssd-sentinel/assets/logo.png" />
+  <link rel="icon" href="../favicon.ico" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="../">
+        <img src="../assets/sentinel.svg" alt="" width="30" height="30" />
+        <span>SSD Sentinel</span>
+      </a>
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn btn-sm" type="button">Light Theme</button>
+      </div>
+    </div>
+  </header>
+  <main class="prose-container">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../">Home</a> <span>/</span> <span>Privacy Policy</span>
+    </nav>
+    <h1>Privacy Policy</h1>
+    <p class="meta-note">Updated <time datetime="2026-11-28">28 November 2026</time> · <a href="#turkce" lang="tr">Türkçe</a></p>
+
+    <h2>Desktop data</h2>
+    <p>SSD Sentinel runs without an account, advertising, analytics, or automatic crash reporting. Disk identifiers, SMART measurements, paths, recovery results, job history, and exported reports are handled locally. Exports and recovered files are saved to the destination you choose and may contain sensitive information.</p>
+    <p>The installed app stores its history and preferences under <code>%LOCALAPPDATA%\com.ssdsentinel.desktop</code> by default. The portable edition defaults to <code>data</code> beside the executable. Remove the installed app through Windows Settings → Apps. To remove retained local app data, close the app and delete its data folder. To remove the portable edition, disable its optional Windows startup entry if enabled, then remove the extracted folder. Save any reports or recovered files you want to keep before removing a folder.</p>
+
+    <h2>Update checks and downloads</h2>
+    <p>In live mode, SSD Sentinel checks GitHub Releases once at startup by default. The HTTPS request includes the SSD Sentinel version in the user-agent and the repository path. GitHub receives normal connection information such as your IP address. Update requests contain no disk identifiers, SMART data, file paths, or reports.</p>
+    <p>Turn off <strong>Check for updates automatically on startup</strong> in <strong>Tools &amp; Settings</strong> to stop startup checks. You can still use <strong>Check for updates</strong> manually. Downloads start after confirmation and are checked against the release's SHA-256 manifest before use. Set the environment variable <code>SSD_SENTINEL_UPDATE_REPO=none</code> before starting the app to disable the built-in updater entirely.</p>
+    <p>GitHub hosts the website, release metadata, and downloads. See the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a>.</p>
+
+    <h2>Third-party components and website</h2>
+    <p>SSD Sentinel uses bundled <code>smartctl.exe</code> for local storage commands from <a href="https://www.smartmontools.org/">smartmontools</a>. The installer uses Microsoft's bootstrapper to download WebView2 if the runtime is missing. Microsoft handles its runtime and related services under the <a href="https://privacy.microsoft.com/en-us/privacystatement">Microsoft Privacy Statement</a>.</p>
+    <p>This website uses browser local storage to remember your theme. It has no project-operated analytics or advertising trackers. Follow-up questions about privacy can be directed to the <a href="https://github.com/yuefdev">project maintainer</a>. Use the <a href="https://github.com/yuefdev/ssd-sentinel/blob/main/SECURITY.md">security reporting process</a> for sensitive reports.</p>
+
+    <section id="turkce" lang="tr">
+      <h2>Gizlilik Politikası</h2>
+      <p>SSD Sentinel hesap, reklam, analiz veya otomatik çökme raporu kullanmaz. Disk kimlikleri, SMART ölçümleri, dosya yolları, kurtarma sonuçları, işlem geçmişi ve raporlar cihazınızda işlenir. Dışa aktardığınız raporlar ve kurtardığınız dosyalar seçtiğiniz konuma kaydedilir ve hassas bilgiler içerebilir.</p>
+      <p>Kurulu sürüm geçmişi ve ayarları varsayılan olarak <code>%LOCALAPPDATA%\com.ssdsentinel.desktop</code> konumuna, taşınabilir sürüm ise uygulamanın yanındaki <code>data</code> klasörüne kaydeder. Kurulu sürümü Windows Ayarları → Uygulamalar bölümünden kaldırabilirsiniz. Kalan yerel verileri silmek için uygulamayı kapatıp veri klasörünü kaldırın. Taşınabilir sürümü kaldırmak için etkinse Windows açılış ayarını kapatın, ardından çıkardığınız klasörü silin. Saklamak istediğiniz dosyaları klasörü silmeden önce yedekleyin.</p>
+      <p>Canlı modda uygulama varsayılan olarak açılışta GitHub Releases'a bir HTTPS sorgusu gönderir. Sorgu uygulama sürümünü ve depo yolunu içerir. GitHub IP adresiniz gibi bağlantı bilgilerini görür. Disk kimlikleri, SMART bilgileri, yerel dosya yolları veya raporlar gönderilmez. <strong>Bakım ve Ayarlar → Açılışta otomatik güncelleme denetimi</strong> seçeneğini kapatabilirsiniz. Manuel kontrol çalışmaya devam eder. İndirme onayınızla başlar ve paket SHA-256 ile doğrulanır. Yerleşik güncelleyiciyi tamamen kapatmak için uygulamayı başlatmadan önce <code>SSD_SENTINEL_UPDATE_REPO=none</code> ortam değişkenini ayarlayın.</p>
+      <p>Disk sorguları için paketle gelen smartmontools yerel olarak çalışır. Kurucu, WebView2 eksikse Microsoft'tan indirir. Site teması tarayıcının yerel depolama alanında saklanır. Site ve sürümler <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a>, WebView2 ise <a href="https://privacy.microsoft.com/tr-tr/privacystatement">Microsoft</a> gizlilik politikası kapsamındadır.</p>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <div class="container footer-bottom">
+      <a href="../#download">Download SSD Sentinel</a>
+      <a href="https://github.com/yuefdev/ssd-sentinel/blob/main/CODE_SIGNING.md">Code signing policy</a>
+    </div>
+  </footer>
+  <script src="../site.js" defer></script>
+</body>
+</html>
